@@ -94,6 +94,20 @@ export function artistKey(artist: string | null | undefined): string {
   return s;
 }
 
+/** THE SAME SONG, for "never mix a track into itself" (operator, 2026-11-04: "double mixing S&M
+ *  into itself is not a valid transition"). The same upload, or another upload of the same
+ *  recording by the same act: songCore sees through "(Official Video)" / "Artist - " decorations
+ *  and artistKey through "- Topic" / "VEVO". Both halves must match, so two different songs that
+ *  share a title ("Hold On" by two acts) are not merged. */
+export function sameSong(a: TrackMeta | null | undefined, b: TrackMeta | null | undefined): boolean {
+  if (!a || !b) return false;
+  if (a.videoId && a.videoId === b.videoId) return true;
+  const ca = songCore(a.title);
+  if (!ca || ca !== songCore(b.title)) return false;
+  const aa = artistKey(a.artist);
+  return !!aa && aa === artistKey(b.artist);
+}
+
 /** Normalised words of a title, for looking an artist or a song name up INSIDE it. */
 function titleWords(title: string): string {
   return ` ${(title || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()} `;

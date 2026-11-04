@@ -59,6 +59,14 @@ interface Props {
 }
 
 
+// The energy shapes, each drawn as the curve it means (flat, rising, up-and-down) — a picture says
+// "Build" faster than the word does — and spelled out in a sentence under the buttons.
+const ARCS: { v: EnergyArc; label: string; path: string; says: string }[] = [
+  { v: "ride", label: "Steady", path: "M1 6 H21", says: "Keeps the energy about where it is now." },
+  { v: "build", label: "Rising", path: "M1 10 C8 10 14 6 21 2", says: "Each track a little more energetic than the last." },
+  { v: "journey", label: "Peak", path: "M1 10 C6 10 8 2 11 2 C14 2 16 10 21 10", says: "Rises to a peak, then winds back down." },
+];
+
 function TrackRow({ t }: { t: TrackMeta }) {
   return (
     <div className="mixq-track">
@@ -82,6 +90,11 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   // + mode stay host-only (the radio engine), shown only when we own the queue (`!mirror`).
   const ownsSeed = !mirror; // seed/mode dropdown only where the local queue is the source
   const [dropping, setDropping] = useState(false);
+  // The playlist the queue was loaded from (by this panel), so the picker can NAME it; and whether
+  // the user pressed "Playlist" but has not picked one yet (nothing changes until they do).
+  const [seededFrom, setSeededFrom] = useState<string | null>(null);
+  const [pickingPlaylist, setPickingPlaylist] = useState(false);
+  const seededName = seededFrom ? library.playlists.find((p) => p.id === seededFrom)?.name ?? null : null;
 
   // Drag a track in from the library / search / a deck to append it to the queue. The
   // payload is the shared TRACK_DND_MIME track array. Intra-list reorder drags also carry
@@ -174,49 +187,84 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         </button>
       </div>
       {ownsSeed && (
+        // ★ WHERE THE TRACKS COME FROM, AND THE SET'S SHAPE (operator, 2026-11-04: "the 'from'
+        // dropdown is confusing and shape switches don't really feel intuitive"). The old menu put
+        // a mode ("Radio"), a state ("Playlist (loaded)") and actions ("load a playlist") in one
+        // list, and Steady/Build/Journey were three words with the meaning in a tooltip. Now:
+        //   • two choices, side by side — Suggestions or a Playlist — and only for Playlist a
+        //     picker naming WHICH one; a sentence under them says what will happen;
+        //   • the shape only where it does something (it steers suggestions, not a playlist),
+        //     each option drawn as the energy curve it means, with the choice spelled out below.
         <div className="mixq-seed">
-          <label className="mixq-field">
-            <span className="mixq-field-label">From</span>
-            <select
-              value={mode === "playlist" ? "__playlist__" : "__radio__"}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v === "__radio__") queue.loadTracks([], { mode: "radio" });
-                else if (v !== "__playlist__") seedPlaylist(v);
-              }}
-              aria-label="Where the queue comes from"
-            >
-              <option value="__radio__">Radio (suggests from what is playing)</option>
-              {mode === "playlist" && <option value="__playlist__">Playlist (loaded)</option>}
-              {library.playlists.length > 0 && (
-                <optgroup label="Load a playlist">
-                  {library.playlists.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.trackKeys.length})
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </label>
-          {/* THE ARC: how the set's energy moves. Re-scores the pool; the radio-drawn tail is
-              replaced so the new shape starts on the next track (your own rows are kept). */}
           <div className="mixq-field">
-            <span className="mixq-field-label">Shape</span>
-            <span className="seg-group mixq-arc" role="group" aria-label="Energy shape of the set">
-              {(
-                [
-                  ["ride", "Steady", "Keep the energy where it is"],
-                  ["build", "Build", "Raise the energy track by track"],
-                  ["journey", "Journey", "Rise to a peak, then come back down"],
-                ] as const
-              ).map(([v, label, tip]) => (
-                <button key={v} className={`hw-btn small ${queue.arc === v ? "on" : ""}`} aria-pressed={queue.arc === v} title={tip} onClick={() => queue.setArc(v as EnergyArc)}>
-                  {label}
-                </button>
-              ))}
+            <span className="mixq-field-label">Tracks</span>
+            <span className="seg-group mixq-src-seg" role="group" aria-label="Where the next tracks come from">
+              <button
+                className={`hw-btn small ${mode !== "playlist" ? "on" : ""}`}
+                aria-pressed={mode !== "playlist"}
+                onClick={() => {
+                  if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
+                  setPickingPlaylist(false);
+                }}
+              >
+                Suggestions
+              </button>
+              <button
+                className={`hw-btn small ${mode === "playlist" || pickingPlaylist ? "on" : ""}`}
+                aria-pressed={mode === "playlist"}
+                disabled={!library.playlists.length}
+                title={library.playlists.length ? "Play one of your playlists, in order" : "Make a playlist in the Library first"}
+                onClick={() => setPickingPlaylist(true)}
+              >
+                Playlist
+              </button>
+            </span>
+            {(mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
+              <select
+                className="mixq-src-pick"
+                value={mode === "playlist" && seededFrom ? seededFrom : ""}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  seedPlaylist(e.target.value);
+                  setSeededFrom(e.target.value);
+                  setPickingPlaylist(false);
+                }}
+                aria-label="Which playlist"
+              >
+                <option value="" disabled>
+                  {mode === "playlist" ? "Loaded playlist" : "Choose a playlist…"}
+                </option>
+                {library.playlists.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} · {p.trackKeys.length}
+                  </option>
+                ))}
+              </select>
+            )}
+            <span className="mixq-hint">
+              {mode === "playlist"
+                ? `Plays ${seededName ? `“${seededName}”` : "the playlist"} in order${queue.augment ? ", then keeps going with suggestions" : ""}.`
+                : pickingPlaylist
+                  ? "Pick a playlist; it replaces the suggested tracks (tracks you added stay)."
+                  : "Picks tracks that fit what is playing, as each one starts."}
             </span>
           </div>
+          {mode !== "playlist" && !pickingPlaylist && (
+            <div className="mixq-field">
+              <span className="mixq-field-label">Energy</span>
+              <span className="seg-group mixq-arc" role="group" aria-label="How the energy moves across the set">
+                {ARCS.map((a) => (
+                  <button key={a.v} className={`hw-btn small ${queue.arc === a.v ? "on" : ""}`} aria-pressed={queue.arc === a.v} onClick={() => queue.setArc(a.v)}>
+                    <svg className="mixq-arc-ico" viewBox="0 0 22 12" aria-hidden="true">
+                      <path d={a.path} />
+                    </svg>
+                    {a.label}
+                  </button>
+                ))}
+              </span>
+              <span className="mixq-hint">{ARCS.find((a) => a.v === queue.arc)?.says}</span>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -239,7 +287,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         );
       }
       const src = t.source;
-      return src ? <span className={`mixq-src src-${src}`}>{src === "user" ? "added" : src}</span> : null;
+      return src ? <span className={`mixq-src src-${src}`}>{src === "user" ? "added" : src === "radio" ? "suggested" : src}</span> : null;
     },
   };
 

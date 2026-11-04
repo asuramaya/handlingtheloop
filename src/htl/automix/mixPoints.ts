@@ -68,9 +68,13 @@ export function dominantLabel(s: Sections): string | null {
  *
  *  A candidate is only accepted if the whole blend fits before `lastSound` and it is not so early
  *  that the track is cut off — a 24-bar blend leaving at 35 % is a skip, not a mix. */
-export function chooseMixOut(s: Sections, barsSeconds: number, endGuard: number): number {
+export function chooseMixOut(s: Sections, barsSeconds: number, endGuard: number, notBefore = 0): number {
   const latest = s.lastSound - barsSeconds; // the blend must COMPLETE by the musical end
-  const earliest = Math.max(s.firstSound, s.duration * 0.35);
+  // `notBefore`: where the playhead is (plus the time a cue needs). An exit behind it is not an
+  // exit — after the user searched past the planned one, the mixer used to keep it and mix the
+  // instant the deck got there, i.e. at once. When nothing usable is left the fallback below
+  // returns this, and the caller shortens the blend to the room that remains.
+  const earliest = Math.max(s.firstSound, s.duration * 0.35, notBefore);
   const arithmetic = s.lastSound - barsSeconds - endGuard;
   const usable = (t: number) => t <= latest && t >= earliest;
 

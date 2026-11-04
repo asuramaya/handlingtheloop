@@ -33,6 +33,21 @@ interface Setup {
 
 class FakeDeck {
   playing = false;
+  // The platter: a hand on it stops the transport (playing=false) while jogReturnsToPlay says the
+  // deck plays again on release — the state the mixer must not mistake for a stop.
+  rate = 1;
+  jogging = false;
+  jogReturnsToPlay = false;
+  grab(): void {
+    this.jogReturnsToPlay = this.playing;
+    this.jogging = true;
+    this.playing = false;
+  }
+  release(): void {
+    this.jogging = false;
+    if (this.jogReturnsToPlay) this.playing = true;
+    this.jogReturnsToPlay = false;
+  }
   duration = 0;
   hasStems = false;
   keylock = true;
@@ -1410,9 +1425,11 @@ describe("AutoMixer machine — Hold (P5)", () => {
     expect(r.phase).toBe("armed");
     expect(r.engine.B.playing).toBe(false);
     expect(r.queue.upcoming[0]?.videoId).toBe("q1");
-    // Released → the mix point is behind us, so it goes again.
+    // Released → the old mix point is behind us, so it re-plans one just ahead of the playhead
+    // (never behind it) and goes as soon as playback reaches it.
     r.mixer.hold();
     expect(r.mixer.getStatus().held).toBe(false);
+    r.autoAdvance = true;
     for (let i = 0; i < 10 && r.phase !== "mixing"; i++) await r.tick(500);
     expect(r.phase).toBe("mixing");
   });
@@ -1515,5 +1532,83 @@ describe("AutoMixer machine — status for the UI", () => {
     await Promise.all([r.mixer.tick(), r.mixer.tick(), r.mixer.tick()]);
     expect(loads).toBe(1);
     expect(r.engine.A.playing).toBe(true);
+  });
+});
+
+// ── the jog under AUTO (operator, 2026-11-04: "if i mess with the jog while its on, the timing for
+// next song does not respond properly") ──
+describe("AutoMixer machine — the jog under AUTO", () => {
+  // Walk the live deck to `to` in steps playback explains (≤ 0.5 s per 150 ms tick is a
+  // jump-free walk: the mixer caps dt at 0.5 s), ticking as it goes.
+  async function walk(r: Rig, id: DeckId, to: number, until?: () => boolean) {
+    const d = r.engine.deck(id);
+    while (d.position() < to && !(until && until())) {
+      d.setPos(Math.min(to, d.position() + 0.4));
+      await r.tick(500);
+    }
+  }
+  function rig() {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.mixer.enable();
+    return r;
+  }
+
+  test("searching PAST the planned exit re-plans it ahead of the playhead, with a blend that fits", async () => {
+    const r = rig();
+    r.setPos("A", 10);
+    await r.tick();
+    const planned = r.mixer.getStatus().mixOutTime!;
+    expect(planned).toBeGreaterThan(100);
+    r.setPos("A", planned + 15); // SHIFT-search well past it
+    for (let i = 0; i < 6 && r.phase !== "cueing"; i++) await r.tick();
+    expect(r.phase).toBe("cueing");
+    const exit = r.mixer.getStatus().mixOutTime!;
+    expect(exit).toBeGreaterThanOrEqual(planned + 15); // was: the old exit, already behind us
+  });
+
+  test("searching BACK while armed moves the countdown back too", async () => {
+    const r = rig();
+    r.setPos("A", 100);
+    await r.tick();
+    const before = r.mixer.getStatus().countdownSec!;
+    r.setPos("A", 40);
+    await r.tick();
+    expect(r.mixer.getStatus().countdownSec!).toBeGreaterThan(before + 50);
+  });
+
+  test("a hand on the outgoing platter at the exit holds the mix until it lets go", async () => {
+    const r = rig();
+    r.setPos("A", 120);
+    await walk(r, "A", 190, () => r.phase === "cueing");
+    expect(r.phase).toBe("cueing");
+    const exit = r.mixer.getStatus().mixOutTime!;
+    await walk(r, "A", exit - 0.5);
+    expect(r.phase).toBe("cueing");
+    r.engine.A.grab();
+    r.setPos("A", exit + 0.5); // scratched across the exit
+    await r.tick();
+    await r.tick();
+    expect(r.phase).toBe("cueing"); // was: the incoming started under the hand
+    expect(r.engine.B.playing).toBe(false);
+    r.engine.A.release();
+    await r.tick();
+    expect(r.phase).toBe("mixing");
+  });
+
+  test("touching the incoming deck's jog mid-blend does not hand the mix to manual", async () => {
+    const r = rig();
+    r.setPos("A", 120);
+    await walk(r, "A", 199, () => r.phase === "mixing");
+    expect(r.phase).toBe("mixing");
+    r.engine.B.grab();
+    await r.tick();
+    expect(r.phase).toBe("mixing"); // was: "manual"
+    r.engine.B.release();
+    await r.tick();
+    expect(r.phase).toBe("mixing");
   });
 });

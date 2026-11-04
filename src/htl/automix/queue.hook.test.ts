@@ -103,6 +103,19 @@ describe("queue provenance", () => {
     expect(keepNonRadio([{ ...t("a"), source: "radio" }, t("b"), { ...t("c"), source: "playlist" }]).map((x) => x.videoId)).toEqual(["b", "c"]);
   });
 
+  test("the track that goes live leaves the queue (no mixing a song into itself)", () => {
+    let q = render();
+    q.enqueue(t("sm000000001", { title: "S&M", artist: "Rihanna" }));
+    q.enqueue(t("mine0000002"));
+    q.setCurrent(t("sm000000001", { title: "S&M", artist: "Rihanna" }));
+    expect(q.peekNext()?.videoId).toBe("mine0000002");
+    // another upload of the same recording counts too
+    q = render();
+    q.enqueueNext(t("sm000000009", { title: "Rihanna - S&M (Official Music Video)", artist: "RihannaVEVO" }));
+    q = render();
+    expect(q.upcoming.map((x) => x.videoId)).toEqual(["mine0000002"]);
+  });
+
   test("remove is visible to peekNext before any re-render", () => {
     const q = render();
     q.enqueue(t("mine0000001"));

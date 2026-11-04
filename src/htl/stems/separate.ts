@@ -49,6 +49,10 @@ export function onModelLoading(cb: (pct: number) => void): () => void {
 
 function getWorker(): Worker {
   if (!worker) {
+    // The worker keeps the ~170 MB model in the Cache API (modelCache.ts). Under "best-effort"
+    // storage the browser may evict an entry that size first, so ask for persistence. persist()
+    // exists only on Window (not in workers), hence here. A refusal just leaves it best-effort.
+    void navigator.storage?.persist?.().catch(() => {});
     worker = new Worker(new URL("./separator.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;

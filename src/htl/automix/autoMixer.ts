@@ -26,6 +26,24 @@ const EQ_KILL = -26; // dB — the engine's low-shelf floor (a full bass cut)
 const END_GUARD = 4; // s — never mix out closer than this to the track end
 const BEATS_PER_BAR = 4;
 const XFADE_GRAB = 0.06; // crossfade delta that means "the user took the fader"
+// A live-deck position change this much off what playback explains (s) is the user MOVING the
+// track — SHIFT-search, a seek, a hot cue, a long scratch — and the mix point is re-planned from
+// where they landed. Ordinary playback, pitch bend and a scratch wiggle stay far below it.
+const JUMP_S = 2;
+// How far ahead of the playhead a re-planned exit must be while armed: the next track still has
+// to load and cue before the blend can start.
+const CUE_LEAD_S = 8;
+
+// PLAYING, COUNTING THE HAND. Gripping a platter stops the transport (JogEngine.scrubBegin — a
+// hand on vinyl stops it dead) and releasing it starts it again. To the mixer that grab used to
+// read as the user STOPPING the deck: touch the incoming deck's jog mid-blend and AUTO handed the
+// whole transition to "manual"; touch the outgoing one near its exit and the mix started under
+// your hand. A deck that will play again the moment the hand lets go is still a playing deck.
+// `jogReturnsToPlay` is false for a paused deck being scrubbed, so cueing a stopped deck by hand
+// is not mistaken for starting it.
+function playingOrHeld(d: Deck): boolean {
+  return d.playing || (!!d.jogging && !!d.jogReturnsToPlay);
+}
 const STEM_WAIT_MAX = 8; // s — at mix-out, hold this long for the incoming deck's stems to
 //                          finish separating before falling back to an EQ blend.
 
@@ -561,7 +579,9 @@ export class AutoMixer {
     if (this.phase === "mixing") return Math.max(0, this.barsSeconds * (1 - this.mixProgress()));
     if (this.mixOutTime == null) return null;
     if (this.phase !== "armed" && this.phase !== "preload" && this.phase !== "cueing") return null;
-    return Math.max(0, this.mixOutTime - this.deps.engine.deck(this.liveId).position());
+    const live = this.deps.engine.deck(this.liveId);
+    // Track seconds ÷ tempo = seconds you will actually wait (at +8 % a 60 s gap is 55.6 s).
+    return Math.max(0, (this.mixOutTime - live.position()) / (live.rate > 0 ? live.rate : 1));
   }
 
   // The next track, once it is actually sitting on the idle deck.
@@ -617,6 +637,7 @@ export class AutoMixer {
     void this.maybeFillRadio();
     // Re-sync to reality (user loads / deck switches / pauses) unless mid-transition.
     this.reconcile();
+    this.followJumps(dt);
 
     switch (this.phase) {
       case "idle":
@@ -641,6 +662,55 @@ export class AutoMixer {
         break;
     }
     this.emit(false);
+  }
+
+  // THE MIX POINT FOLLOWS THE TRACK. mixOutTime is a position in the live track, chosen once; when
+  // the user moved the track under it (operator, 2026-11-04: "if i mess with the jog while its on,
+  // the timing for next song does not respond properly") nothing re-chose it. Search past the exit
+  // and AUTO mixed the moment it was reached — at once, with a full-length blend running into the
+  // outro; search back and it still aimed at the old point. Now a jump re-plans from where you
+  // landed: armed re-picks the exit (not behind the playhead), cueing keeps the cued deck and only
+  // moves the exit. Preload re-plans on its own; a running mix is timed on wall clock, not position.
+  private lastLivePos: number | null = null;
+  private lastLiveFor: DeckId | null = null;
+  private followJumps(dt: number): void {
+    const live = this.liveDeck();
+    if (!live || !this.liveId) {
+      this.lastLivePos = null;
+      return;
+    }
+    const pos = live.position();
+    const prev = this.lastLiveFor === this.liveId ? this.lastLivePos : null;
+    this.lastLivePos = pos;
+    this.lastLiveFor = this.liveId;
+    if (prev == null || this.forced || this.mixOutTime == null) return;
+    if (this.phase !== "armed" && this.phase !== "cueing") return;
+    if (live.loop?.active || this.holdLoop) return; // a loop wraps every cycle — that is not a seek
+    const rate = live.rate > 0 ? live.rate : 1;
+    const expected = prev + (live.playing ? dt * rate : 0);
+    if (Math.abs(pos - expected) < JUMP_S) return;
+    event("automix.replan", { phase: this.phase, from: +prev.toFixed(1), to: +pos.toFixed(1), was: +this.mixOutTime.toFixed(1) });
+    if (this.phase === "armed") {
+      this.mixOutTime = null; // tickArmed re-picks it from here, this same tick
+      return;
+    }
+    this.mixOutTime = this.computeMixOut(live, this.barsSeconds, pos + 0.5);
+    this.fitBlendToRoom(live, this.mixOutTime);
+  }
+
+  // Shorten the planned blend to what the track has left after `exitAt` (same rule Mix now always
+  // used): a 24-bar blend that starts 10 bars before the end runs the outgoing into silence.
+  private fitBlendToRoom(live: Deck, exitAt: number): void {
+    if (!this.plan) return;
+    const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+    const room = (live.duration || 0) - END_GUARD - exitAt;
+    if (room > 0 && this.barsSeconds > room && bpm > 0) {
+      const bars = Math.max(2, Math.floor(room / barsToSeconds(1, bpm)));
+      if (bars < this.plan.bars) {
+        this.plan = { ...this.plan, bars, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * bars)) };
+        this.barsSeconds = barsToSeconds(bars, bpm);
+      }
+    }
   }
 
   // Keep the queue stocked with suggestions that fit this moment.
@@ -674,8 +744,8 @@ export class AutoMixer {
   // PAUSE or a manual LOAD is never mistaken for "skip to the next queued song".
   private reconcile(): void {
     const e = this.deps.engine;
-    const aPlay = e.deck("A").playing;
-    const bPlay = e.deck("B").playing;
+    const aPlay = playingOrHeld(e.deck("A"));
+    const bPlay = playingOrHeld(e.deck("B"));
     // Record the playing edge for NEXT tick's decideLive — always, even mid-mix, so the edge is
     // accurate when we return to a reconciling phase. Read prev before overwriting.
     const prev = this.wasPlaying;
@@ -904,7 +974,7 @@ export class AutoMixer {
     this.warmAhead();
     if (this.mixOutTime == null) {
       this.barsSeconds = barsToSeconds(12, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
-      this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
+      this.mixOutTime = this.computeMixOut(live, this.barsSeconds, live.position() + CUE_LEAD_S);
     }
     if (this.forced) {
       this.phase = "preload"; // Mix now: no lead-in to wait for
@@ -1021,25 +1091,20 @@ export class AutoMixer {
       if (this.forced) {
         // MIX NOW: the exit is HERE, not the structural one — recomputing it is what used to turn
         // the press into a 30 s countdown. The blend only shrinks if the track would run out first.
-        const room = (live.duration || 0) - END_GUARD - live.position();
-        if (room > 0 && this.barsSeconds > room && bpm > 0) {
-          const bars = Math.max(2, Math.floor(room / barsToSeconds(1, bpm)));
-          if (bars < this.plan.bars) {
-            this.plan = { ...this.plan, bars, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * bars)) };
-            this.barsSeconds = barsToSeconds(bars, bpm);
-          }
-        }
+        this.fitBlendToRoom(live, live.position());
         this.mixOutTime = live.position();
       } else {
+        const here = live.position() + 0.5; // the load may have taken a while: never an exit behind us
         if (liveSections) {
-          const provisional = this.computeMixOut(live, this.barsSeconds);
+          const provisional = this.computeMixOut(live, this.barsSeconds, here);
           const fitted = blendBarsFor(liveSections, provisional, bpm, this.plan.bars);
           if (fitted !== this.plan.bars) {
             this.plan = { ...this.plan, bars: fitted, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * fitted)) };
             this.barsSeconds = barsToSeconds(fitted, bpm);
           }
         }
-        this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
+        this.mixOutTime = this.computeMixOut(live, this.barsSeconds, here);
+        this.fitBlendToRoom(live, this.mixOutTime);
       }
       const mixIn = this.computeMixIn(inc, this.barsSeconds);
       inc.seek(mixIn);
@@ -1094,6 +1159,9 @@ export class AutoMixer {
       this.phase = "armed";
       return;
     }
+    // A hand on the outgoing platter (or a pause) holds the mix: starting the incoming under a
+    // scratch is not a transition. It goes the moment the deck is playing again.
+    if (!live.playing) return;
     if (live.position() >= (this.mixOutTime ?? Infinity) - 0.05) {
       // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
@@ -1592,8 +1660,9 @@ export class AutoMixer {
       this.handoffToManual();
       return;
     }
-    // The user stopped the incoming deck → hand off rather than fight.
-    if (!inc.playing) {
+    // The user stopped the incoming deck → hand off rather than fight. A hand on its platter (a
+    // nudge, a quick scratch) is not a stop — see playingOrHeld.
+    if (!playingOrHeld(inc)) {
       this.handoffToManual();
       return;
     }
@@ -1889,10 +1958,10 @@ export class AutoMixer {
   // WHERE TO LEAVE. Structure-aware (chooseMixOut prefers the end of the final chorus); the
   // result is snapped to the grid here, because a mix that starts off-beat is audibly wrong
   // however musically apt the moment was.
-  private computeMixOut(deck: Deck, barsSeconds: number): number {
+  private computeMixOut(deck: Deck, barsSeconds: number, notBefore = 0): number {
     const s = this.sectionsOf(deck);
-    if (!s) return 0;
-    const t = chooseMixOut(s, barsSeconds, END_GUARD);
+    if (!s) return notBefore;
+    const t = chooseMixOut(s, barsSeconds, END_GUARD, notBefore);
     const grid = deck.beatgrid;
     return grid ? nearestBeat(grid, t) : t;
   }

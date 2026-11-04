@@ -344,3 +344,36 @@
 .mixq-src.src-user { color: var(--accent); }
 .automix-count.tone-wait { color: #ffe24a; }
 .automix-count.tone-hold { color: #ffb13c; }
+
+/* ---- AUTO in the chin (App.tsx), beside Library: compact, lit when on ---- */
+.chin-btn.chin-auto {
+  flex: 0 0 auto;
+  min-width: 64px;
+  padding: 0 12px;
+  gap: 6px;
+  letter-spacing: 0.08em;
+}
+.chin-btn.chin-auto.on {
+  color: #061018;
+  background: var(--accent);
+}
+.chin-btn.chin-auto.on .automix-count { color: inherit; opacity: 0.8; }
+.chin-btn.chin-auto:disabled { opacity: 0.4; cursor: default; }
+.chin-auto .automix-count { font-variant-numeric: tabular-nums; }
+
+/* ---- Queue › where the tracks come from, and the energy shape ---- */
+.mixq-seed .mixq-src-seg { display: inline-flex; }
+.mixq-src-pick { min-width: 0; flex: 1 1 160px; max-width: 320px; }
+.mixq-hint {
+  flex: 1 0 100%;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: -2px;
+}
+.mixq-arc button { display: inline-flex; align-items: center; gap: 6px; }
+.mixq-arc-ico { width: 22px; height: 12px; flex: 0 0 auto; }
+.mixq-arc-ico path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+/* Each field is its choice with its sentence underneath (wraps), side by side when there is room. */
+.mixq-seed .mixq-field { flex-wrap: wrap; flex: 1 1 300px; row-gap: 4px; align-items: center; }
+.mixq-seed .mixq-hint { margin-top: 0; white-space: normal; min-width: 0; }
+.mixq-seed .seg-group button:disabled { opacity: 0.4; cursor: default; }

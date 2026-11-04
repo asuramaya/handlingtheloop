@@ -55,15 +55,15 @@ export function autoLine(st: AutoMixStatus, nextTitle: string | null): AutoLine 
     case "press-play":
       return { chip: "paused", headline: "Paused", detail: "Press play on a deck and AUTO picks up from there.", tone: "wait" };
     case "queue-empty":
-      return { chip: "empty", headline: "The queue is empty", detail: "Add tracks, load a playlist, or switch to Radio.", tone: "wait" };
+      return { chip: "empty", headline: "The queue is empty", detail: "Add tracks, pick a playlist, or switch Tracks to Suggestions.", tone: "wait" };
     case "radio-filling":
-      return { chip: "finding", headline: "Radio is finding tracks", detail: "Suggestions from what is playing will appear below.", tone: "wait" };
+      return { chip: "finding", headline: "Finding suggestions", detail: "Tracks that fit what is playing will appear below.", tone: "wait" };
     case "loading-next":
       return { chip: "loading", headline: `Loading ${next}`, detail: plan, tone: "wait" };
     case "stems":
       return { chip: "stems", headline: `Separating stems for ${next}`, detail: "The mix waits a few seconds for them, then goes without.", tone: "wait" };
     case "playlist-ended":
-      return { chip: "radio", headline: "The playlist ran out, Radio took over", detail: "It suggests from what is playing now.", tone: "wait" };
+      return { chip: "suggest", headline: "The playlist ran out, suggestions took over", detail: "They follow what is playing now.", tone: "wait" };
   }
   if (st.countdownSec != null) {
     return {

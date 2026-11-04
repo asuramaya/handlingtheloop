@@ -5,7 +5,7 @@ import { fetchFeaturesByIsrcRows } from "../media/api";
 import { analysisState, lookupAnalysis } from "../media/analysisStatus";
 import { d1EnrichTargets, isrcEnrichTargets, patchPool } from "./poolEnrich";
 import { smartSortChain, songCore } from "./mixability";
-import { type Candidate, isEligible, pickBest, radioSeeds, targetEnergy } from "./selector";
+import { type Candidate, isEligible, sameSong, pickBest, radioSeeds, targetEnergy } from "./selector";
 import type { EnergyArc, MixMode, QueueItem, QueueSource, RadioContext } from "./types";
 import { trace } from "../debug/trace";
 
@@ -254,8 +254,14 @@ export function useMixQueue(): MixQueue {
     manualSeed.current = null;
   };
 
+  // ★ WHAT IS PLAYING IS NEVER "NEXT". Loading the queue's head by hand (or another upload of
+  // it) made it the live track while it stayed at the top of Up next, and AUTO then mixed S&M into
+  // S&M. The moment a track goes live, every row that is the same song leaves the queue.
   const setCurrent = useCallback((t: TrackMeta | null) => {
-    if (t) markPlayed(t);
+    if (t) {
+      markPlayed(t);
+      write((cur) => (cur.some((x) => sameSong(x, t)) ? cur.filter((x) => !sameSong(x, t)) : cur));
+    }
     setCurrentState(t);
   }, []);
 
@@ -519,6 +525,7 @@ export function useMixQueue(): MixQueue {
   }, []);
 
   const enqueue = useCallback((t: TrackMeta) => {
+    if (sameSong(t, currentRef.current)) return; // it is playing — queueing it would mix it into itself
     // Already queued as a radio suggestion → the user just adopted it; mark it theirs.
     write((cur) =>
       cur.some((x) => x.videoId === t.videoId)
@@ -528,6 +535,7 @@ export function useMixQueue(): MixQueue {
   }, []);
 
   const enqueueNext = useCallback((t: TrackMeta) => {
+    if (sameSong(t, currentRef.current)) return;
     write((cur) => [tagged(t, "user"), ...cur.filter((x) => x.videoId !== t.videoId)]);
     // In dynamic radio, the manual pick becomes the FRESHEST seed: pin it at the front and
     // refill the tail to flow from it (option A — suggestions follow your pick until a deck

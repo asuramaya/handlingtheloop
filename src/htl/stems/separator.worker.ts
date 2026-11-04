@@ -6,6 +6,7 @@
 // (zero-copy). Demucs is the ONLY separator — Open-Unmix and the demucs-rs wasm
 // engine were ripped (the project settled on one engine).
 import { FFT, demucsMag, demucsIstftChannel, DEMUCS_BINS } from "./fft";
+import { cachedModelBytes } from "./modelCache";
 
 const NFFT = 4096;
 const MODEL_SR = 44100;
@@ -196,9 +197,13 @@ function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<an
     // in this Promise.all, so nulling it for the sidecar silenced the model download's reports for as
     // long as the probe was in flight. Caught in review before commit; a parameter cannot be clobbered
     // by a sibling await.
+    // Both go through the persistent model cache (modelCache.ts): the HF resolve URL redirects to a
+    // freshly-SIGNED CDN URL every time, so the HTTP cache never hit and every worker spawn re-pulled
+    // the full 170 MB. A cache hit reports no load progress — there is no download to report.
+    const onBytes = reportLoad ?? undefined;
     const [modelBytes, dataBytes] = await Promise.all([
-      fetchResumable(url, undefined, reportLoad ?? undefined),
-      fetchResumable(dataUrl).catch(() => null),
+      cachedModelBytes(url, () => fetchResumable(url, undefined, onBytes)),
+      cachedModelBytes(dataUrl, () => fetchResumable(dataUrl)).catch(() => null),
     ]);
     if (!modelBytes) throw new Error(`model fetch returned 404: ${url}`);
     const opts: Record<string, unknown> = { executionProviders: eps };

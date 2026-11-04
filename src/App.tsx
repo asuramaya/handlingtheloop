@@ -16,6 +16,7 @@ import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
+import { autoLine } from "./components/automixStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
@@ -3819,6 +3820,29 @@ function AppBody() {
         <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
           <span className="chin-label">Library</span>
         </button>
+        {/* ★ AUTO LIVES ON THE MAIN SCREEN (operator, 2026-11-04: "move the button outside the
+            library section into the main screen next to the library open/close button"). It
+            changes what the DECKS do, so it cannot hide inside a panel you have to open first; the
+            chip says what it is doing (the same words as the Queue's status, automixStatus.ts). */}
+        {(() => {
+          const st = autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus;
+          const nx = (autoIsRemote && remoteAutomix ? remoteAutomix.upcoming : mixQueue.upcoming)[0];
+          const l = autoLine(st, nx ? nx.title || nx.videoId : null);
+          const canAuto = canArmAutoMix(room);
+          return (
+            <button
+              className={`chin-btn chin-auto ${st.enabled ? "on" : ""}`}
+              onClick={toggleAuto}
+              aria-pressed={st.enabled}
+              disabled={!canAuto}
+              aria-label={st.enabled ? `AUTO on — ${l.headline}` : "AUTO off"}
+              title={canAuto ? l.headline : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
+            >
+              <span className="chin-auto-word">AUTO</span>
+              {l.chip && <span className={`automix-count tone-${l.tone}`}>{l.chip}</span>}
+            </button>
+          );
+        })()}
         <button
           className={`chin-btn chin-settings ${settingsOpen ? "active" : ""}`}
           onClick={toggleSettings}

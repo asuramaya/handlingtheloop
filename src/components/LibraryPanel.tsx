@@ -1,5 +1,4 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
-import { autoLine } from "./automixStatus";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -674,33 +673,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           <div ref={panelRef} className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             {dockMode === "center" && <CenterResizeHandles panelKey="library" />}
             <div className="settings-head lib-head-row">
-              {/* ★ AUTO LEADS THE HEADER (operator, 2026-11-04: "auto button should probably move to
-                  top left quadrant in header"). It is the one control in this header that changes
-                  what the decks do, so it sits first, where the eye starts, not after the title. */}
-              {auto && (
-                <div className="automix-bar">
-                  {/* ★ THE SECOND AUTO BUTTON. The floating panel has one and this header has
-                      another, so gating only the panel's would have left this one live — the
-                      caller-versus-mutator shape that cost us a crossfade guard tonight. tsc
-                      named this site the moment `canAuto` became required, which is the argument
-                      for threading a real prop rather than reading room state in two places. */}
-                  <button
-                    className={`automix-toggle ${auto.status.enabled ? "on" : ""}`}
-                    onClick={auto.onToggle}
-                    aria-pressed={auto.status.enabled}
-                    disabled={!auto.canAuto}
-                    title={auto.canAuto ? undefined : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
-                  >
-                    AUTO
-                    {(() => {
-                      // Same words as the Queue's status strip (automixStatus.ts), in short.
-                      const nx = auto.queue.upcoming[0];
-                      const l = autoLine(auto.status, nx ? nx.title || nx.videoId : null);
-                      return l.chip ? <span className={`automix-count tone-${l.tone}`}>{l.chip}</span> : null;
-                    })()}
-                  </button>
-                </div>
-              )}
+              {/* (AUTO moved to the chin, beside the Library button — App.tsx `chin-auto`.) */}
               {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
                   the sections menu. A caret marks it as a disclosure. */}
               <button

@@ -8,12 +8,14 @@ import {
   type AutoMixMirror,
   type MixQueue,
   type TrackMeta,
+  type QueueSource,
   pickTransition,
   transitionLabel,
   planTier,
 } from "@htl";
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import type { Ref } from "react";
+import { autoLine } from "./automixStatus";
 
 // The auto-mix "up next" panel: curate the queue, see how each pair will transition,
 // and drive the auto-DJ (mix now / skip / hold). Radio mode tops itself up from the
@@ -56,10 +58,6 @@ interface Props {
   tableRef?: Ref<TrackTableHandle>;
 }
 
-function fmtCountdown(sec: number): string {
-  if (sec >= 60) return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
-  return `${Math.ceil(sec)}s`;
-}
 
 function TrackRow({ t }: { t: TrackMeta }) {
   return (
@@ -123,88 +121,127 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
     queue.loadTracks(tracks, { smartSort: queue.smartSort, mode: "playlist" });
   };
 
-  // The queue-specific chrome that sits ABOVE the shared table: the seed dropdown +
-  // the now-playing strip with its mix-in countdown.
+  // ★ THE QUEUE, REDESIGNED AROUND ONE QUESTION: WHAT IS AUTO DOING? (operator, 2026-11-04: "the
+  // auto mode is a bit broken and confusing ... possibly a redesign"). Top to bottom:
+  //   1. NOW / NEXT: the playing track, the one AUTO mixes into, and a sentence saying what happens
+  //      next and when (automixStatus.ts), with the mix progress while it mixes.
+  //   2. The three actions, always in the same place, each saying what it does. Hold is a toggle.
+  //   3. Where the queue comes from (Radio or a playlist, showing the CURRENT choice; the old menu's
+  //      label never changed) and the set's shape, as labelled buttons instead of "↔ Ride".
+  const next = upcoming[0] ?? null;
+  const line = autoLine(st, next ? next.title || next.videoId : null);
+  const progress = st.phase === "mixing" && st.mixProgress != null ? st.mixProgress : null;
+  const mixAt = st.mixOutTime != null && st.liveDuration ? Math.min(1, st.mixOutTime / st.liveDuration) : null;
   const topSlot = (
     <>
-      {ownsSeed && (
-        <div className="mixq-seed">
-          <select
-            value=""
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "__radio__") queue.loadTracks([], { mode: "radio" });
-              else if (v) seedPlaylist(v);
-              e.target.value = "";
-            }}
-          >
-            <option value="" disabled>
-              {mode === "playlist" ? "Playlist loaded — switch…" : "Radio — suggesting from what you play"}
-            </option>
-            <option value="__radio__">↺ Radio — auto-suggest from what you play</option>
-            {library.playlists.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.trackKeys.length})
-              </option>
-            ))}
-          </select>
-          {/* THE ARC — the difference between a sequence of compatible tracks and a set that goes
-              somewhere. It re-scores the pool rather than re-fetching it, so switching is instant;
-              the queued tail is dropped so the new shape starts on the NEXT track rather than after
-              the four already-chosen ones have played out. */}
-          <select
-            className="mixq-arc"
-            value={queue.arc}
-            onChange={(e) => queue.setArc(e.target.value as EnergyArc)}
-            title="Energy arc — how the set's intensity moves over time"
-            aria-label="Energy arc"
-          >
-            <option value="ride">↔ Ride</option>
-            <option value="build">↗ Build</option>
-            <option value="journey">∿ Journey</option>
-          </select>
+      <div className={`mixq-status tone-${line.tone}`} aria-live="polite">
+        <div className="mixq-pair">
+          <div className="mixq-slot">
+            <span className="mixq-slot-label">Now</span>
+            {current ? <TrackRow t={current} /> : <div className="mixq-empty">{mirror ? "Host isn’t playing yet" : "Nothing playing"}</div>}
+          </div>
+          <span className="mixq-arrow" aria-hidden="true">→</span>
+          <div className="mixq-slot">
+            <span className="mixq-slot-label">Next</span>
+            {next ? <TrackRow t={next} /> : <div className="mixq-empty">Queue empty</div>}
+          </div>
         </div>
-      )}
-      <div className="mixq-now">
-        {current ? <TrackRow t={current} /> : <div className="mixq-empty">{mirror ? "Host isn’t playing yet" : "Play a track to begin"}</div>}
-        {st.countdownSec != null && st.phase !== "idle" && (
-          <span className="mixq-countdown">{st.phase === "mixing" ? "mixing…" : `mix in ${fmtCountdown(st.countdownSec)}`}</span>
+        <div className="mixq-line">
+          <span className="mixq-headline">{line.headline}</span>
+          {line.detail && <span className="mixq-detail">{line.detail}</span>}
+        </div>
+        {(progress != null || mixAt != null) && (
+          <div className="mixq-bar" aria-hidden="true">
+            {progress != null ? <span className="mixq-bar-fill" style={{ width: `${progress * 100}%` }} /> : <span className="mixq-bar-mark" style={{ left: `${(mixAt ?? 0) * 100}%` }} />}
+          </div>
         )}
       </div>
+      <div className="mixq-controls">
+        <button onClick={onMixNow} disabled={!enabled || !next} title="Start the mix into the next track now, from here">
+          Mix now
+        </button>
+        <button onClick={onSkip} disabled={!enabled || !next} title="Drop the next track from the queue; the one after it moves up">
+          Skip next
+        </button>
+        <button
+          className={st.held ? "on" : ""}
+          onClick={onHold}
+          disabled={!enabled}
+          aria-pressed={!!st.held}
+          title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
+        >
+          {st.held ? "Holding" : "Hold"}
+        </button>
+      </div>
+      {ownsSeed && (
+        <div className="mixq-seed">
+          <label className="mixq-field">
+            <span className="mixq-field-label">From</span>
+            <select
+              value={mode === "playlist" ? "__playlist__" : "__radio__"}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__radio__") queue.loadTracks([], { mode: "radio" });
+                else if (v !== "__playlist__") seedPlaylist(v);
+              }}
+              aria-label="Where the queue comes from"
+            >
+              <option value="__radio__">Radio (suggests from what is playing)</option>
+              {mode === "playlist" && <option value="__playlist__">Playlist (loaded)</option>}
+              {library.playlists.length > 0 && (
+                <optgroup label="Load a playlist">
+                  {library.playlists.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.trackKeys.length})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </label>
+          {/* THE ARC: how the set's energy moves. Re-scores the pool; the radio-drawn tail is
+              replaced so the new shape starts on the next track (your own rows are kept). */}
+          <div className="mixq-field">
+            <span className="mixq-field-label">Shape</span>
+            <span className="seg-group mixq-arc" role="group" aria-label="Energy shape of the set">
+              {(
+                [
+                  ["ride", "Steady", "Keep the energy where it is"],
+                  ["build", "Build", "Raise the energy track by track"],
+                  ["journey", "Journey", "Rise to a peak, then come back down"],
+                ] as const
+              ).map(([v, label, tip]) => (
+                <button key={v} className={`hw-btn small ${queue.arc === v ? "on" : ""}`} aria-pressed={queue.arc === v} title={tip} onClick={() => queue.setArc(v as EnergyArc)}>
+                  {label}
+                </button>
+              ))}
+            </span>
+          </div>
+        </div>
+      )}
     </>
   );
 
-  // The per-pair transition badge ("Blend 24", "Cut"…) as the table's trailing column.
+  // The per-pair transition. Shown only when the pair is ANALYSED: for an unanalysed pair the old
+  // badge printed a guess ("Filter 12?") on nearly every radio row, and that guess was not even
+  // what would play (the gesture is re-picked at mix start). Unanalysed rows say where they came
+  // from instead, so "you added this" is visible next to radio's picks.
   const extraCol = {
     header: "Mix",
-    render: (t: TrackMeta, i: number) => {
+    render: (t: TrackMeta & { source?: QueueSource }, i: number) => {
       const prev = i === 0 ? current : upcoming[i - 1];
       const plan = prev ? pickTransition(prev, t) : null;
-      if (!plan) return null;
-      return (
-        <span
-          className={`mixq-badge tier-${planTier(plan)}`}
-          title={plan.confident ? `mixability ${Math.round(plan.score * 100)}%` : "not yet analysed — provider-suggested order"}
-        >
-          {transitionLabel(plan)}
-        </span>
-      );
+      if (plan && plan.confident) {
+        return (
+          <span className={`mixq-badge tier-${planTier(plan)}`} title={`mixability ${Math.round(plan.score * 100)}%`}>
+            {transitionLabel(plan)}
+          </span>
+        );
+      }
+      const src = t.source;
+      return src ? <span className={`mixq-src src-${src}`}>{src === "user" ? "added" : src}</span> : null;
     },
   };
-
-  const footer = (
-    <footer className="mixq-controls">
-      <button onClick={onMixNow} disabled={!enabled}>
-        Mix now
-      </button>
-      <button onClick={onSkip} disabled={!enabled}>
-        Skip
-      </button>
-      <button onClick={onHold} disabled={!enabled}>
-        Hold
-      </button>
-    </footer>
-  );
 
   return (
     <div
@@ -254,7 +291,6 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         onReorder={canEdit ? edit.move : undefined}
         extraCol={extraCol}
         topSlot={topSlot}
-        footer={footer}
         emptyHint={
           canEdit
             ? mode === "radio"

@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { autoLine } from "./automixStatus";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -641,6 +642,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
 
   // Header label for the current view: name + where it's "from".
   const headInfo: { name: string; from: string | null } = (() => {
+    // The exclusive views come first: the header read "Collection" while the Queue, Search or Sync
+    // filled the content area, because it only ever looked at the table view underneath them.
+    if (auto?.queueOpen) return { name: "Queue", from: null };
+    if (searchView) return { name: "Search", from: "YouTube" };
+    if (syncOpen) return { name: "Sync", from: null };
     if (view === "collection") return { name: "Collection", from: null };
     if (view === "community") return { name: "Community", from: "shared pool" };
     const p = library.playlists.find((pl) => pl.id === activePlaylistId);
@@ -667,22 +673,10 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           <DockPlacementResizer mode={dockMode} />
           <div ref={panelRef} className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             {dockMode === "center" && <CenterResizeHandles panelKey="library" />}
-            <div className="settings-head">
-              {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
-                  the sections menu. A caret marks it as a disclosure. */}
-              <button
-                className={`lib-head lib-head-toggle ${navOpen ? "on" : ""}`}
-                onClick={() => setNavOpen((v) => !v)}
-                aria-pressed={navOpen}
-                aria-label={navOpen ? "Hide sections" : "Show sections"}
-                title={navOpen ? "Hide sections" : "Show sections"}
-              >
-                <span className="lib-head-caret" aria-hidden="true">{navOpen ? "▾" : "▸"}</span>
-                <span className="lib-head-name" title={headInfo.name}>
-                  {headInfo.name}
-                </span>
-                {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
-              </button>
+            <div className="settings-head lib-head-row">
+              {/* ★ AUTO LEADS THE HEADER (operator, 2026-11-04: "auto button should probably move to
+                  top left quadrant in header"). It is the one control in this header that changes
+                  what the decks do, so it sits first, where the eye starts, not after the title. */}
               {auto && (
                 <div className="automix-bar">
                   {/* ★ THE SECOND AUTO BUTTON. The floating panel has one and this header has
@@ -698,14 +692,30 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                     title={auto.canAuto ? undefined : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
                   >
                     AUTO
-                    {auto.status.enabled && auto.status.countdownSec != null && auto.status.phase !== "idle" && (
-                      <span className="automix-count">
-                        {auto.status.phase === "mixing" ? "mixing" : `${Math.ceil(auto.status.countdownSec)}s`}
-                      </span>
-                    )}
+                    {(() => {
+                      // Same words as the Queue's status strip (automixStatus.ts), in short.
+                      const nx = auto.queue.upcoming[0];
+                      const l = autoLine(auto.status, nx ? nx.title || nx.videoId : null);
+                      return l.chip ? <span className={`automix-count tone-${l.tone}`}>{l.chip}</span> : null;
+                    })()}
                   </button>
                 </div>
               )}
+              {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
+                  the sections menu. A caret marks it as a disclosure. */}
+              <button
+                className={`lib-head lib-head-toggle ${navOpen ? "on" : ""}`}
+                onClick={() => setNavOpen((v) => !v)}
+                aria-pressed={navOpen}
+                aria-label={navOpen ? "Hide sections" : "Show sections"}
+                title={navOpen ? "Hide sections" : "Show sections"}
+              >
+                <span className="lib-head-caret" aria-hidden="true">{navOpen ? "▾" : "▸"}</span>
+                <span className="lib-head-name" title={headInfo.name}>
+                  {headInfo.name}
+                </span>
+                {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
+              </button>
               {/* No ✕: the Library is a dock you close with its chin button (this matches
                   Settings/Profile/Session + the embedded tabs — exit by opening another). */}
             </div>

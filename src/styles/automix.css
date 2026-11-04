@@ -260,3 +260,87 @@
   padding: 4px 6px;
   font-size: 12px;
 }
+
+/* Library header: AUTO first, then the title, both left (LibraryPanel lib-head-row). */
+.settings-head.lib-head-row {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+/* ---- Queue, redesigned around "what is AUTO doing?" (MixQueuePanel, 2026-11-04) ---- */
+.mixq-status {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  border-left: 3px solid var(--line);
+}
+.mixq-status.tone-run { border-left-color: var(--accent); }
+.mixq-status.tone-mix { border-left-color: var(--neon-lime); }
+.mixq-status.tone-hold { border-left-color: #ffb13c; }
+.mixq-status.tone-wait { border-left-color: #ffe24a; }
+.mixq-status.tone-manual { border-left-color: #c77bff; }
+.mixq-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.mixq-slot { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mixq-slot-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mixq-arrow { color: var(--muted); font-size: 16px; }
+.mixq-line { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.mixq-headline { font-size: 14px; font-weight: 600; color: var(--text); }
+.mixq-detail { font-size: 12px; color: var(--muted); }
+.mixq-bar {
+  position: relative;
+  height: 4px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+.mixq-bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--neon-lime); }
+.mixq-bar-mark { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--accent); }
+/* The actions now sit under the status, not stuck to the bottom of the list. */
+.mixq-controls {
+  position: static;
+  border-top: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+}
+.mixq-controls button.on {
+  color: #120c02;
+  background: #ffb13c;
+  border-color: #ffb13c;
+}
+.mixq-seed { flex-wrap: wrap; row-gap: 6px; }
+.mixq-field { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
+.mixq-field-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex: none;
+}
+.mixq-seed .mixq-arc {
+  width: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  flex: none;
+}
+/* Where an unanalysed queued row came from (its transition is not known yet). */
+.mixq-src {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mixq-src.src-user { color: var(--accent); }
+.automix-count.tone-wait { color: #ffe24a; }
+.automix-count.tone-hold { color: #ffb13c; }

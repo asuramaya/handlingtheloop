@@ -1,8 +1,8 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
 import { foldTempoOctave, nearestBeat, nearestDownbeat, tempoLockable } from "../analysis";
 import type { TrackMeta } from "../library/types";
-import { pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
-import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
+import { bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
+import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
 import type { AutoMixPhase, AutoMixWaitReason, MixMode, RadioContext, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
 import type { AutoFxSettings, AutoPerformance } from "../state/settings";
@@ -707,9 +707,9 @@ export class AutoMixer {
     const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
     const room = (live.duration || 0) - END_GUARD - exitAt;
     if (room > 0 && this.barsSeconds > room && bpm > 0) {
-      const bars = Math.max(2, Math.floor(room / barsToSeconds(1, bpm)));
+      const bars = phraseBars(Math.max(2, room / barsToSeconds(1, bpm)));
       if (bars < this.plan.bars) {
-        this.plan = { ...this.plan, bars, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * bars)) };
+        this.plan = { ...this.plan, bars, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(bars) : 0 };
         this.barsSeconds = barsToSeconds(bars, bpm);
       }
     }
@@ -1082,6 +1082,10 @@ export class AutoMixer {
       const inc = this.deps.engine.deck(idle);
       this.plan = pickTransition(deckDescriptor(live, this.deps.queue.getCurrent()), deckDescriptor(inc, next));
       const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+      {
+        const banded = bandBars(bpm, this.plan.bars);
+        if (banded !== this.plan.bars) this.plan = { ...this.plan, bars: banded, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(banded) : 0 };
+      }
       // FIT THE BLEND TO THE SECTION. The planner asks for a length based on how compatible the
       // pair is; the track decides whether it has that much to give. A 24-bar blend that starts
       // 12 bars before the outro ends straddles the seam and sounds like a mistake, so the
@@ -1101,7 +1105,7 @@ export class AutoMixer {
           const provisional = this.computeMixOut(live, this.barsSeconds, here);
           const fitted = blendBarsFor(liveSections, provisional, bpm, this.plan.bars);
           if (fitted !== this.plan.bars) {
-            this.plan = { ...this.plan, bars: fitted, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * fitted)) };
+            this.plan = { ...this.plan, bars: fitted, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(fitted) : 0 };
             this.barsSeconds = barsToSeconds(fitted, bpm);
           }
         }

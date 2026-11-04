@@ -159,11 +159,38 @@ export function pickTransition(a: TrackMeta, b: TrackMeta): TransitionPlan {
   //   unknown/low → FILTER sweep: the cheap one-knob filter masks an unproven pair
   //                 and still rides tempo/key sync — sounds intentional, not a guess
   //   clash       → quick cut
-  if (!confident) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
-  if (score >= 0.75) return { style: "blend", bars: 24, bassSwapBar: 8, keyMatch, score, keyKnown, confident };
-  if (score >= 0.55) return { style: "blend", bars: 16, bassSwapBar: 6, keyMatch, score, keyKnown, confident };
-  if (score >= 0.38) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
-  return { style: "cut", bars: 6, bassSwapBar: 0, keyMatch: false, score, keyKnown, confident };
+  // Lengths are whole PHRASES (4/8/16/32 bars) and the bass swaps on a 4-bar boundary — see
+  // phraseSwapBar and mixPoints BLEND_STEPS for the evidence. Was 24/16/12/6 with swaps at bar 6 or 8.
+  const plan = (style: TransitionPlan["style"], bars: number, km = keyMatch): TransitionPlan => ({
+    style, bars, bassSwapBar: phraseSwapBar(bars), keyMatch: km, score, keyKnown, confident,
+  });
+  if (!confident) return plan("filter", 8);
+  if (score >= 0.75) return plan("blend", 32);
+  if (score >= 0.55) return plan("blend", 16);
+  if (score >= 0.38) return plan("filter", 8);
+  return { ...plan("cut", 4, false), bassSwapBar: 0 };
+}
+
+/** WHERE THE BASS SWAPS: on a phrase line inside the blend, never "bar 6". A swap mid-phrase sounds
+ *  like an edit (practitioner consensus; the measured EQ curves in Kim, Yang & Nam, DAFx 2022 step
+ *  at phrase boundaries). Half-way through a 16/32-bar blend, one 4-bar phrase before the end of an
+ *  8-bar one, and at the middle of anything shorter. Always a multiple of 4 from 8 bars up. */
+export function phraseSwapBar(bars: number): number {
+  if (bars >= 16) return Math.round(bars / 2 / 4) * 4;
+  if (bars >= 8) return bars - 4;
+  return Math.max(0, Math.floor(bars / 2));
+}
+
+/** LENGTH BY TEMPO BAND. Without genre tags, the tempo is the best proxy for the room: a 32-bar
+ *  blend is a minute of house at 124 but over a minute and a half of R&B at 85, and hip-hop and
+ *  open-format DJs cut in 4-8 bars "on the one" while house and techno DJs ride 16-32. Drum & bass
+ *  at 174 runs 32 bars in 44 s, so it is capped at 16 the way its DJs phrase it. Never lengthens. */
+export function bandBars(bpm: number | null | undefined, bars: number): number {
+  if (!bpm || bpm <= 0) return bars;
+  if (bpm < 100) return Math.min(bars, 8);
+  if (bpm < 118) return Math.min(bars, 16);
+  if (bpm < 155) return bars;
+  return Math.min(bars, 16);
 }
 
 /** Short human label for a transition badge in the queue UI. Only claims "Harmonic"

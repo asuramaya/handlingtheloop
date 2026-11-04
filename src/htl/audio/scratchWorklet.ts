@@ -52,6 +52,9 @@ if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 // recorder stores whole milliseconds, which adds jitter longer windows average away, so the real
 // capture is biased toward longer windows; 640 rather than its preferred 768 is the hedge.)
 const MIN_INTERVAL = 640;
+// How far a move from rest may travel and still be a MICRO JOG (seconds of audio), for the arrival
+// stop below. A nudge is a few ticks (2.5 ms each); a scratch sweeps tens of milliseconds and more.
+const MICRO_SPAN = 0.06;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -120,6 +123,7 @@ class Scratch extends AudioWorkletProcessor {
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
         this.onset = 0; // samples of first-motion window left (see the move handler)
+        this.micro = false; this.restPos = d.pos; this.quiet = 1e9; // see the arrival stop
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -167,6 +171,32 @@ class Scratch extends AudioWorkletProcessor {
         // usually a burst of 3-8 ticks inside a few ms, and banking ticks 2..n left the head chasing
         // only the first one until the next settle post.
         const dtIn = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
+        // ★ ARRIVAL STOP (operator, 2026-11-03: micro jogs "still need work for the slurry feel and
+        // sound"). The glide keeps its last pace until the NEXT message, and after a nudge the next
+        // message is the ~60 Hz settle post: the head ran past where the hand stopped by 23-59% of
+        // the nudge, then re-paced BACKWARD to it, and took 110-190 ms to settle (measured on this
+        // source by scripts/joglab/microjog.mjs). A forward-then-back slide the hand never made.
+        // Stopping at the target ALWAYS cured that and wrecked ordinary scratching (touch roughness
+        // 0.048 → 0.327, board trips 10 → 30): mid-gesture the head meets each target just as the
+        // next update is due, and parking whenever one is late is a stutter. And "a repeated
+        // position means the hand is still" is not reliable either: 60 Hz touch gets settle posts
+        // between ordinary moves. So the stop is scoped to what a micro jog IS: motion that started
+        // from rest and has not travelled further than MICRO_SPAN from there. A scratch leaves that
+        // span within its first stroke and runs exactly the original glide from then on.
+        const rel = (d.pos - this.restPos) / sampleRate;
+        // A GENUINE rest: no real movement reported for ~33 ms. Without this the stop below
+        // re-armed itself: it leaves the head exactly at rest, so the next ordinary 60 Hz touch move
+        // looked like a move from rest and the whole gesture became a string of stops.
+        if (fromRest && this.quiet > 1600) { this.micro = true; this.restPos = this.target; }
+        else if (this.micro && (rel > MICRO_SPAN || rel < -MICRO_SPAN)) this.micro = false;
+        if (d.pos !== this.target) this.quiet = 0;
+        if (this.micro && !this.granular && d.pos === this.target && (this.pos - this.target) * this.curStep > 0) {
+          // The hand is holding still and the head already went past it: stop where it is rather
+          // than slide back. What is left is a fraction of a tick, and the next real move re-paces
+          // from wherever the head actually is.
+          this.target = this.pos; this.step = this.curStep = 0; this.since = 0;
+          return;
+        }
         if (fromRest) {
           this.interval = MIN_INTERVAL;
           this.accDt = 0;
@@ -408,6 +438,12 @@ class Scratch extends AudioWorkletProcessor {
       if (this.curStep > 32) this.curStep = 32; else if (this.curStep < -32) this.curStep = -32;
       const p0 = this.pos;
       this.pos += this.curStep; // feed-forward glide (fills the inter-update gap, no parking)
+      this.quiet++;
+      if (this.micro && this.curStep !== 0) {
+        // A micro jog lands ON the hand's position and stops there (see ARRIVAL STOP above).
+        const r0 = this.target - p0, r1 = this.target - this.pos;
+        if (r0 * r1 < 0 || r1 === 0) { this.pos = this.target; this.curStep = 0; this.step = 0; }
+      }
       if (this.pos < 0) { this.pos = 0; if (this.curStep < 0) this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; if (this.curStep > 0) this.curStep = 0; }
       const sp = this.curStep < 0 ? -this.curStep : this.curStep;

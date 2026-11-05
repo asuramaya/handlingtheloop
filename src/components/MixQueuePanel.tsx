@@ -70,29 +70,38 @@ const ARCS: { v: EnergyArc; label: string; path: string; says: string }[] = [
 // One side of the stage: a deck-coloured card (the colour of the deck the track is on, when it is on
 // one), cover art with the deck letter on it, the title, and the numbers a DJ reads at a glance.
 function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" | "next"; deck: "A" | "B" | null; empty: string }) {
+  const kicker = (
+    <span className="mixq-card-kicker">
+      {side === "now" ? "Now" : "Next"}
+      {deck && (
+        <span className="mixq-card-deck" title={`On deck ${deck}`}>
+          {deck}
+        </span>
+      )}
+    </span>
+  );
   if (!t) {
     return (
       <div className={`mixq-card ${side} is-empty`}>
-        <span className="mixq-card-kicker">{side === "now" ? "Now" : "Next"}</span>
-        <span className="mixq-card-empty">{empty}</span>
+        <div className="mixq-card-text">
+          {kicker}
+          <span className="mixq-card-empty">{empty}</span>
+        </div>
       </div>
     );
   }
   const d = displayTrack(t.title, t.artist);
   return (
-    <div className={`mixq-card ${side}${deck ? ` on-deck deck-${deck}` : ""}`}>
-      <div className="mixq-card-art">
-        {t.thumbnail ? <img src={t.thumbnail} alt="" loading="lazy" /> : <span className="mixq-card-noart" aria-hidden="true">♪</span>}
-        {deck && <span className="mixq-card-deck" title={`On deck ${deck}`}>{deck}</span>}
-      </div>
+    <div className={`mixq-card ${side}`}>
+      {t.thumbnail ? <img className="mixq-card-art" src={t.thumbnail} alt="" loading="lazy" /> : <span className="mixq-card-art is-blank" aria-hidden="true" />}
       <div className="mixq-card-text">
-        <span className="mixq-card-kicker">{side === "now" ? "Now" : "Next"}</span>
+        {kicker}
         <span className="mixq-card-title" title={t.title}>
           {d.title || t.videoId}
         </span>
         <span className="mixq-card-meta">
           <span className="mixq-card-artist">{d.artist}</span>
-          {t.bpm ? <span className="mixq-card-num">{Math.round(t.bpm)}<small>BPM</small></span> : null}
+          {t.bpm ? <span className="mixq-card-num">{Math.round(t.bpm)}</span> : null}
           {t.key ? <span className="mixq-card-num key">{t.key}</span> : null}
         </span>
       </div>
@@ -185,8 +194,11 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   // ★ THE STAGE (operator, 2026-11-04: "this auto mix ui/ux needs a ton of work, does not look
   // good ... redesign this make it look cool"). NOW and NEXT are cards in the colours of their decks,
   // and the gap between them is the transition itself: its name, a big clock, and a small crossfader
-  // whose knob sits on NOW until the mix starts and then slides across to NEXT as the blend runs. The
-  // controls live in the middle, under the clock, because that is what they act on.
+  // whose knob sits on NOW until the mix starts and then slides across to NEXT as the blend runs.
+  // Round two (operator: "the middle part is wasting a lot of space ... has to work on mobile ...
+  // toggles are unintegrated"): the middle is a narrow column, and every control — tracks source,
+  // energy, Mix now / Skip / Hold — sits in ONE bar under the stage, one chip style, icons-only on
+  // phones.
   const nowDeck: "A" | "B" | null = current ? (deckLoaded?.A === current.videoId ? "A" : deckLoaded?.B === current.videoId ? "B" : null) : null;
   const nextDeck: "A" | "B" | null = next ? (deckLoaded?.A === next.videoId ? "A" : deckLoaded?.B === next.videoId ? "B" : null) : null;
   // Colour each side by its deck; a track not on a deck yet takes the deck it is heading for.
@@ -194,7 +206,6 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   const nextCol = nextDeck ?? (nowCol === "A" ? "B" : "A");
   const pv = current && next ? previewPlan(current, next) : null;
   const planName = enabled && st.planLabel ? st.planLabel : pv?.plan.confident ? transitionLabel(pv.plan) : null;
-  const bars = enabled && st.plan ? st.plan.bars : pv?.plan.confident ? pv.plan.bars : null;
   const tone = enabled ? line.tone : "idle";
   const clock = enabled && st.countdownSec != null && !st.held && tone !== "wait" && tone !== "manual" ? fmtClock(st.countdownSec) : null;
   // The approach: how far the live track has come toward its mix point (0 → 1), then the blend.
@@ -206,75 +217,89 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
     ["--p" as string]: String(progress ?? 0),
     ["--approach" as string]: String(approach),
   };
+  const autoBtns = enabled && (
+    <span className="mixq-group mixq-auto-ctl" role="group" aria-label="AUTO">
+      <button className="mixq-chip" aria-label="Mix now" onClick={onMixNow} disabled={!next} title="Start the mix into the next track now, from here">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3l6 5-6 5zM8 3l6 5-6 5z" /></svg>
+        <span className="mixq-chip-label">Mix now</span>
+      </button>
+      <button className="mixq-chip" aria-label="Skip" onClick={onSkip} disabled={!next} title="Drop the next track from the queue; the one after it moves up">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l7 5-7 5zM11 3h2v10h-2z" /></svg>
+        <span className="mixq-chip-label">Skip</span>
+      </button>
+      <button
+        className={`mixq-chip${st.held ? " on hold" : ""}`}
+        aria-label="Hold"
+        onClick={onHold}
+        aria-pressed={!!st.held}
+        title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" /></svg>
+        <span className="mixq-chip-label">{st.held ? "Holding" : "Hold"}</span>
+      </button>
+    </span>
+  );
   const topSlot = (
     <div className={`mixq-top tone-${tone}${enabled ? " is-auto" : ""}${progress != null ? " is-mixing" : ""}`} style={stageStyle} aria-live="polite">
       <div className="mixq-stage">
         <TrackCard t={current} side="now" deck={nowDeck} empty={mirror ? "Host isn’t playing yet" : "Nothing playing"} />
-        <div className="mixq-bridge" data-soon={clock && (st.countdownSec ?? 99) <= 8 ? "" : undefined} title={enabled ? [line.headline, line.detail].filter(Boolean).join(" — ") : undefined}>
-          <div className="mixq-bridge-head">
-            {enabled ? <span className="mixq-kicker">{kickerFor(tone, line.headline)}</span> : null}
-            {planName && (
-              <span className="mixq-style" title={pv?.why}>
-                {planName}
-                {bars ? <small>{bars} bars</small> : null}
-              </span>
-            )}
-          </div>
-          {clock && <span className="mixq-clock">{clock}</span>}
-          <div className="mixq-fader" aria-hidden="true">
-            <span className="mixq-fader-approach" />
-            <span className="mixq-fader-blend" />
-            <span className="mixq-fader-knob" />
-          </div>
+        <div
+          className="mixq-bridge"
+          data-soon={clock && (st.countdownSec ?? 99) <= 8 ? "" : undefined}
+          title={[enabled ? line.headline : null, enabled ? line.detail : null, !enabled ? pv?.why : null].filter(Boolean).join(" — ") || undefined}
+        >
+          {enabled ? <span className="mixq-kicker">{kickerFor(tone, line.chip ?? line.headline)}</span> : null}
+          {clock ? (
+            <span className="mixq-clock">{clock}</span>
+          ) : (
+            <svg className="mixq-bridge-arrow" viewBox="0 0 24 10" aria-hidden="true">
+              <path d="M1 5h20M17 1l4 4-4 4" />
+            </svg>
+          )}
           {enabled && (
-            <div className="mixq-ctl">
-              <button onClick={onMixNow} disabled={!next} title="Start the mix into the next track now, from here">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3l6 5-6 5zM8 3l6 5-6 5z" /></svg>
-                Mix now
-              </button>
-              <button onClick={onSkip} disabled={!next} title="Drop the next track from the queue; the one after it moves up">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l7 5-7 5zM11 3h2v10h-2z" /></svg>
-                Skip
-              </button>
-              <button
-                className={st.held ? "on" : ""}
-                onClick={onHold}
-                aria-pressed={!!st.held}
-                title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" /></svg>
-                {st.held ? "Holding" : "Hold"}
-              </button>
-            </div>
+            <span className="mixq-fader" aria-hidden="true">
+              <span className="mixq-fader-approach" />
+              <span className="mixq-fader-blend" />
+              <span className="mixq-fader-knob" />
+            </span>
+          )}
+          {planName && (
+            <span className="mixq-style">{planName}</span>
           )}
         </div>
         <TrackCard t={next} side="next" deck={nextDeck} empty="Queue empty" />
       </div>
-      {ownsSeed && (
-        <div className="mixq-seedrow">
-          <span className="seg-group mixq-src-seg" role="group" aria-label="Where the next tracks come from">
-            <button
-              className={`hw-btn small ${mode !== "playlist" && !pickingPlaylist ? "on" : ""}`}
-              aria-pressed={mode !== "playlist"}
-              title="Tracks that fit what is playing, picked again as each one starts"
-              onClick={() => {
-                if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
-                setPickingPlaylist(false);
-              }}
-            >
-              Suggestions
-            </button>
-            <button
-              className={`hw-btn small ${mode === "playlist" || pickingPlaylist ? "on" : ""}`}
-              aria-pressed={mode === "playlist"}
-              disabled={!library.playlists.length}
-              title={library.playlists.length ? playlistHint : "Make a playlist in the Library first"}
-              onClick={() => setPickingPlaylist(true)}
-            >
-              Playlist
-            </button>
-          </span>
-          {(mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
+      {(ownsSeed || enabled) && (
+        <div className="mixq-bar">
+          {ownsSeed && (
+            <span className="mixq-group mixq-source" role="group" aria-label="Where the next tracks come from">
+              <button
+                className={`mixq-chip${mode !== "playlist" && !pickingPlaylist ? " on" : ""}`}
+                aria-label="Suggestions"
+                aria-pressed={mode !== "playlist"}
+                title="Tracks that fit what is playing, picked again as each one starts"
+                onClick={() => {
+                  if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
+                  setPickingPlaylist(false);
+                }}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7M2.5 2.5a8 8 0 0 0 0 11M13.5 2.5a8 8 0 0 1 0 11" /></svg>
+                <span className="mixq-chip-label">Suggestions</span>
+              </button>
+              <button
+                className={`mixq-chip${mode === "playlist" || pickingPlaylist ? " on" : ""}`}
+                aria-label="Playlist"
+                aria-pressed={mode === "playlist"}
+                disabled={!library.playlists.length}
+                title={library.playlists.length ? playlistHint : "Make a playlist in the Library first"}
+                onClick={() => setPickingPlaylist(true)}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h9M2 8h9M2 12h6M13 9v5M11 12.5a2 2 0 1 0 2 0" /></svg>
+                <span className="mixq-chip-label">Playlist</span>
+              </button>
+            </span>
+          )}
+          {ownsSeed && (mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
             <select
               className="mixq-src-pick"
               value={mode === "playlist" && seededFrom ? seededFrom : ""}
@@ -297,18 +322,19 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
               ))}
             </select>
           )}
-          {mode !== "playlist" && !pickingPlaylist && (
-            <span className="seg-group mixq-arc" role="group" aria-label="How the energy moves across the set">
+          {ownsSeed && mode !== "playlist" && !pickingPlaylist && (
+            <span className="mixq-group mixq-energy" role="group" aria-label="How the energy moves across the set">
               {ARCS.map((a) => (
-                <button key={a.v} className={`hw-btn small ${queue.arc === a.v ? "on" : ""}`} aria-pressed={queue.arc === a.v} title={a.says} onClick={() => queue.setArc(a.v)}>
+                <button key={a.v} className={`mixq-chip${queue.arc === a.v ? " on" : ""}`} aria-label={a.label} aria-pressed={queue.arc === a.v} title={`${a.label}: ${a.says}`} onClick={() => queue.setArc(a.v)}>
                   <svg className="mixq-arc-ico" viewBox="0 0 22 12" aria-hidden="true">
                     <path d={a.path} />
                   </svg>
-                  {a.label}
+                  <span className="mixq-chip-label">{a.label}</span>
                 </button>
               ))}
             </span>
           )}
+          {autoBtns}
         </div>
       )}
     </div>

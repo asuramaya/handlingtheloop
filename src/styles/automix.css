@@ -278,106 +278,78 @@
 .mixq-badge.tier-move { color: #e3c7ff; background: transparent; box-shadow: inset 0 0 0 1px #b884f0; }
 
 /* ---- THE STAGE: the Queue's header (MixQueuePanel topSlot) ----
-   NOW and NEXT are cards in their decks' colours (--now-col / --next-col, set inline from the
-   deck colours); the bridge between them is the transition: its name, a big clock, and a little
-   crossfader whose knob slides from NOW to NEXT as the blend runs (--p, 0 → 1). --approach is how
-   far the live track has come toward its mix point. Narrow docks stack it (container query). */
+   Row 1: NOW card · a narrow bridge (what AUTO is doing, the clock, a mini crossfader, the
+   transition's name) · NEXT card. Row 2: one control bar, one chip style: where tracks come from,
+   the energy shape, and Mix now / Skip / Hold. Deck colours (--now-col / --next-col) only tint
+   small things — the deck tag, the fader — never an edge. Sizes step down by container width. */
 .mixq-top {
   container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px 8px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--line);
-  background:
-    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--now-col) 9%, transparent), transparent 55%),
-    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--next-col) calc(4% + var(--p) * 10%), transparent), transparent 55%),
-    var(--bg);
+  background: var(--bg);
 }
 .mixq-stage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.9fr) minmax(0, 1fr);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   gap: 10px;
 }
 
 /* -- the cards -- */
 .mixq-card {
   --col: var(--now-col);
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
   min-width: 0;
-  padding: 8px 10px;
+  padding: 7px;
   border-radius: 10px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--col) 13%, var(--panel)), var(--panel) 75%);
-  border: 1px solid color-mix(in srgb, var(--col) 28%, var(--line));
-  box-shadow: inset 3px 0 0 var(--col);
-  transition: opacity 0.6s, box-shadow 0.6s, border-color 0.6s;
-}
-.mixq-card.next {
-  --col: var(--next-col);
-  flex-direction: row-reverse;
-  text-align: right;
-  background: linear-gradient(270deg, color-mix(in srgb, var(--col) 13%, var(--panel)), var(--panel) 75%);
-  box-shadow: inset -3px 0 0 var(--col);
-}
-.mixq-card.is-empty {
-  justify-content: center;
-  flex-direction: column;
-  gap: 2px;
   background: var(--panel);
-  border-style: dashed;
-  box-shadow: none;
+  border: 1px solid var(--line);
+  transition: opacity 0.6s, border-color 0.6s, background 0.6s;
 }
+.mixq-card.next { --col: var(--next-col); }
+.mixq-card.is-empty { border-style: dashed; background: transparent; padding-left: 12px; min-height: 58px; }
 .mixq-card-empty { font-size: 12px; color: var(--muted); }
-/* During the blend the outgoing dims and the incoming lights up — the room is changing hands. */
-.mixq-top.is-mixing .mixq-card.now { opacity: calc(1 - var(--p) * 0.45); }
+.mixq-top.is-mixing .mixq-card.now { opacity: calc(1 - var(--p) * 0.5); }
 .mixq-top.is-mixing .mixq-card.next {
-  border-color: color-mix(in srgb, var(--col) 60%, var(--line));
-  box-shadow: inset -3px 0 0 var(--col), 0 0 calc(var(--p) * 22px) color-mix(in srgb, var(--col) 35%, transparent);
+  border-color: color-mix(in srgb, var(--col) calc(var(--p) * 55%), var(--line));
+  background: color-mix(in srgb, var(--col) calc(var(--p) * 8%), var(--panel));
 }
-.mixq-card-art { position: relative; flex: 0 0 auto; width: 46px; height: 46px; }
-.mixq-card-art img,
-.mixq-card-noart {
-  width: 100%;
-  height: 100%;
+.mixq-card-art {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
   border-radius: 7px;
   object-fit: cover;
-  display: grid;
-  place-items: center;
   background: var(--panel-2);
-  color: var(--muted);
 }
-.mixq-card-deck {
-  position: absolute;
-  right: -5px;
-  bottom: -5px;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 3px;
-  border-radius: 5px;
-  font-size: 10px;
-  font-weight: 800;
-  line-height: 17px;
-  text-align: center;
-  color: #06060a;
-  background: var(--col);
-  box-shadow: 0 0 0 2px var(--bg);
-}
-.mixq-card.next .mixq-card-deck { right: auto; left: -5px; }
 .mixq-card-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
 .mixq-card-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--col);
+  color: var(--muted);
 }
-.mixq-card.is-empty .mixq-card-kicker { color: var(--muted); }
+.mixq-card-deck {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 13px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: var(--col);
+  background: color-mix(in srgb, var(--col) 16%, transparent);
+}
 .mixq-card-title {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 650;
   color: var(--text);
   white-space: nowrap;
@@ -387,193 +359,167 @@
 .mixq-card-meta {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   font-size: 11px;
   color: var(--muted);
 }
-.mixq-card.next .mixq-card-meta { flex-direction: row-reverse; }
 .mixq-card-artist { min-width: 0; flex: 0 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mixq-card-num {
-  flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-.mixq-card-num small { margin-left: 2px; font-size: 8.5px; letter-spacing: 0.08em; color: var(--muted); }
-.mixq-card-num.key {
-  padding: 0 5px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  background: color-mix(in srgb, var(--col) 16%, transparent);
-  color: color-mix(in srgb, var(--col) 70%, var(--text));
-}
+.mixq-card-num { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--text) 70%, var(--muted)); }
+.mixq-card-num:not(.key)::after { content: " BPM"; font-size: 8.5px; letter-spacing: 0.06em; color: var(--muted); }
+.mixq-card-num.key { font-weight: 700; }
 
-/* -- the bridge -- */
+/* -- the bridge: a narrow column -- */
 .mixq-bridge {
   --tone: var(--muted);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  gap: 3px;
+  width: 112px;
   min-width: 0;
-  padding: 2px 0;
+  text-align: center;
 }
 .mixq-top.tone-run .mixq-bridge { --tone: var(--text); }
 .mixq-top.tone-mix .mixq-bridge { --tone: var(--neon-lime); }
 .mixq-top.tone-hold .mixq-bridge { --tone: #ffb13c; }
 .mixq-top.tone-wait .mixq-bridge { --tone: var(--neon-yellow); }
 .mixq-top.tone-manual .mixq-bridge { --tone: var(--neon-purple); }
-.mixq-bridge-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 8px;
-  max-width: 100%;
-  min-width: 0;
-}
 .mixq-kicker {
-  font-size: 9.5px;
+  max-width: 100%;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--tone);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
-.mixq-style {
-  flex: 0 0 auto;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text);
-  white-space: nowrap;
-}
-.mixq-style small { margin-left: 5px; font-size: 9.5px; font-weight: 500; color: var(--muted); }
 .mixq-clock {
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
   color: var(--tone);
-  text-shadow: 0 0 18px color-mix(in srgb, var(--tone) 30%, transparent);
 }
-.mixq-top.tone-run .mixq-clock { color: var(--text); }
-/* The last eight seconds: the clock takes the colour of the track that is coming. */
 .mixq-top.tone-run .mixq-bridge[data-soon] .mixq-clock { color: var(--next-col); }
-
-/* The little crossfader: a rail in NOW's colour fading into NEXT's, a faint fill for the approach,
-   and the knob — parked on NOW until the blend, then gliding across with it. */
-.mixq-fader {
-  position: relative;
-  width: 100%;
-  max-width: 260px;
-  height: 14px;
+.mixq-bridge-arrow { width: 26px; height: 10px; }
+.mixq-bridge-arrow path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.mixq-style {
+  max-width: 100%;
+  font-size: 10px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--text) 80%, var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.mixq-style small { font-size: 10px; font-weight: 500; color: var(--muted); }
+
+/* The mini crossfader: NOW's colour fading to NEXT's; the approach fills toward the mix point,
+   then the knob rides the blend across. */
+.mixq-fader { position: relative; display: block; width: 100%; height: 10px; }
 .mixq-fader::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 6px;
+  inset: 4px 0 auto;
   height: 2px;
   border-radius: 1px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--now-col) 45%, transparent), color-mix(in srgb, var(--next-col) 45%, transparent));
-  opacity: 0.45;
+  background: linear-gradient(90deg, var(--now-col), var(--next-col));
+  opacity: 0.25;
 }
-.mixq-top:not(.is-auto) .mixq-fader::before { background: repeating-linear-gradient(90deg, var(--line) 0 5px, transparent 5px 9px); opacity: 1; }
-.mixq-fader-approach {
-  position: absolute;
-  left: 0;
-  top: 5px;
-  height: 4px;
-  width: calc(var(--approach) * 100%);
-  border-radius: 2px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--now-col) 25%, transparent), var(--now-col));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--now-col) 45%, transparent);
-  transition: width 1s linear;
-}
-.mixq-top.is-mixing .mixq-fader-approach { opacity: 0; }
-.mixq-top:not(.is-auto) .mixq-fader-approach,
-.mixq-top:not(.is-auto) .mixq-fader-knob { display: none; }
+.mixq-fader-approach,
 .mixq-fader-blend {
   position: absolute;
   left: 0;
-  top: 5px;
-  height: 4px;
-  width: calc(var(--p) * 100%);
-  border-radius: 2px;
-  background: linear-gradient(90deg, var(--now-col), var(--next-col));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--next-col) 50%, transparent);
+  top: 4px;
+  height: 2px;
+  border-radius: 1px;
   transition: width 1s linear;
 }
+.mixq-fader-approach { width: calc(var(--approach) * 100%); background: var(--now-col); }
+.mixq-top.is-mixing .mixq-fader-approach { opacity: 0; }
+.mixq-fader-blend { width: calc(var(--p) * 100%); background: linear-gradient(90deg, var(--now-col), var(--next-col)); }
 .mixq-fader-knob {
   position: absolute;
   top: 0;
-  left: calc(var(--p) * (100% - 8px));
-  width: 8px;
-  height: 14px;
+  left: calc(var(--p) * (100% - 6px));
+  width: 6px;
+  height: 10px;
   border-radius: 2px;
   background: var(--text);
-  box-shadow: 0 0 0 2px var(--bg), 0 0 10px color-mix(in srgb, var(--text) 40%, transparent);
+  box-shadow: 0 0 0 2px var(--bg);
   transition: left 1s linear;
 }
-.mixq-top.is-mixing .mixq-fader-knob { animation: mixq-knob 1.2s ease-in-out infinite; }
-@keyframes mixq-knob {
-  50% { box-shadow: 0 0 0 2px var(--bg), 0 0 16px color-mix(in srgb, var(--next-col) 80%, transparent); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mixq-top.is-mixing .mixq-fader-knob { animation: none; }
-}
 
-.mixq-ctl { display: flex; gap: 4px; margin-top: 2px; }
-.mixq-ctl button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px 3px 7px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-.mixq-ctl svg { width: 10px; height: 10px; fill: currentColor; }
-.mixq-ctl button:disabled { opacity: 0.35; cursor: default; }
-.mixq-ctl button:not(:disabled):hover { border-color: var(--next-col); background: color-mix(in srgb, var(--next-col) 12%, transparent); }
-.mixq-ctl button.on { color: #1a1405; background: #ffb13c; border-color: #ffb13c; }
-
-/* -- the sources row: Suggestions | Playlist on the left, Energy on the right -- */
-.mixq-seedrow {
+/* -- the control bar: one chip style for every control -- */
+.mixq-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
+  gap: 6px;
 }
-.mixq-seedrow .mixq-src-pick { flex: 0 1 220px; min-width: 0; }
-.mixq-seedrow .seg-group button { padding: 3px 9px; font-size: 11px; }
-.mixq-seedrow .seg-group button:disabled { opacity: 0.4; cursor: default; }
-.mixq-seedrow .mixq-arc { margin-left: auto; }
+.mixq-group {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.mixq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
+}
+.mixq-chip svg { width: 13px; height: 13px; flex: 0 0 auto; fill: currentColor; }
+.mixq-chip svg path { stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.mixq-energy .mixq-chip svg,
+.mixq-source .mixq-chip svg { fill: none; }
+.mixq-auto-ctl .mixq-chip svg path { stroke: none; }
+.mixq-chip .mixq-arc-ico { width: 18px; height: 10px; }
+.mixq-chip:not(:disabled):hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.mixq-chip.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
+.mixq-chip.on.hold { color: #1a1405; background: #ffb13c; box-shadow: none; }
+.mixq-chip:disabled { opacity: 0.35; cursor: default; }
+.mixq-auto-ctl { margin-left: auto; }
+.mixq-auto-ctl .mixq-chip { color: var(--text); }
+.mixq-bar .mixq-src-pick { height: 30px; flex: 0 1 220px; min-width: 0; }
 
-/* Narrow docks: the cards stack, the bridge runs between them as one line. */
-@container (max-width: 600px) {
-  .mixq-stage { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-  .mixq-card.next { flex-direction: row; text-align: left; background: linear-gradient(90deg, color-mix(in srgb, var(--col) 13%, var(--panel)), var(--panel) 75%); box-shadow: inset 3px 0 0 var(--col); }
-  .mixq-card.next .mixq-card-meta { flex-direction: row; }
-  .mixq-card.next .mixq-card-deck { left: auto; right: -5px; }
-  .mixq-top.is-mixing .mixq-card.next { box-shadow: inset 3px 0 0 var(--col), 0 0 calc(var(--p) * 22px) color-mix(in srgb, var(--col) 35%, transparent); }
+/* Mid-width docks: smaller art and bridge, energy as icons. */
+@container (max-width: 640px) {
+  .mixq-energy .mixq-chip-label { display: none; }
+  .mixq-energy .mixq-chip { padding: 0 7px; }
   .mixq-card-art { width: 36px; height: 36px; }
-  .mixq-bridge { display: grid; grid-template-columns: auto auto minmax(40px, 1fr); grid-auto-flow: row; align-items: center; justify-items: start; column-gap: 10px; row-gap: 4px; padding: 0 4px; }
-  .mixq-bridge-head { justify-content: flex-start; }
+  .mixq-bridge { width: 84px; }
   .mixq-clock { font-size: 18px; }
-  .mixq-fader { max-width: none; }
-  .mixq-ctl { grid-column: 1 / -1; }
-  .mixq-arc button { font-size: 0 !important; gap: 0 !important; }
+}
+/* Phones: no art, the AUTO buttons as icons; the stage keeps its one row. */
+@container (max-width: 460px) {
+  .mixq-top { padding: 8px; gap: 6px; }
+  .mixq-stage { gap: 6px; }
+  .mixq-card { padding: 6px 8px; }
+  .mixq-card-art { display: none; }
+  .mixq-card-title { font-size: 12.5px; }
+  .mixq-card-artist { display: none; }
+  .mixq-bridge { width: 58px; }
+  .mixq-style small { display: none; }
+  .mixq-clock { font-size: 16px; }
+  /* Every control as an icon so the whole bar stays one row at phone width. */
+  .mixq-bar { flex-wrap: nowrap; gap: 4px; }
+  .mixq-bar .mixq-chip-label { display: none; }
+  .mixq-bar .mixq-chip { padding: 0 7px; }
+  .mixq-bar .mixq-src-pick { flex: 1 1 0; }
 }

@@ -9,7 +9,7 @@ import { CaptionBar } from "./CaptionBar";
 import { useLongPress } from "./useLongPress";
 import { usePhone } from "../htl/state/usePhone";
 import { TRACK_DND_MIME } from "./TrackTable";
-import { displayArtist, fmtTime } from "../util/format";
+import { displayTrack, fmtTime } from "../util/format";
 import type { StemBadge, StemStatus } from "../App";
 import { isStemBusy, stemProcText } from "./stemProcText";
 
@@ -278,7 +278,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           >
             DECK {id}
           </button>
-          <LaneTitle name={meta.name} artist={meta.artist ? displayArtist(meta.artist) : meta.artist} />
+          {(() => {
+            const dt = displayTrack(meta.name, meta.artist);
+            return <LaneTitle name={dt.title || meta.name} artist={meta.artist ? dt.artist : meta.artist} />;
+          })()}
           {headerDrag && (
             <span className="lane-drag" aria-hidden="true">
               ⠿

@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
-import { displayArtist, fmtTime } from "../util/format";
+import { displayTrack, fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
 import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
@@ -708,7 +708,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   )}
                 </td>
                 <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
-                <td className="col-title" title={t.title}>
+                <td className="col-title" title={t.title /* the upload's own title, in full */}>
                   {/* Fixed-width slot, so a title starts in the same place with or without dots. */}
                   {/* The # column (and the deck badge in it) is dropped in the narrow view, so the
                       badge is repeated here, shown only there (library.css, the 440px container). */}
@@ -720,10 +720,10 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   <span className="tt-marks">
                     <CachePips videoId={t.videoId} />
                   </span>
-                  {t.title}
+                  {displayTrack(t.title, t.artist).title}
                 </td>
                 <td className="col-artist" title={t.artist}>
-                  {displayArtist(t.artist)}
+                  {displayTrack(t.title, t.artist).artist}
                 </td>
                 <td className="col-bpm">{t.bpm != null ? t.bpm.toFixed(1) : "—"}</td>
                 <td className="col-key">{t.key || "—"}</td>

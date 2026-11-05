@@ -1,4 +1,4 @@
-import { displayArtist } from "../util/format";
+import { displayTrack } from "../util/format";
 import { type ReactNode, useState } from "react";
 import { PeopleList } from "./social/PeopleList";
 
@@ -160,8 +160,8 @@ export function ProfilePublicView({
                       server/trackName.ts) and can always produce something; this fallback is the
                       belt-and-braces for an older server or a partial payload, and it says what is
                       true — that we do not know — rather than showing the id. */}
-                  <span className="profile-top-title">{t.title || "Unknown track"}</span>
-                  {t.artist && <span className="profile-top-artist">{displayArtist(t.artist)}</span>}
+                  <span className="profile-top-title">{displayTrack(t.title, t.artist).title || "Unknown track"}</span>
+                  {t.artist && <span className="profile-top-artist">{displayTrack(t.title, t.artist).artist}</span>}
                 </span>
                 <span className="profile-top-plays">{t.plays}×</span>
               </li>

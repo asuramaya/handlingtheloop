@@ -18,6 +18,7 @@ import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
+import { displayTrack } from "./util/format";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
@@ -3838,7 +3839,7 @@ function AppBody() {
         {(() => {
           const st = autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus;
           const nx = (autoIsRemote && remoteAutomix ? remoteAutomix.upcoming : mixQueue.upcoming)[0];
-          const l = autoLine(st, nx ? nx.title || nx.videoId : null);
+          const l = autoLine(st, nx ? displayTrack(nx.title, nx.artist).title || nx.videoId : null);
           const canAuto = canArmAutoMix(room);
           return (
             <button

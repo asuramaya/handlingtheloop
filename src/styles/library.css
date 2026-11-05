@@ -672,7 +672,9 @@
 /* Optional trailing column (the Queue's per-pair transition badge). Fixed width so it
    doesn't eat the auto Title column; right-aligned to sit against the row edge. */
 .col-extra {
-  width: 84px;
+  /* em, not px: it scales with the row-size stepper, and holds the longest badge ("Harmonic 32",
+     which clipped to "Harmoni…" at 84px). */
+  width: 7.6em;
 }
 td.col-extra {
   text-align: right;

@@ -1,4 +1,4 @@
-import { displayArtist } from "../util/format";
+import { displayTrack } from "../util/format";
 import { useMemo, useState, type DragEvent } from "react";
 import type { Library } from "@htl";
 import { trackKey } from "@htl/library";
@@ -9,7 +9,7 @@ import {
   type MixQueue,
   type TrackMeta,
   type QueueSource,
-  pickTransition,
+  previewPlan,
   transitionLabel,
   planTier,
 } from "@htl";
@@ -68,15 +68,16 @@ const ARCS: { v: EnergyArc; label: string; path: string; says: string }[] = [
 ];
 
 function TrackRow({ t }: { t: TrackMeta }) {
+  const d = displayTrack(t.title, t.artist);
   return (
     <div className="mixq-track">
       {t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}
       <div className="mixq-track-text">
-        <span className="mixq-title">{t.title || t.videoId}</span>
+        <span className="mixq-title" title={t.title}>{d.title || t.videoId}</span>
         <span className="mixq-artist">
-          {displayArtist(t.artist)}
+          {d.artist}
           {t.key ? ` · ${t.key}` : ""}
-          {t.bpm ? ` · ${Math.round(t.bpm)}` : ""}
+          {t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ""}
         </span>
       </div>
     </div>
@@ -142,7 +143,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   //   3. Where the queue comes from (Radio or a playlist, showing the CURRENT choice; the old menu's
   //      label never changed) and the set's shape, as labelled buttons instead of "↔ Ride".
   const next = upcoming[0] ?? null;
-  const line = autoLine(st, next ? next.title || next.videoId : null);
+  const line = autoLine(st, next ? displayTrack(next.title, next.artist).title || next.videoId : null);
   const progress = st.phase === "mixing" && st.mixProgress != null ? st.mixProgress : null;
   const mixAt = st.mixOutTime != null && st.liveDuration ? Math.min(1, st.mixOutTime / st.liveDuration) : null;
   const topSlot = (
@@ -278,11 +279,16 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
     header: "Mix",
     render: (t: TrackMeta & { source?: QueueSource }, i: number) => {
       const prev = i === 0 ? current : upcoming[i - 1];
-      const plan = prev ? pickTransition(prev, t) : null;
-      if (plan && plan.confident) {
+      // previewPlan, not pickTransition: the badge promised "Cut" for 99 → 160 BPM, which the
+      // mixer would bridge or echo out — the queue said one thing and the decks did another.
+      const pv = prev ? previewPlan(prev, t) : null;
+      if (pv && pv.plan.confident) {
         return (
-          <span className={`mixq-badge tier-${planTier(plan)}`} title={`mixability ${Math.round(plan.score * 100)}%`}>
-            {transitionLabel(plan)}
+          <span
+            className={`mixq-badge tier-${pv.plan.style === "tempoBridge" || pv.plan.style === "doubleDrop" ? "move" : planTier(pv.plan)}`}
+            title={pv.why}
+          >
+            {transitionLabel(pv.plan)}
           </span>
         );
       }

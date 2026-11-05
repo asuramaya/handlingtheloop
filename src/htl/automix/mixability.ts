@@ -1,5 +1,42 @@
 import type { TrackMeta } from "../library/types";
 import type { EnergyArc, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
+import { foldTempoOctave, tempoLockable } from "../analysis";
+
+/** The widest tempo gap (folded, from the slower side) the tempoBridge will ride on a loop. Past
+ *  ~30 % a looped bar stretched that far stops sounding like the same record (DJ TechTools'
+ *  loop-out move; forum consensus caps a ramp at 10-15 % per phrase, which the bridge doubles by
+ *  giving it four bars of a loop rather than a moving track). */
+export const BRIDGE_MAX = 0.3;
+
+/** WHAT THE QUEUE SHOULD PROMISE for a pair: the plan pickTransition proposes, corrected by the two
+ *  rules the mixer applies before it ever mixes — a pair too far apart to beat-match is bridged on
+ *  a loop (≤ BRIDGE_MAX) or echoed out (beyond), never blended or "cut" as the score alone would
+ *  say; and the length is banded by tempo. `why` is the sentence for the badge's tooltip. */
+export function previewPlan(a: TrackMeta, b: TrackMeta): { plan: TransitionPlan; why: string } {
+  const plan = pickTransition(a, b);
+  const pct = Math.round(plan.score * 100);
+  if (a.bpm && b.bpm && !tempoLockable(a.bpm, b.bpm)) {
+    const f = foldTempoOctave(b.bpm, a.bpm) ?? b.bpm;
+    const gap = Math.round((Math.max(f / a.bpm, a.bpm / f) - 1) * 100);
+    const tempos = `${Math.round(a.bpm)} → ${Math.round(b.bpm)} BPM (${gap}% apart)`;
+    if (tempoLockable(a.bpm, b.bpm, BRIDGE_MAX)) {
+      return { plan: { ...plan, style: "tempoBridge", bars: 8, bassSwapBar: 0 }, why: `${tempos}: too far to beat-match, so AUTO catches the outgoing in a loop, rides it to the new tempo and drops the next track on the one.` };
+    }
+    return { plan: { ...plan, style: "echoOut", bars: 4, bassSwapBar: 0 }, why: `${tempos}: too far to beat-match or bridge, so the outgoing leaves through an echo and the next track comes in on the one.` };
+  }
+  const bars = bandBars(a.bpm, plan.bars);
+  const shaped = bars === plan.bars ? plan : { ...plan, bars, bassSwapBar: plan.bassSwapBar ? phraseSwapBar(bars) : 0 };
+  // Run the SAME chooser the mixer runs at mix time, with what a desktop deck can normally do (no
+  // stems assumed — they are a bonus that may land later). A clash is never a plain "Cut" there.
+  const style = resolveStyle(shaped, { stems: false, fx: true, incomingBody: false, grid: !!(a.bpm && b.bpm), lock: true }, null);
+  const clash = plan.score < 0.38;
+  return {
+    plan: { ...shaped, style },
+    why: clash
+      ? `Mixability ${pct}% — a clash, so AUTO makes the change deliberate (a gate or loop chop, or a spinback) instead of blending it.`
+      : `Mixability ${pct}% — the exact gesture is chosen at the mix, from what the decks can do then.`,
+  };
+}
 
 // How well does track B mix after track A? Pure functions over the metadata the
 // app already stores on a TrackMeta (Camelot `key` + analyzed `bpm`). Used to

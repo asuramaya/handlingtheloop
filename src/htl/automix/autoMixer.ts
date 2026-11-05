@@ -1,11 +1,7 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
 import { beatTimeOffset, foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
 
-/** The widest tempo gap (folded, from the slower side) the tempoBridge will ride on a loop. Past
- *  ~30 % a looped bar stretched that far stops sounding like the same record (DJ TechTools'
- *  loop-out move; forum consensus caps a ramp at 10-15 % per phrase, which the bridge doubles by
- *  giving it four bars of a loop rather than a moving track). */
-export const BRIDGE_MAX = 0.3;
+// (BRIDGE_MAX lives in mixability.ts, next to previewPlan, which needs it too.)
 
 /** THE TEMPO BRIDGE, bar by bar (counted in the live track's own time: with a 1-bar loop every
  *  bar is one pass of the loop). The loop is caught on bar 0's downbeat. */
@@ -56,7 +52,7 @@ export function bridgeShape(b: number, showy: boolean): {
   };
 }
 import type { TrackMeta } from "../library/types";
-import { bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
+import { BRIDGE_MAX, bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
 import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
 import type { AutoMixPhase, AutoMixWaitReason, MixMode, RadioContext, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";

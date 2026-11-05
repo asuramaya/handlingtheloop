@@ -1,4 +1,5 @@
 import type { TrackMeta } from "@htl/library";
+import { displayTrack } from "../../util/format";
 
 // Drag payload: JSON array of videoIds (or full metas). Sidebar playlists are drop targets.
 export const TRACK_DND_MIME = "application/x-htl-tracks";
@@ -81,10 +82,12 @@ export function loadScale(): number {
 // Compare two tracks by a sort key (stable-ish; missing values sort last/low).
 export function compareBy(a: TrackMeta, b: TrackMeta, key: SortKey): number {
   switch (key) {
+    // Sorted by what the columns SHOW (displayTrack), so A–Z reads A–Z: by raw title, every
+    // "Katy Perry - …" upload sorted under K while the cell said "Last Friday Night".
     case "title":
-      return (a.title || "").localeCompare(b.title || "");
+      return displayTrack(a.title, a.artist).title.localeCompare(displayTrack(b.title, b.artist).title);
     case "artist":
-      return (a.artist || "").localeCompare(b.artist || "");
+      return displayTrack(a.title, a.artist).artist.localeCompare(displayTrack(b.title, b.artist).artist);
     case "bpm":
       return (a.bpm ?? -1) - (b.bpm ?? -1);
     case "key":

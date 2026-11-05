@@ -677,7 +677,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           <DockPlacementResizer mode={dockMode} />
           <div ref={panelRef} className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             {dockMode === "center" && <CenterResizeHandles panelKey="library" />}
-            <div className="settings-head lib-head-row">
+            <div className={`settings-head lib-head-row ${navOpen ? "nav-open" : ""}`}>
               {/* (AUTO moved to the chin, beside the Library button — App.tsx `chin-auto`.) */}
               {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
                   the sections menu. A caret marks it as a disclosure. */}
@@ -692,7 +692,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
                 </span>
-                {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
               </button>
               {/* The visible table's filter / search field and chips land here (ToolbarHostContext). */}
               <div className="lib-head-tools" ref={setToolsHost} />
@@ -1119,13 +1118,14 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
 function RowsStepper() {
   const scale = useSyncExternalStore(subscribeRowScale, getRowScale, getRowScale);
   return (
-    <span className="lib-head-rows" role="group" aria-label="Row size">
-      <span className="tt-rows-label">Rows</span>
+    // Drawn glyphs, not "−"/"＋" text: a font's minus and full-width plus sit at different heights
+    // and widths, which is what put them visibly off centre in their boxes.
+    <span className="lib-head-rows" role="group" aria-label="Row size" title="Row size">
       <button className="tt-step" onClick={() => setRowScale(scale - SCALE_STEP)} disabled={scale <= SCALE_MIN} aria-label="Smaller rows">
-        −
+        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5h6" /></svg>
       </button>
       <button className="tt-step" onClick={() => setRowScale(scale + SCALE_STEP)} disabled={scale >= SCALE_MAX} aria-label="Bigger rows">
-        ＋
+        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5h6M5 2v6" /></svg>
       </button>
     </span>
   );

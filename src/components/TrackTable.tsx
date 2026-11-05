@@ -214,7 +214,15 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       });
     }
     if (onReorder || sortKey === "index") return sortDir === 1 || onReorder ? filtered : [...filtered].reverse();
-    return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
+    // A track with no BPM / key yet sorts LAST in either direction — "—" is not a small number, and
+    // ascending put every unanalysed track on top of the list (operator, 2026-11-05).
+    const unknown = (t: TrackMeta) => (sortKey === "bpm" ? t.bpm == null : sortKey === "key" ? !t.key : false);
+    return [...filtered].sort((a, b) => {
+      const ua = unknown(a);
+      const ub = unknown(b);
+      if (ua !== ub) return ua ? 1 : -1;
+      return compareBy(a, b, sortKey) * sortDir;
+    });
   }, [rows, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
 
   // ----- Row windowing (only render the visible slice of a large list) -----

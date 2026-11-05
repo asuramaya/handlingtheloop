@@ -1093,3 +1093,36 @@ td.col-num {
 .track-table :is(th, td):is(.col-bpm, .col-key, .col-time) { text-align: right; padding-left: 4px; padding-right: 12px; }
 .track-table td.col-num { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .track-table th.col-extra { text-align: right; padding-right: 12px; }
+
+/* The title takes exactly the sidebar's width while the sidebar is open (the same variable its
+   resizer drives, on <html>), so the field starts just past the sidebar's divider instead of
+   running over it. Head padding 10 + the toggle's −6 inset = it starts 4 px in. */
+.settings-head.lib-head-row.nav-open .lib-head-toggle {
+  flex: 0 0 calc(clamp(var(--lib-side-min, 150px), var(--lib-side-w, 200px), var(--lib-side-max, 340px)) - 14px);
+  margin-right: 0;
+  min-width: 0;
+}
+.settings-head.lib-head-row.nav-open .lib-head-tools { margin-left: 10px; }
+
+/* Column rules, but faint: none at all read as a list with nothing holding its columns. */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 1px solid color-mix(in srgb, var(--text) 5%, transparent);
+}
+.track-table tbody tr.tt-spacer td { border-right: 0; }
+
+/* Rows −/＋: square, the glyph drawn dead centre. */
+.lib-head-rows .tt-step {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 6%, var(--panel));
+  color: var(--muted);
+}
+.lib-head-rows .tt-step:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 11%, var(--panel)); }
+.lib-head-rows .tt-step svg { width: 10px; height: 10px; display: block; }
+.lib-head-rows .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }

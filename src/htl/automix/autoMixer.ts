@@ -64,6 +64,7 @@ import { perfWork } from "../debug/perfCapture";
 import { crossfadeGains } from "../audio/crossfadeCurve";
 import { holdGpu } from "../stems/gpuQueue";
 import { DD, DD_BARS, doubleDropShape, planDoubleDrop } from "./doubleDrop";
+import { chooseEntry, mashupGains, mashupMarks } from "./mashup";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
 // the same engine/deck controls the UI buttons drive, but the user can jog, scratch,
@@ -1204,6 +1205,12 @@ export class AutoMixer {
         // Too far apart to beat-match: a 4-bar gesture with one cut (see faderX / cutPoint).
         this.plan = { ...this.plan, bars: 4, bassSwapBar: 0 };
       }
+      // A PAIR THAT WILL GET STEMS gets the room a mashup needs (mashup.ts): four phrases, so 32
+      // bars, or 16 where the track cannot give that much (the section fitting below shortens it).
+      // The incoming's stems may still be separating; pending counts, since the mix waits for them.
+      if (tempoLockable(bpm, inc.beatgrid?.bpm) && live.hasStems && (inc.hasStems || !!this.deps.stemsPending?.(idle)) && this.plan.bars < 32) {
+        this.plan = { ...this.plan, bars: 32, bassSwapBar: phraseSwapBar(32) };
+      }
       {
         const banded = bandBars(bpm, this.plan.bars);
         if (banded !== this.plan.bars) this.plan = { ...this.plan, bars: banded, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(banded) : 0 };
@@ -1230,7 +1237,7 @@ export class AutoMixer {
         this.lastXfade = sign;
         this.cuedIdle = idle;
         this.mixStarted = false;
-        this.quietGpuStart();
+        this.quietGpuFor(idle);
         this.phase = "cueing";
         return;
       }
@@ -1273,7 +1280,7 @@ export class AutoMixer {
       this.cuedIdle = idle;
       this.mixStarted = false;
       // From here to settle the screen is animating continuously — hold off any new separation.
-      this.quietGpuStart();
+      this.quietGpuFor(idle);
       this.phase = "cueing";
     } catch {
       this.abandonCue();
@@ -1305,6 +1312,7 @@ export class AutoMixer {
       this.phase = "armed";
       return;
     }
+    this.quietGpuFor(idle);
     // A hand on the outgoing platter (or a pause) holds the mix: starting the incoming under a
     // scratch is not a transition. It goes the moment the deck is playing again.
     if (!live.playing) return;
@@ -1899,6 +1907,7 @@ export class AutoMixer {
     }
     const idle = other(this.liveId);
     const inc = this.deps.engine.deck(idle);
+    this.quietGpuFor(idle); // up once the incoming's stems have landed (raceStems takes them mid-mix)
 
     // The user grabbed the crossfader → they're finishing the mix; stand back.
     const cf = this.deps.getCrossfade();
@@ -1960,7 +1969,12 @@ export class AutoMixer {
     // (so the fine loop draws it smoothly, on the beat) — see swapProgress.
     const s = this.swapProgress(live, p);
     if (this.useStems) {
-      const raw = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      const bar = p * this.plan.bars;
+      const raw =
+        this.plan.bars >= 8
+          ? mashupGains(bar, this.plan.bars, { keyOk: this.plan.keyMatch && this.plan.keyKnown })
+          : stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      if (this.plan.bars >= 8) this.maybeLoopForMashup(live, bar);
       const xg = crossfadeGains(cfv);
       const g = {
         live: faderCompensated(raw.live, this.liveId === "A" ? xg.A : xg.B),
@@ -2210,6 +2224,25 @@ export class AutoMixer {
     return live.position() >= pos - 0.004;
   }
 
+  // THE OUTGOING VOCAL MUST NOT RUN OUT UNDER THE MASHUP. From the swap on, all that is left of
+  // the old track is its vocal over the new instrumental; if the record ends before the blend
+  // does, that vocal would stop mid-phrase. So at the swap, when the music left is shorter than
+  // the blend left, the outgoing closes into a 4-bar loop — the hook repeats over the new beat,
+  // which is exactly what a mashup is — and is released at settle like any hold loop.
+  private maybeLoopForMashup(live: Deck, bar: number): void {
+    if (!this.plan || this.holdLoop || !live.beatgrid || !this.liveId) return;
+    const { q2 } = mashupMarks(this.plan.bars);
+    if (bar < q2 || bar > q2 + 0.75) return;
+    const secPerBar = this.barsSeconds / Math.max(1, this.plan.bars);
+    const g = live.beatgrid;
+    const end = g.lastSound && g.lastSound > live.duration * 0.5 ? g.lastSound : live.duration;
+    const left = (this.plan.bars - bar) * secPerBar;
+    if (end - live.position() > left + secPerBar) return;
+    live.setBeatLoop(16);
+    this.holdLoop = this.liveId;
+    event("automix.mashupLoop", { bar: +bar.toFixed(2), left: +left.toFixed(1) });
+  }
+
   /** The bar an echo/wash freezes on: the cut for an unmatched pair, else the last two bars. */
   private freezeBar(): number {
     if (!this.plan) return 0;
@@ -2237,7 +2270,10 @@ export class AutoMixer {
     if (this.plan.style === "doubleDrop") return [DD.breath, DD.build, DD_BARS];
     const out: number[] = [];
     const style = this.plan.style;
-    if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
+    if (style === "stemswap" && this.plan.bars >= 8) {
+      const m = mashupMarks(this.plan.bars);
+      out.push(m.q1, m.q2, m.q3);
+    } else if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
     if (this.unlocked || style === "cut" || style === "spinOut") out.push(cutBar(style, this.plan.bars));
     if (style === "echoOut" || style === "washOut") out.push(this.freezeBar());
     return out;
@@ -2487,9 +2523,31 @@ export class AutoMixer {
     const firstBeat = grid.firstBeat ?? 0;
     const baseDown =
       grid.beats && grid.beats.length && grid.downbeat != null ? grid.beats[grid.downbeat] ?? firstBeat : firstBeat;
-    const t = chooseMixIn(s, barsSeconds, baseDown);
+    // A phrase start, as quiet as the record gets, timed to land on its next section (mashup.ts
+    // chooseEntry). The old back-count from the first repeated section is the fallback for a
+    // track with no structure to choose from.
+    const secPerBar = grid.bpm > 0 ? 240 / grid.bpm : 0;
+    const t = chooseEntry(s, barsSeconds, { floor: baseDown, secPerBar, energyAt: (at) => this.energyAt(deck, at, secPerBar * 2) }) ?? chooseMixIn(s, barsSeconds, baseDown);
     // On a BAR LINE: the incoming starts on its own "one", which is what lands on the outgoing's.
     return t <= baseDown ? baseDown : Math.max(baseDown, nearestDownbeat(grid, t));
+  }
+
+  /** How loud the record is over [at, at + len] relative to its whole-track level (1 = average);
+   *  null when the decoded mix is gone (a phone that kept only stems). Strided — a few ms. */
+  private energyAt(deck: Deck, at: number, len: number): number | null {
+    const b = deck.buffer;
+    const avg = deck.loudness;
+    if (!b || !avg || len <= 0) return null;
+    const d = b.getChannelData(0);
+    const i0 = Math.max(0, Math.floor(at * b.sampleRate));
+    const i1 = Math.min(d.length, Math.floor((at + len) * b.sampleRate));
+    let sum = 0;
+    let n = 0;
+    for (let i = i0; i < i1; i += 64) {
+      sum += d[i] * d[i];
+      n++;
+    }
+    return n ? Math.sqrt(sum / n) / avg : null;
   }
 
   // Raise / lower the GPU quiet window. Raising twice is a no-op (one hold per transition); the
@@ -2520,6 +2578,18 @@ export class AutoMixer {
   /** The blend's length in beats — what a loop ladder is actually measured in. */
   private transitionBeats(): number {
     return Math.max(1, (this.plan?.bars ?? 0) * BEATS_PER_BAR);
+  }
+
+  // ★ NEVER HOLD THE GPU WHILE WAITING FOR IT. The quiet window defers every separation job
+  // (gpuRun), including the incoming deck's own — so raising it at the cue while that deck's stems
+  // were still pending meant the cue then waited STEM_WAIT_MAX for stems that could not start, and
+  // every transition after a quick load went without them (seen 2026-11-05: a 32-bar stem pair
+  // mixed as a plain blend, caps "bg"). The window goes up once the incoming's stems are in (or
+  // nothing is coming); cueing and mixing ticks call this again until it does.
+  private quietGpuFor(idle: DeckId): void {
+    if (this.gpuQuiet) return;
+    if (this.deps.stemsPending?.(idle)) return;
+    this.quietGpuStart();
   }
 
   private quietGpuStart(): void {

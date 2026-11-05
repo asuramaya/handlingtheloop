@@ -334,7 +334,10 @@
 .mixq-chip.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
 .mixq-chip.on.hold { color: #1a1405; background: #ffb13c; box-shadow: none; }
 .mixq-chip:disabled { opacity: 0.35; cursor: default; }
-.mixq-auto-ctl { margin-left: auto; }
+/* Spread: tracks source on the left, energy (and AUTO's buttons after it) on the right. Without the
+   energy group (playlist mode) the AUTO buttons take the right edge themselves. */
+.mixq-energy,
+.mixq-auto-ctl:not(.mixq-energy + .mixq-auto-ctl) { margin-left: auto; }
 .mixq-auto-ctl .mixq-chip { color: var(--text); }
 .mixq-bar .mixq-src-pick { height: 28px; flex: 0 1 220px; min-width: 0; }
 

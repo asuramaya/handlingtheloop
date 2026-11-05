@@ -238,7 +238,15 @@ describe("resolveStyle", () => {
 
   // The anti-repetition rule, and its limit.
   test("does not repeat the last gesture when a comparable alternative exists", () => {
-    expect(resolveStyle(plan(0.9), caps({ stems: true }), "stemswap")).toBe("blend");
+    expect(resolveStyle(plan(0.9), caps(), "blend")).not.toBe("blend");
+  });
+
+  test("a stem pair that can lock gets the mashup, even twice running (its variety is inside it)", () => {
+    expect(resolveStyle(plan(0.9), caps({ stems: true }), "stemswap")).toBe("stemswap");
+    expect(resolveStyle(plan(0.45), caps({ stems: true }), null)).toBe("stemswap");
+    // …but not for a clash, and never without a lock.
+    expect(resolveStyle(plan(0.2), caps({ stems: true }), null)).not.toBe("stemswap");
+    expect(resolveStyle(plan(0.9), caps({ stems: true, lock: false }), null)).not.toBe("stemswap");
   });
 
   test("but DOES repeat rather than pick something clearly worse", () => {

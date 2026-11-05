@@ -235,7 +235,7 @@ export function bandBars(bpm: number | null | undefined, bars: number): number {
 export function transitionLabel(p: TransitionPlan): string {
   // Compact: these sit in a narrow fixed-width "Mix" column, so no "· N bar" tail
   // (it spilled the cell). The full mixability % rides the badge's title tooltip.
-  if (p.style === "stemswap") return `Stems ${p.bars}`;
+  if (p.style === "stemswap") return p.bars >= 8 ? `Mashup ${p.bars}` : `Stems ${p.bars}`;
   if (p.style === "cut") return "Cut";
   if (p.style === "spinOut") return "Spin";
   if (p.style === "tempoBridge") return "Bridge";
@@ -408,6 +408,13 @@ export function resolveStyle(
   const tolerance = opts.tolerance ?? (shape?.arc === "journey" ? 2 : 1);
   // A pair that cannot be beat-matched gets the echo-out / cut-on-the-one family in THAT order,
   // whatever its score: the research's first answer for mismatched tempos is the echo out.
+  // ★ STEMS FIRST. When both decks are separated and the pair can lock, the mashup (mashup.ts) is
+  // the strongest thing AUTO can do with any pair that is not an outright clash — it was ranked
+  // first only for near-perfect pairs, so most transitions never touched the stems at all
+  // (operator, 2026-11-05: "lean more into the mixing ... using the power of the stems"). Its
+  // choreography takes the key into account itself, so a modest score is no reason to skip it,
+  // and it is not rotated away for variety: the variety is inside it.
+  if (caps.stems && caps.lock !== false && caps.grid && plan.score >= 0.38) return "stemswap";
   const ranked = caps.lock === false ? [...UNLOCKED_STYLES] : stylePreference(plan.score, plan.confident);
   const available = ranked.filter((s) => styleAvailable(s, caps));
   if (!available.length) return "cut"; // always possible, and an honest answer for a hopeless pair

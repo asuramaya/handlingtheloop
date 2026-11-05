@@ -16,6 +16,7 @@ import {
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import type { Ref } from "react";
 import { autoLine, fmtClock } from "./automixStatus";
+import { Menu } from "./ContextMenu";
 
 // The auto-mix "up next" panel: curate the queue, see how each pair will transition,
 // and drive the auto-DJ (mix now / skip / hold). Radio mode tops itself up from the
@@ -56,6 +57,13 @@ interface Props {
   /** The library's handle on the visible table, so the board's browse encoder and LOAD buttons
    *  work on the queue too (they reach the table through this). */
   tableRef?: Ref<TrackTableHandle>;
+  // The rest of the library row menu (operator, 2026-11-05: "fix the right click context menu on
+  // queue songs so i can do the same actions as on the other library menus").
+  playlists?: { id: string; name: string }[];
+  onAddToPlaylist?: (playlistId: string, track: TrackMeta) => void;
+  onCreatePlaylistWith?: (tracks: TrackMeta[]) => void;
+  onAddToCollection?: (track: TrackMeta) => void;
+  inCollection?: (videoId: string) => boolean;
 }
 
 
@@ -144,7 +152,7 @@ function kickerFor(tone: string, waitHeadline: string): string {
   }
 }
 
-export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded, tableRef }: Props) {
+export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded, tableRef, playlists, onAddToPlaylist, onCreatePlaylistWith, onAddToCollection, inCollection }: Props) {
   // `mirror` only chooses the DISPLAY source (a session renders the host's queue). Editing
   // is gated separately by `canEdit`: a controlling remote mutates the host's queue via
   // intents (routed through `edit`), so it can add/remove/move while still mirroring. Seed
@@ -154,7 +162,10 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   // The playlist the queue was loaded from (by this panel), so the picker can NAME it; and whether
   // the user pressed "Playlist" but has not picked one yet (nothing changes until they do).
   const [seededFrom, setSeededFrom] = useState<string | null>(null);
-  const [pickingPlaylist, setPickingPlaylist] = useState(false);
+  // The playlist picker is the app's own menu (ContextMenu's Menu, the one the FX presets, the
+  // sampler and the I/O pickers use), opened under the Playlist chip — not a native <select>,
+  // which rendered as the OS's white box in the middle of a dark bar (operator, 2026-11-05).
+  const [plMenu, setPlMenu] = useState<{ x: number; y: number } | null>(null);
   const seededName = seededFrom ? library.playlists.find((p) => p.id === seededFrom)?.name ?? null : null;
 
   // Drag a track in from the library / search / a deck to append it to the queue. The
@@ -270,58 +281,60 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
           {ownsSeed && (
             <span className="mixq-group mixq-source" role="group" aria-label="Where the next tracks come from">
               <button
-                className={`mixq-chip${mode !== "playlist" && !pickingPlaylist ? " on" : ""}`}
+                className={`mixq-chip${mode !== "playlist" ? " on" : ""}`}
                 aria-label="Suggestions"
                 aria-pressed={mode !== "playlist"}
                 title="Tracks that fit what is playing, picked again as each one starts"
                 onClick={() => {
                   if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
-                  setPickingPlaylist(false);
                 }}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7M2.5 2.5a8 8 0 0 0 0 11M13.5 2.5a8 8 0 0 1 0 11" /></svg>
                 <span className="mixq-chip-label">Suggestions</span>
               </button>
               <button
-                className={`mixq-chip${mode === "playlist" || pickingPlaylist ? " on" : ""}`}
-                aria-label="Playlist"
+                className={`mixq-chip${mode === "playlist" || plMenu ? " on" : ""}`}
+                aria-label={seededName && mode === "playlist" ? `Playlist: ${seededName}` : "Playlist"}
                 aria-pressed={mode === "playlist"}
+                aria-haspopup="menu"
+                aria-expanded={!!plMenu}
                 disabled={!library.playlists.length}
                 title={library.playlists.length ? playlistHint : "Make a playlist in the Library first"}
-                onClick={() => setPickingPlaylist(true)}
+                onClick={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setPlMenu(plMenu ? null : { x: r.left, y: r.bottom + 4 });
+                }}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h9M2 8h9M2 12h6M13 9v5M11 12.5a2 2 0 1 0 2 0" /></svg>
-                <span className="mixq-chip-label">Playlist</span>
+                <span className="mixq-chip-label">{mode === "playlist" && seededName ? seededName : "Playlist"}</span>
+                <svg className="mixq-chip-caret" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" /></svg>
               </button>
             </span>
           )}
-          {ownsSeed && (mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
-            <select
-              className="mixq-src-pick"
-              value={mode === "playlist" && seededFrom ? seededFrom : ""}
-              title={playlistHint}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                seedPlaylist(e.target.value);
-                setSeededFrom(e.target.value);
-                setPickingPlaylist(false);
-              }}
-              aria-label="Which playlist"
-            >
-              <option value="" disabled>
-                {mode === "playlist" ? "Loaded playlist" : "Choose a playlist…"}
-              </option>
+          {plMenu && (
+            <Menu x={plMenu.x} y={plMenu.y} head="PLAY FROM" onClose={() => setPlMenu(null)}>
               {library.playlists.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.trackKeys.length}
-                </option>
+                <button
+                  key={p.id}
+                  className={`fx-palette-item mixq-pl-item ${mode === "playlist" && seededFrom === p.id ? "sel" : ""}`}
+                  role="menuitem"
+                  title={`Play “${p.name}” in order${queue.augment ? ", then keep going with suggestions" : ""}. Tracks you added stay.`}
+                  onClick={() => {
+                    seedPlaylist(p.id);
+                    setSeededFrom(p.id);
+                    setPlMenu(null);
+                  }}
+                >
+                  <span className="mixq-pl-name">{p.name}</span>
+                  <span className="mixq-pl-count">{p.trackKeys.length}</span>
+                </button>
               ))}
-            </select>
+            </Menu>
           )}
           </div>
           <div className="mixq-bar-mid">{autoBtns}</div>
           <div className="mixq-bar-right">
-          {ownsSeed && mode !== "playlist" && !pickingPlaylist && (
+          {ownsSeed && mode !== "playlist" && (
             <span className="mixq-group mixq-energy" role="group" aria-label="How the energy moves across the set">
               {ARCS.map((a) => (
                 <button key={a.v} className={`mixq-chip${queue.arc === a.v ? " on" : ""}`} aria-label={a.label} aria-pressed={queue.arc === a.v} title={`${a.label}: ${a.says}`} onClick={() => queue.setArc(a.v)}>
@@ -436,6 +449,22 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         onRemove={canEdit ? (t) => edit.remove(t.videoId) : undefined}
         removeTitle="Remove from queue"
         onReorder={canEdit ? edit.move : undefined}
+        // "Play next" on a queued row MOVES it to the top. Not addNext: that is the "a new pick, a new
+        // direction" path, which would also replace every other suggestion in the list.
+        onQueueNext={
+          canEdit
+            ? (t) => {
+                const i = upcoming.findIndex((x) => x.videoId === t.videoId);
+                if (i > 0) edit.move(i, 0);
+                else if (i < 0) edit.addNext(t);
+              }
+            : undefined
+        }
+        playlists={playlists}
+        onAddToPlaylist={onAddToPlaylist}
+        onCreatePlaylistWith={onCreatePlaylistWith}
+        onAddToCollection={onAddToCollection}
+        inCollection={inCollection}
         extraCol={extraCol}
         topSlot={topSlot}
         emptyHint={

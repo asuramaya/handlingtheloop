@@ -930,6 +930,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onSkip={auto.onSkip}
             onHold={auto.onHold}
             onClose={auto.onToggleQueue}
+            playlists={playlistRefs}
+            onAddToPlaylist={library.addToPlaylist}
+            onCreatePlaylistWith={createPlaylistWith}
+            onAddToCollection={library.addTrack}
+            inCollection={inCollection}
           />
         ) : searchView ? (
           // Search baked into the library: the Explorer (its own search bar + results)

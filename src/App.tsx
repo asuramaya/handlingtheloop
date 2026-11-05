@@ -19,6 +19,7 @@ import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
 import { pickLiveDeck } from "./App/liveDeck";
+import { whenGpuClear } from "@htl/stems/gpuQueue";
 import { displayTrack } from "./util/format";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
@@ -2219,6 +2220,7 @@ function AppBody() {
         // on the host and can wait behind running and preload jobs in the one-at-a-time GPU queue,
         // long enough to outlast a track change on an AUTO host. Checked against the deck itself for
         // BOTH purposes, because re-analyze had the same hole.
+        await whenGpuClear(); // applying packs four stems on this thread — never inside a transition
         if (latest.current.loaded[id] !== videoId) {
           report?.({ kind: "failed", reason: "The host changed the track on that deck before its stems were ready." });
           return;

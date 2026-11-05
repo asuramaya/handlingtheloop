@@ -1113,11 +1113,11 @@ describe("AutoMixer — the separation schedule", () => {
   // ★ THE LAG FIX. The hold must be up for the whole visible part of the transition and DOWN
   // again by the time the mixer is armed on the new deck — a leaked hold starves separation for
   // the rest of the session, which is worse than the jank it was fixing.
-  test("holds the GPU across the transition and releases it at settle", async () => {
+  test("holds the GPU across the transition and releases it after the landing", async () => {
     const r = new Rig();
     const t2 = mkTrack("t2");
-    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
-    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 120, hasStems: false });
     r.loadAndPlay("A", mkTrack("t1"));
     r.queue.upcoming = [t2];
     r.autoAdvance = true;
@@ -1135,7 +1135,12 @@ describe("AutoMixer — the separation schedule", () => {
       .filter((x) => x.p === "cueing" || x.p === "mixing");
     expect(heldDuring.length).toBeGreaterThan(0);
     expect(heldDuring.every((x) => x.held)).toBe(true);
-    // …and released by the time we are armed again on the new deck.
+    // …still held through the LANDING (the next load must not stall the transition's last bars)…
+    expect(gpuHeld()).toBe(true);
+    for (let i = 0; i < 18; i++) await r.tick(500); // 9 s
+    expect(gpuHeld()).toBe(true);
+    // …and released once it is over, armed on the new deck.
+    for (let i = 0; i < 4; i++) await r.tick(500);
     expect(gpuHeld()).toBe(false);
   });
 

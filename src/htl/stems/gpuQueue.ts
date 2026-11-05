@@ -45,15 +45,35 @@ let chain: Promise<unknown> = Promise.resolve();
 // visible rather than silently starving stems forever.
 let holds = 0;
 let waiters: Array<() => void> = [];
+// Who wants to know when the window opens and closes (the separator worker pauses between
+// segments while it is held — see separator.worker.ts). Called on the 0↔1 edges only.
+const holdListeners = new Set<(held: boolean) => void>();
+export function onGpuHold(fn: (held: boolean) => void): () => void {
+  holdListeners.add(fn);
+  return () => {
+    holdListeners.delete(fn);
+  };
+}
+const tellHold = (held: boolean) => {
+  for (const f of holdListeners) {
+    try {
+      f(held);
+    } catch {
+      /* a listener's failure must never wedge the window */
+    }
+  }
+};
 
 export function holdGpu(): () => void {
   holds++;
+  if (holds === 1) tellHold(true);
   let released = false;
   return () => {
     if (released) return; // idempotent — a release called twice must not free someone else's hold
     released = true;
     if (--holds <= 0) {
       holds = 0;
+      tellHold(false);
       const w = waiters;
       waiters = [];
       for (const r of w) r();

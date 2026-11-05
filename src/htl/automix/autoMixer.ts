@@ -88,6 +88,8 @@ const JUMP_S = 2;
 // How far ahead of the playhead a re-planned exit must be while armed: the next track still has
 // to load and cue before the blend can start.
 const CUE_LEAD_S = 8;
+const PRE_QUIET_S = 75; // s before the mix point that no new separation may start (see tickArmed)
+const LAND_S = 10; // s after a settle before the next track's load may start (see settle)
 
 // PLAYING, COUNTING THE HAND. Gripping a platter stops the transport (JogEngine.scrubBegin — a
 // hand on vinyl stops it dead) and releasing it starts it again. To the mixer that grab used to
@@ -368,6 +370,7 @@ export class AutoMixer {
   private held = false; // Hold toggle — see AutoMixStatus.held
   private forced = false; // Mix now — preload/cue keep the mix point at "now"
   private kickoffPlay = false; // set by enable(): the AUTO press may start a loaded, stopped deck ONCE
+  private landUntil = 0; // ms (deps.now) — the post-settle landing; 0 = none
   private stemHold = false; // cueing is holding at the mix point for stems (status only)
   private planResolved = false;
   // THE IDLE DECK'S TRACK — may AUTO overwrite it? Holds, per deck, the videoId AUTO is free to
@@ -1040,6 +1043,11 @@ export class AutoMixer {
       this.phase = "idle";
       return;
     }
+    if (this.landUntil) {
+      if (this.deps.now() < this.landUntil && !this.forced) return; // still landing (see settle)
+      this.landUntil = 0;
+      this.quietGpuEnd();
+    }
     if (!live.playing) return; // paused → just wait; never preload/mix off a paused deck
     // Catch the live deck up if we haven't levelled it yet — a user-loaded deck adopted before its
     // buffer finished decoding reports loudness 0, so stageGain declines to own it and we retry
@@ -1060,6 +1068,15 @@ export class AutoMixer {
       this.mixOutTime = this.computeMixOut(live, this.barsSeconds, live.position() + CUE_LEAD_S);
     }
     this.maybePlanDoubleDrop(live);
+    // ★ CLEAR THE GPU BEFORE THE MIX, NOT AT IT. The quiet window only stops NEW separations; one
+    // already running (the track after next, warming) runs to the end on the GPU and starves the
+    // compositor — long frames with no script in them, measured through a blend. So the window goes
+    // up PRE_QUIET_S ahead of the mix point, which lets anything in flight finish first. The
+    // incoming's own stems are exempt (quietGpuFor): those are what the mix is waiting for.
+    if (this.mixOutTime != null && this.liveId) {
+      const until = (this.mixOutTime - live.position()) / (live.rate > 0 ? live.rate : 1);
+      if (until < PRE_QUIET_S) this.quietGpuFor(other(this.liveId));
+    }
     if (this.forced) {
       this.phase = "preload"; // Mix now: no lead-in to wait for
       return;
@@ -1736,6 +1753,11 @@ export class AutoMixer {
     // Choose the gesture: what suits this pair, filtered by what the decks can do, and biased
     // away from whatever the last transition was. `useStems` follows the decision rather than
     // driving it — a stem swap is now one option among several rather than an automatic upgrade.
+    // From the first bar of the blend to the end of its landing, nothing heavy runs: no separation
+    // starts and no stem set is applied (applying packs ~0.3 s on the main thread). Stems that miss
+    // the cue arrive after the landing instead of freezing the blend.
+    this.quietGpuStart();
+    this.landUntil = 0;
     const caps = this.capabilities(this.liveId, idle);
     const shape = this.styleShape(idle);
     const style =
@@ -1907,7 +1929,6 @@ export class AutoMixer {
     }
     const idle = other(this.liveId);
     const inc = this.deps.engine.deck(idle);
-    this.quietGpuFor(idle); // up once the incoming's stems have landed (raceStems takes them mid-mix)
 
     // The user grabbed the crossfader → they're finishing the mix; stand back.
     const cf = this.deps.getCrossfade();
@@ -2467,10 +2488,11 @@ export class AutoMixer {
     this.mixOutTime = null;
     this.mixStarted = false;
     this.mixElapsed = 0;
-    // The mix is over and the screen is calm again — let deferred separations run. Released
-    // BEFORE clearPreload/armed on purpose: the very next armed tick starts the next track's
-    // load, and that load wants the GPU free the instant it asks for it.
-    this.quietGpuEnd();
+    // THE LANDING. The mix is over, but the new track has only just become the whole room: the
+    // next track's load (decode, analysis, a cached stem set applied — each a main-thread stall)
+    // used to start on this very tick and land on the transition's last bars. Hold the quiet
+    // window LAND_S longer; tickArmed releases it and only then lets the preload begin.
+    this.landUntil = this.deps.now() + LAND_S * 1000;
     // The deck we just blended in is now live; the OUTGOING deck is the new idle. Forget the
     // old preload so the next armed tick eagerly loads the next-next track onto it.
     this.clearPreload();

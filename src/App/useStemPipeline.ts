@@ -3,6 +3,9 @@
 // verbatim from App; the App spine arrives via `deps` (destructured to the original names so the
 // closures are unchanged). The type-only `../App` import is erased at build (no runtime cycle).
 import { whenGpuClear } from "@htl/stems/gpuQueue";
+// ★ APPLY_WAITS (operator, 2026-11-05: "a bit of a lag spike during a transition again").
+// Applying a set packs four stems for the engine on the main thread (~0.3 s, Deck.setStems), so it
+// waits out AUTO's quiet window (a transition and its landing) rather than freezing the blend.
 // See htl-refactor-monoliths.
 import { useCallback, useRef } from "react";
 import type { MutableRefObject } from "react";
@@ -101,6 +104,8 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         const local = await loadStemsLocal(engine.ctx, videoId, mid);
         if (stale?.()) return false;
         if (local) {
+          await whenGpuClear(); // see APPLY_WAITS below
+          if (stale?.()) return false;
           engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           // Stamp the dedup key with the PROMOTED model so selecting that model later
           // sees "already separated" (deriveStems' hasStems guard) instead of re-running
@@ -138,6 +143,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             });
           }
           const neural = await job;
+          await whenGpuClear();
           if (stale?.()) return false;
           // loadStems throws (not a DSP fallback) when the set can't be produced → the catch below
           // returns false, nothing to promote. Reaching here means a real neural set downloaded.
@@ -325,6 +331,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             // this armed, which is the one signal that cannot be observed from inside the tab.
             disarmStemLoad();
           }
+          if (res?.kind === "neural") await whenGpuClear();
           if (stale?.() || res?.kind === "stale") return;
           if (res?.kind === "neural") {
             // loadStems throws on any failure (no DSP fallback), and the try above breaks to the
@@ -389,6 +396,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       {
         const local = await loadStemsLocal(engine.ctx, videoId, model.id);
         if (local) {
+          await whenGpuClear();
           if (stale?.()) return;
           engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           stemLoadedKey.current[id] = guardKey;
@@ -501,6 +509,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           });
         }
         const neural = await job;
+        await whenGpuClear();
         if (stale?.()) return;
         // loadStems throws on a separation failure (no DSP fallback) → the catch below plays the
         // plain mix. Reaching here means a real neural set separated/downloaded.

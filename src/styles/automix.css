@@ -216,9 +216,13 @@
 /* ---- AUTO in the chin (App.tsx), at the LEFT end. Same flat button as its neighbours: a status
    dot, the word, the countdown. ON is the dot lit (and breathing) plus an accent underline, the
    way an active tab reads — not a filled block, which sat in the flat row like a sticker. ---- */
+/* FIXED WIDTH (operator, 2026-11-05: "making this button fixed size instead of growing"): the status
+   ("paused", "2:46", "mixing 45%") changes every second, and the button resized the whole chin with
+   it. The word and the dot stay put; the status has a slot of its own that never changes width. */
 .chin-btn.chin-auto {
   flex: 0 0 auto;
-  min-width: 96px;
+  width: 172px;
+  justify-content: flex-start;
   padding: 0 14px;
   gap: 8px;
   letter-spacing: 0.12em;
@@ -258,6 +262,11 @@
   .chin-btn.chin-auto.on .chin-auto-dot { animation: none; }
 }
 .chin-auto-chip {
+  width: 7.2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -312,9 +321,8 @@
   display: inline-flex;
   padding: 2px;
   gap: 1px;
-  border-radius: 7px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
 }
 .mixq-chip {
   display: inline-flex;
@@ -339,7 +347,7 @@
 .mixq-auto-ctl .mixq-chip svg path { stroke: none; }
 .mixq-chip .mixq-arc-ico { width: 16px; height: 9px; }
 .mixq-chip:not(:disabled):hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
-.mixq-chip.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
+.mixq-chip.on { color: var(--text); background: color-mix(in srgb, var(--text) 11%, var(--panel)); }
 .mixq-chip.on.hold { color: #1a1405; background: #ffb13c; box-shadow: none; }
 .mixq-chip:disabled { opacity: 0.35; cursor: default; }
 
@@ -356,7 +364,8 @@
 /* -- row 2: the stage -- */
 .mixq-stage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(120px, 190px) minmax(0, 1fr);
+  /* The middle grows with the room — a wire, not a gap — and the cards share the rest. */
+  grid-template-columns: minmax(0, 1fr) clamp(96px, 13cqi, 220px) minmax(0, 1fr);
   align-items: center;
 }
 
@@ -366,9 +375,9 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: clamp(8px, 1cqi, 14px);
   min-width: 0;
-  padding: 7px 10px 7px 7px;
+  padding: clamp(6px, 0.6cqi, 9px) clamp(8px, 1cqi, 14px) clamp(6px, 0.6cqi, 9px) clamp(6px, 0.6cqi, 9px);
   border-radius: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -383,8 +392,8 @@
   background: color-mix(in srgb, var(--col) calc(var(--p) * 8%), var(--panel));
 }
 .mixq-card-art {
-  width: 44px;
-  height: 44px;
+  width: clamp(36px, 3.4cqi, 52px);
+  height: clamp(36px, 3.4cqi, 52px);
   border-radius: 7px;
   object-fit: cover;
   background: var(--panel-2);
@@ -418,19 +427,20 @@
 }
 .mixq-card-title,
 .mixq-card-artist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mixq-card-title { font-size: 13.5px; font-weight: 650; color: var(--text); }
-.mixq-card-artist { font-size: 11px; color: var(--muted); }
+.mixq-card-title { font-size: clamp(12.5px, 1.05cqi, 15.5px); font-weight: 650; color: var(--text); }
+.mixq-card-artist { font-size: clamp(11px, 0.85cqi, 12.5px); color: var(--muted); }
 /* BPM / KEY / TIME: fixed columns, so the two cards' numbers line up across the stage. */
+/* No rules between them (operator, 2026-11-05: "fix redundant divider lines | so it looks cleaner"):
+   the columns are fixed and spaced, which already reads as a table. */
 .mixq-card-stats {
   display: grid;
-  grid-template-columns: 2.6em 2.6em 2.9em;
+  grid-template-columns: 2.7em 2.7em 3em;
+  column-gap: clamp(4px, 0.6cqi, 12px);
   margin: 0;
-  border-left: 1px solid var(--line);
 }
-.mixq-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0 2px; }
-.mixq-stat + .mixq-stat { border-left: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.mixq-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .mixq-stat dt { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-.mixq-stat dd { margin: 0; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+.mixq-stat dd { margin: 0; font-size: clamp(12.5px, 1cqi, 15px); font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
 .mixq-stat.stat-key dd { color: color-mix(in srgb, var(--col) 60%, var(--text)); }
 .mixq-stat.stat-time dd { font-weight: 500; color: color-mix(in srgb, var(--text) 75%, var(--muted)); }
 
@@ -521,8 +531,7 @@
 .mixq-pill-name { min-width: 0; font-size: 11.5px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mixq-pill-clock {
   flex: 0 0 auto;
-  padding-left: 6px;
-  border-left: 1px solid var(--line);
+  padding-left: 2px;
   font-size: 13px;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
@@ -561,7 +570,12 @@
   .mixq-stat.stat-key { display: none; }
   .mixq-pill { padding: 3px 6px; }
   .mixq-pill-name { display: none; }
-  .mixq-pill-clock { padding: 0; border: 0; font-size: 12px; }
+  .mixq-pill-clock { padding: 0; font-size: 12px; }
   .mixq-top:not(.is-auto) .mixq-pill-name { display: inline; font-size: 10px; }
   .mixq-kicker { display: none; }
+}
+
+@media (max-width: 600px) {
+  .chin-btn.chin-auto { width: 128px; padding: 0 10px; gap: 6px; }
+  .chin-auto-chip { width: 4.6em; }
 }

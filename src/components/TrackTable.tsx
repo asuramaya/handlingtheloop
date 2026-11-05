@@ -483,7 +483,10 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       <div className="tt-toolbar">
         {!onReorder && (
           <div className="tt-filter">
-            <span className="tt-filter-ico" aria-hidden="true">{searchMode ? "🔍" : "🔎"}</span>
+            <svg className="tt-filter-ico" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.4 10.4L14 14" />
+            </svg>
             <input
               className="tt-filter-input"
               type="search"

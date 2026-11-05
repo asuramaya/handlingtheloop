@@ -441,22 +441,25 @@
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0 9px;
+  height: 28px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 10px;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 .tt-filter:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 .tt-filter-ico {
-  font-size: 11px;
-  opacity: 0.6;
+  width: 13px;
+  height: 13px;
   flex: none;
+  color: var(--muted);
 }
+.tt-filter-ico path,
+.tt-filter-ico circle { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.tt-filter:focus-within .tt-filter-ico { color: var(--text); }
 .tt-filter-input {
   flex: 1;
   min-width: 0;
@@ -464,7 +467,8 @@
   background: transparent;
   border: none;
   color: var(--text);
-  font-size: 13px;
+  font: inherit;
+  font-size: 12.5px;
   padding: 0;
 }
 .tt-filter-input:focus {
@@ -521,35 +525,41 @@
 
 /* Cache-state filter chips (Library / Community): toggle to narrow the view to pooled
    and/or stemmed tracks. The dot mirrors the row pip so the legend reads at a glance. */
+/* One segmented group, the same dress as the Queue's control bar (automix.css .mixq-group/.mixq-chip):
+   a soft fill, borderless chips, the active one lifted. */
 .tt-cache-chips {
   flex: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
 }
 .tt-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 24px;
-  padding: 0 9px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  padding: 0 10px;
+  background: transparent;
+  border: 0;
   color: var(--muted);
-  border-radius: 12px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
 }
 .tt-chip:hover {
-  border-color: var(--accent);
   color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .tt-chip.on {
   color: var(--text);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
 }
 .tt-chip .pip {
   width: 7px;

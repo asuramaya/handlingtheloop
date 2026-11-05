@@ -3829,11 +3829,10 @@ function AppBody() {
           Settings/Profile/Session) picks its own edge independently now instead of one
           global left↔right flip; Library's is in Settings ▸ Controls ▸ Library placement. */}
       <nav className="chin" ref={setChinEl}>
-        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
-          <span className="chin-label">Library</span>
-        </button>
-        {/* ★ AUTO LIVES ON THE MAIN SCREEN (operator, 2026-11-04: "move the button outside the
-            library section into the main screen next to the library open/close button"). It
+        {/* ★ AUTO LIVES ON THE MAIN SCREEN, AT THE LEFT END (operator, 2026-11-04: "move the button
+            outside the library section into the main screen", then "move auto button to the left side,
+            the visual of it feels off"). A chin button like its neighbours — a status dot, the word,
+            the countdown — not a filled block of accent colour sitting in a row of flat ones. It
             changes what the DECKS do, so it cannot hide inside a panel you have to open first; the
             chip says what it is doing (the same words as the Queue's status, automixStatus.ts). */}
         {(() => {
@@ -3850,11 +3849,15 @@ function AppBody() {
               aria-label={st.enabled ? `AUTO on — ${l.headline}` : "AUTO off"}
               title={canAuto ? l.headline : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
             >
+              <span className="chin-auto-dot" aria-hidden="true" />
               <span className="chin-auto-word">AUTO</span>
-              {l.chip && <span className={`automix-count tone-${l.tone}`}>{l.chip}</span>}
+              {l.chip && <span className={`chin-auto-chip tone-${l.tone}`}>{l.chip}</span>}
             </button>
           );
         })()}
+        <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
+          <span className="chin-label">Library</span>
+        </button>
         <button
           className={`chin-btn chin-settings ${settingsOpen ? "active" : ""}`}
           onClick={toggleSettings}

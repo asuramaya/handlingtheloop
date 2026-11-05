@@ -201,8 +201,18 @@ function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<an
     // freshly-SIGNED CDN URL every time, so the HTTP cache never hit and every worker spawn re-pulled
     // the full 170 MB. A cache hit reports no load progress — there is no download to report.
     const onBytes = reportLoad ?? undefined;
+    // SAY WHICH IT WAS. "Downloading model" kept being reported after the cache landed; whether a
+    // load was a cache hit, a download, or a download whose cache write failed was invisible.
+    const t0 = performance.now();
+    let downloaded = false;
     const [modelBytes, dataBytes] = await Promise.all([
-      cachedModelBytes(url, () => fetchResumable(url, undefined, onBytes)),
+      cachedModelBytes(url, () => {
+        downloaded = true;
+        return fetchResumable(url, undefined, onBytes);
+      }).then((b) => {
+        self.postMessage({ type: "modelCache", url, hit: !downloaded, bytes: b?.byteLength ?? 0, ms: Math.round(performance.now() - t0), cacheApi: typeof caches !== "undefined" });
+        return b;
+      }),
       cachedModelBytes(dataUrl, () => fetchResumable(dataUrl)).catch(() => null),
     ]);
     if (!modelBytes) throw new Error(`model fetch returned 404: ${url}`);

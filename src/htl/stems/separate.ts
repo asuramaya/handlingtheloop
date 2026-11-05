@@ -3,6 +3,7 @@
 // separator.worker.ts so the app never stalls; here we only resample the mix to the
 // model's 44.1 kHz, ship the PCM to the worker, and resample the returned stems back
 // to the deck's rate so they line up sample-for-sample with the mix buffer.
+import { event } from "../debug/trace";
 import { STEM_NAMES, type Stems } from "./index";
 import { type StemModel, isMobileDevice } from "./models";
 import { stemTrace } from "./trace";
@@ -56,6 +57,11 @@ function getWorker(): Worker {
     worker = new Worker(new URL("./separator.worker.ts", import.meta.url), { type: "module" });
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;
+      if (type === "modelCache") {
+        // Settings ▸ Debug: every model load says whether it came from the cache or the network.
+        event("stems.model", { hit: e.data.hit, mb: Math.round(e.data.bytes / 1e6), ms: e.data.ms, cacheApi: e.data.cacheApi, file: String(e.data.url).split("/").pop() });
+        return;
+      }
       const job = jobs.get(id);
       if (!job) return;
       if (type === "loading") {

@@ -1821,3 +1821,33 @@ describe("AutoMixer machine — a bridge started with Mix now", () => {
     expect(r.mixer.getStatus().waitReason).not.toBe("press-play");
   });
 });
+
+describe("AutoMixer machine — a transition that throws still lands", () => {
+  // Operator, 2026-11-04: the header sat on "Mixes into … in 0s" and the next track never came in.
+  // An exception in startMix used to leave the machine cueing past its mix point, rethrowing on
+  // every tick. It must cut to the incoming deck instead.
+  test("startMix throwing → a clean cut onto the next track, then armed again", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.setPos("A", 10);
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2")];
+    r.mixer.enable();
+    await r.tick();
+    (r.mixer as unknown as { armGesture: () => void }).armGesture = () => {
+      throw new Error("worklet unavailable");
+    };
+    const err = console.error;
+    console.error = () => {};
+    try {
+      r.mixer.mixNow();
+      for (let i = 0; i < 8; i++) await r.tick();
+    } finally {
+      console.error = err;
+    }
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.engine.A.playing).toBe(false);
+    expect(r.mixer.getStatus().liveDeck).toBe("B");
+    expect(["armed", "preload", "cueing"]).toContain(r.phase);
+  });
+});

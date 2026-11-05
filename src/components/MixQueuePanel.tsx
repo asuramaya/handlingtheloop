@@ -15,7 +15,7 @@ import {
 } from "@htl";
 import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable";
 import type { Ref } from "react";
-import { autoLine } from "./automixStatus";
+import { autoLine, fmtClock } from "./automixStatus";
 
 // The auto-mix "up next" panel: curate the queue, see how each pair will transition,
 // and drive the auto-DJ (mix now / skip / hold). Radio mode tops itself up from the
@@ -67,21 +67,53 @@ const ARCS: { v: EnergyArc; label: string; path: string; says: string }[] = [
   { v: "journey", label: "Peak", path: "M1 10 C6 10 8 2 11 2 C14 2 16 10 21 10", says: "Rises to a peak, then winds back down." },
 ];
 
-function TrackRow({ t }: { t: TrackMeta }) {
+// One side of the stage: a deck-coloured card (the colour of the deck the track is on, when it is on
+// one), cover art with the deck letter on it, the title, and the numbers a DJ reads at a glance.
+function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" | "next"; deck: "A" | "B" | null; empty: string }) {
+  if (!t) {
+    return (
+      <div className={`mixq-card ${side} is-empty`}>
+        <span className="mixq-card-kicker">{side === "now" ? "Now" : "Next"}</span>
+        <span className="mixq-card-empty">{empty}</span>
+      </div>
+    );
+  }
   const d = displayTrack(t.title, t.artist);
   return (
-    <div className="mixq-track">
-      {t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}
-      <div className="mixq-track-text">
-        <span className="mixq-title" title={t.title}>{d.title || t.videoId}</span>
-        <span className="mixq-artist">
-          {d.artist}
-          {t.key ? ` · ${t.key}` : ""}
-          {t.bpm ? ` · ${Math.round(t.bpm)} BPM` : ""}
+    <div className={`mixq-card ${side}${deck ? ` on-deck deck-${deck}` : ""}`}>
+      <div className="mixq-card-art">
+        {t.thumbnail ? <img src={t.thumbnail} alt="" loading="lazy" /> : <span className="mixq-card-noart" aria-hidden="true">♪</span>}
+        {deck && <span className="mixq-card-deck" title={`On deck ${deck}`}>{deck}</span>}
+      </div>
+      <div className="mixq-card-text">
+        <span className="mixq-card-kicker">{side === "now" ? "Now" : "Next"}</span>
+        <span className="mixq-card-title" title={t.title}>
+          {d.title || t.videoId}
+        </span>
+        <span className="mixq-card-meta">
+          <span className="mixq-card-artist">{d.artist}</span>
+          {t.bpm ? <span className="mixq-card-num">{Math.round(t.bpm)}<small>BPM</small></span> : null}
+          {t.key ? <span className="mixq-card-num key">{t.key}</span> : null}
         </span>
       </div>
     </div>
   );
+}
+
+// What the middle of the stage says above the clock, in two or three words.
+function kickerFor(tone: string, waitHeadline: string): string {
+  switch (tone) {
+    case "mix":
+      return "Mixing";
+    case "hold":
+      return "Holding";
+    case "manual":
+      return "Your fader";
+    case "wait":
+      return waitHeadline;
+    default:
+      return "Mix in";
+  }
 }
 
 export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, canAuto, onLoad, deckLoaded, deckColors, onToggleAuto, onMixNow, onSkip, onHold, onClose, embedded, tableRef }: Props) {
@@ -146,52 +178,78 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   const next = upcoming[0] ?? null;
   const line = autoLine(st, next ? displayTrack(next.title, next.artist).title || next.videoId : null);
   const progress = st.phase === "mixing" && st.mixProgress != null ? st.mixProgress : null;
-  const mixAt = st.mixOutTime != null && st.liveDuration ? Math.min(1, st.mixOutTime / st.liveDuration) : null;
   const playlistHint =
     mode === "playlist"
       ? `Plays ${seededName ? `“${seededName}”` : "the playlist"} in order${queue.augment ? ", then keeps going with suggestions" : ""}.`
       : "Pick a playlist; it replaces the suggested tracks (tracks you added stay).";
+  // ★ THE STAGE (operator, 2026-11-04: "this auto mix ui/ux needs a ton of work, does not look
+  // good ... redesign this make it look cool"). NOW and NEXT are cards in the colours of their decks,
+  // and the gap between them is the transition itself: its name, a big clock, and a small crossfader
+  // whose knob sits on NOW until the mix starts and then slides across to NEXT as the blend runs. The
+  // controls live in the middle, under the clock, because that is what they act on.
+  const nowDeck: "A" | "B" | null = current ? (deckLoaded?.A === current.videoId ? "A" : deckLoaded?.B === current.videoId ? "B" : null) : null;
+  const nextDeck: "A" | "B" | null = next ? (deckLoaded?.A === next.videoId ? "A" : deckLoaded?.B === next.videoId ? "B" : null) : null;
+  // Colour each side by its deck; a track not on a deck yet takes the deck it is heading for.
+  const nowCol = nowDeck ?? st.liveDeck ?? "A";
+  const nextCol = nextDeck ?? (nowCol === "A" ? "B" : "A");
+  const pv = current && next ? previewPlan(current, next) : null;
+  const planName = enabled && st.planLabel ? st.planLabel : pv?.plan.confident ? transitionLabel(pv.plan) : null;
+  const bars = enabled && st.plan ? st.plan.bars : pv?.plan.confident ? pv.plan.bars : null;
+  const tone = enabled ? line.tone : "idle";
+  const clock = enabled && st.countdownSec != null && !st.held && tone !== "wait" && tone !== "manual" ? fmtClock(st.countdownSec) : null;
+  // The approach: how far the live track has come toward its mix point (0 → 1), then the blend.
+  const approach =
+    progress != null ? 1 : st.mixOutTime != null && st.countdownSec != null && st.mixOutTime > 0 ? Math.max(0, Math.min(1, 1 - st.countdownSec / st.mixOutTime)) : 0;
+  const stageStyle = {
+    ["--now-col" as string]: deckColors?.[nowCol] ?? "var(--neon-cyan)",
+    ["--next-col" as string]: deckColors?.[nextCol] ?? "var(--neon-pink)",
+    ["--p" as string]: String(progress ?? 0),
+    ["--approach" as string]: String(approach),
+  };
   const topSlot = (
-    <div className={`mixq-top ${enabled ? `tone-${line.tone}` : ""}`} aria-live="polite">
-      <div className="mixq-pair">
-        <div className="mixq-slot">
-          <span className="mixq-slot-label">Now</span>
-          {current ? <TrackRow t={current} /> : <div className="mixq-empty">{mirror ? "Host isn’t playing yet" : "Nothing playing"}</div>}
-        </div>
-        <span className="mixq-arrow" aria-hidden="true">→</span>
-        <div className="mixq-slot">
-          <span className="mixq-slot-label">Next</span>
-          {next ? <TrackRow t={next} /> : <div className="mixq-empty">Queue empty</div>}
-        </div>
-      </div>
-      {enabled && (
-        <div className="mixq-autorow">
-          <span className="mixq-headline" title={line.detail ?? undefined}>
-            {line.headline}
-          </span>
-          <span className="mixq-autobtns">
-            <button onClick={onMixNow} disabled={!next} title="Start the mix into the next track now, from here">
-              Mix now
-            </button>
-            <button onClick={onSkip} disabled={!next} title="Drop the next track from the queue; the one after it moves up">
-              Skip
-            </button>
-            <button
-              className={st.held ? "on" : ""}
-              onClick={onHold}
-              aria-pressed={!!st.held}
-              title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
-            >
-              {st.held ? "Holding" : "Hold"}
-            </button>
-          </span>
-          {(progress != null || mixAt != null) && (
-            <div className="mixq-bar" aria-hidden="true">
-              {progress != null ? <span className="mixq-bar-fill" style={{ width: `${progress * 100}%` }} /> : <span className="mixq-bar-mark" style={{ left: `${(mixAt ?? 0) * 100}%` }} />}
+    <div className={`mixq-top tone-${tone}${enabled ? " is-auto" : ""}${progress != null ? " is-mixing" : ""}`} style={stageStyle} aria-live="polite">
+      <div className="mixq-stage">
+        <TrackCard t={current} side="now" deck={nowDeck} empty={mirror ? "Host isn’t playing yet" : "Nothing playing"} />
+        <div className="mixq-bridge" data-soon={clock && (st.countdownSec ?? 99) <= 8 ? "" : undefined} title={enabled ? [line.headline, line.detail].filter(Boolean).join(" — ") : undefined}>
+          <div className="mixq-bridge-head">
+            {enabled ? <span className="mixq-kicker">{kickerFor(tone, line.headline)}</span> : null}
+            {planName && (
+              <span className="mixq-style" title={pv?.why}>
+                {planName}
+                {bars ? <small>{bars} bars</small> : null}
+              </span>
+            )}
+          </div>
+          {clock && <span className="mixq-clock">{clock}</span>}
+          <div className="mixq-fader" aria-hidden="true">
+            <span className="mixq-fader-approach" />
+            <span className="mixq-fader-blend" />
+            <span className="mixq-fader-knob" />
+          </div>
+          {enabled && (
+            <div className="mixq-ctl">
+              <button onClick={onMixNow} disabled={!next} title="Start the mix into the next track now, from here">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3l6 5-6 5zM8 3l6 5-6 5z" /></svg>
+                Mix now
+              </button>
+              <button onClick={onSkip} disabled={!next} title="Drop the next track from the queue; the one after it moves up">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l7 5-7 5zM11 3h2v10h-2z" /></svg>
+                Skip
+              </button>
+              <button
+                className={st.held ? "on" : ""}
+                onClick={onHold}
+                aria-pressed={!!st.held}
+                title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" /></svg>
+                {st.held ? "Holding" : "Hold"}
+              </button>
             </div>
           )}
         </div>
-      )}
+        <TrackCard t={next} side="next" deck={nextDeck} empty="Queue empty" />
+      </div>
       {ownsSeed && (
         <div className="mixq-seedrow">
           <span className="seg-group mixq-src-seg" role="group" aria-label="Where the next tracks come from">

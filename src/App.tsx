@@ -3149,7 +3149,10 @@ function AppBody() {
   // Tick the state machine on a steady cadence while AUTO is on (host/solo only).
   useEffect(() => {
     if (!autoStatus.enabled || autoIsRemote) return;
-    const iv = setInterval(() => void mixerRef.current?.tick(), 150);
+    // Never `void` the promise: a throw in a tick used to vanish, and AUTO stalled with no trace.
+    const iv = setInterval(() => {
+      mixerRef.current?.tick().catch((err) => console.error("[htl] AUTO tick failed", err));
+    }, 150);
     return () => clearInterval(iv);
   }, [autoStatus.enabled, autoIsRemote]);
 

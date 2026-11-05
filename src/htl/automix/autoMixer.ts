@@ -726,7 +726,11 @@ export class AutoMixer {
         this.tickCueing();
         break;
       case "mixing":
-        this.tickMixing(dt);
+        try {
+          this.tickMixing(dt);
+        } catch (err) {
+          this.rescue("mixing", err);
+        }
         break;
       case "manual":
         this.tickManual();
@@ -1310,7 +1314,11 @@ export class AutoMixer {
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
       this.stemHold = this.shouldHoldForStems(live, idle);
       if (this.stemHold) return;
-      this.startMix();
+      try {
+        this.startMix();
+      } catch (err) {
+        this.rescue("start", err);
+      }
     } else if (this.plan?.loopExtend && !this.holdLoop && this.nearMixOut(live, this.barsSeconds)) {
       // A bar before the exit, close the outgoing into a 4-bar loop. It keeps playing musically
       // (the same phrase, in time) instead of running out, which buys the incoming's long intro
@@ -1673,6 +1681,37 @@ export class AutoMixer {
         this.stutterFired = true;
         this.stutterUntil = this.mixElapsed + Math.max(0.4, this.barsSeconds / Math.max(1, this.plan.bars));
       }
+    }
+  }
+
+  // ★ A TRANSITION THAT THROWS MUST STILL LAND (operator, 2026-11-04: the header stuck on
+  // "Mixes into … in 0s"). startMix runs from a fire-and-forget tick, so an exception in any step
+  // — a borrowed FX device whose worklet never loaded, a deck reloaded under us — vanished, the
+  // machine stayed in "cueing" past its mix point, retried every 150 ms and threw every time: the
+  // clock sat at 0 s and the next track never came in. Now the failure is logged and the set moves
+  // on with a clean cut onto the incoming deck (settle undoes everything the gesture touched).
+  private rescue(where: "start" | "mixing", err: unknown): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[htl] AUTO ${where} failed — cutting to the next track`, err);
+    event("automix.rescue", { where, err: msg.slice(0, 160), style: this.plan?.style ?? null });
+    try {
+      if (this.liveId) {
+        const inc = this.deps.engine.deck(other(this.liveId));
+        if (!inc.playing) inc.play();
+      }
+      this.mixStarted = true;
+      this.settle();
+    } catch (err2) {
+      // Even the cut failed: stand down to armed rather than loop on the same throw.
+      console.error("[htl] AUTO rescue failed", err2);
+      try {
+        this.abandonCue();
+      } catch {
+        /* nothing left to undo */
+      }
+      this.mixStarted = false;
+      this.resetArm();
+      this.phase = "armed";
     }
   }
 

@@ -214,6 +214,24 @@ describe("a change of direction re-centres the WHOLE suggestion engine", () => {
     expect(q.upcoming.some((x) => x.videoId.startsWith("sy"))).toBe(true);
   });
 
+  // Operator, 2026-11-05: "flipping back and forth the suggestions takes a long time to load".
+  test("Suggestions → Playlist → Suggestions puts the same suggestions back at once, without a fetch", async () => {
+    let q = render();
+    q.setCurrent(t("playing0001"));
+    q = render();
+    await q.ensureNext(ctx(t("playing0001")));
+    q = render();
+    const before = q.upcoming.map((x) => x.videoId);
+    expect(before.length).toBeGreaterThan(0);
+    q.loadTracks([t("pl000000001"), t("pl000000002")], { mode: "playlist" });
+    q = render();
+    expect(q.upcoming.map((x) => x.videoId)).toEqual(["pl000000001", "pl000000002"]);
+    expect(q.current?.videoId).toBe("playing0001"); // the source changed, not what is playing
+    q.loadTracks([], { mode: "radio" });
+    q = render();
+    expect(q.upcoming.map((x) => x.videoId)).toEqual(before); // back immediately, before any ensureNext
+  });
+
   test("taking a SUGGESTION keeps the list; a track you queued yourself is a new direction", async () => {
     let q = render();
     await q.ensureNext(ctx(t("seed0000001")));

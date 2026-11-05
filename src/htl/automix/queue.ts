@@ -142,6 +142,10 @@ export function useMixQueue(): MixQueue {
   const poolRef = useRef<Candidate[]>([]);
   // Pool entries from BEFORE the last reseed (see reseedRadio): they must re-earn their place.
   const staleIds = useRef<Set<string> | null>(null);
+  // The suggestions as they stood when the user switched to a playlist — restored, not refetched,
+  // when they switch back (operator, 2026-11-05: "flipping back and forth the suggestions takes a
+  // long time to load like its not caching the list properly").
+  const radioStash = useRef<{ rows: QueueItem[]; pool: Candidate[]; seed: string | null } | null>(null);
   // ISRC lookups already made this session (hit or miss). The public DBs behind /api/features do not
   // grow minute to minute, and a hit is written into D1, where the pooled lookup finds it.
   const isrcTried = useRef(new Set<string>());
@@ -217,12 +221,20 @@ export function useMixQueue(): MixQueue {
   const loadTracks = useCallback(
     (tracks: TrackMeta[], opts?: { smartSort?: boolean; mode?: MixMode }) => {
       const sort = opts?.smartSort ?? false;
+      // Leaving the suggestions for a playlist: keep them, rows and pool, to come back to.
+      if (modeRef.current === "radio" && tracks.length > 0) {
+        radioStash.current = { rows: itemsRef.current.filter((t) => t.source === "radio"), pool: poolRef.current, seed: lastSeed.current };
+      }
+      // Coming back to them: put them back as they were. The seed signature comes back too, so the
+      // next ensureNext refetches only if what is playing has changed in the meantime.
+      const back = tracks.length === 0 ? radioStash.current : null;
+      if (tracks.length === 0) radioStash.current = null;
       played.current = new Set();
       lastFill.current = 0;
-      lastSeed.current = null;
+      lastSeed.current = back?.seed ?? null;
       manualSeed.current = null;
       history.current = [];
-      poolRef.current = []; // a new source → the old candidates were for a different set
+      poolRef.current = back?.pool ?? []; // a new source → the old candidates were for a different set
       playlistLoaded.current = tracks.length > 0; // a fixed playlist → don't auto-refresh it
       setSmartSortState(sort);
       // An EMPTY load is not a playlist, whatever the caller asked for — a playlist whose tracks
@@ -230,12 +242,15 @@ export function useMixQueue(): MixQueue {
       // on a source that can never produce a track.
       if (opts?.mode) setModeState(tracks.length === 0 ? "radio" : opts.mode);
       setPlaylistEnded(false);
-      setCurrentState(null);
+      // (The playing track stays the current one: what is on the decks does not change with the
+      // source, and clearing it left "Now" empty until the next track change.)
       // The user's own picks survive a source change: "Radio" from the menu (an empty load) used to
       // wipe them along with the suggestions. They stay at the front; the new source follows.
       const keep = itemsRef.current.filter((t) => t.source === "user");
       const keepIds = new Set(keep.map((t) => t.videoId));
-      const rows = (sort ? smartSortChain(tracks) : tracks.slice()).filter((t) => !keepIds.has(t.videoId)).map((t) => tagged(t, "playlist"));
+      const rows = back
+        ? back.rows.filter((t) => !keepIds.has(t.videoId) && !sameSong(t, currentRef.current))
+        : (sort ? smartSortChain(tracks) : tracks.slice()).filter((t) => !keepIds.has(t.videoId)).map((t) => tagged(t, "playlist"));
       write(() => [...keep, ...rows]);
       // Fill in any missing key/BPM so smart-sort + badges are meaningful.
       void enrichAnalysis(tracks.filter((t) => t.bpm == null || t.key == null).map((t) => t.videoId));

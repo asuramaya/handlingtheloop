@@ -300,7 +300,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   const loadTidal = tidalSrc.refresh;
 
   // The shared community pool (tracks already cached — load instantly, no resolve).
-  const community = useCommunityPool();
+  const community = useCommunityPool(`${deckLoaded?.A ?? ""}|${deckLoaded?.B ?? ""}`);
 
   useEffect(() => {
     const load = () => void fetchMe().then(setMe);

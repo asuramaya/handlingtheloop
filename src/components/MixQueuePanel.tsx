@@ -261,7 +261,12 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   const topSlot = (
     <div className={`mixq-top tone-${tone}${enabled ? " is-auto" : ""}${progress != null ? " is-mixing" : ""}`} style={stageStyle} aria-live="polite">
       {(ownsSeed || enabled) && (
+        // LEFT · MIDDLE · RIGHT (operator, 2026-11-05: "it should be left middle right layout.
+        // hold/mix now/skip should be in the middle"): where tracks come from, what AUTO does next,
+        // and how the energy moves. Three fixed cells, so each control keeps its place whether or
+        // not the others are showing.
         <div className="mixq-bar">
+          <div className="mixq-bar-left">
           {ownsSeed && (
             <span className="mixq-group mixq-source" role="group" aria-label="Where the next tracks come from">
               <button
@@ -313,6 +318,9 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
               ))}
             </select>
           )}
+          </div>
+          <div className="mixq-bar-mid">{autoBtns}</div>
+          <div className="mixq-bar-right">
           {ownsSeed && mode !== "playlist" && !pickingPlaylist && (
             <span className="mixq-group mixq-energy" role="group" aria-label="How the energy moves across the set">
               {ARCS.map((a) => (
@@ -325,7 +333,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
               ))}
             </span>
           )}
-          {autoBtns}
+          </div>
         </div>
       )}
       <div className="mixq-stage">

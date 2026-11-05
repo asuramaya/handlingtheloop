@@ -7,7 +7,7 @@ import { communityMeta } from "./libraryUtils";
 // tracks cached before metadata was stored have no title; backfill them from /api/meta with
 // a small concurrency pool, persisting each so it's instant next time and we never re-hammer
 // the resolver, and pushing each into the shared pool so every future visitor gets it too.
-export function useCommunityPool(): TrackMeta[] {
+export function useCommunityPool(refreshKey?: string): TrackMeta[] {
   const [community, setCommunity] = useState<TrackMeta[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -51,5 +51,34 @@ export function useCommunityPool(): TrackMeta[] {
       cancelled = true;
     };
   }, []);
+
+  // ★ THE POOL GROWS WHILE YOU PLAY (operator, 2026-11-05: "when in auto mix, the community list is
+  // not being populated properly"). The server indexes a track into the community catalog when it
+  // first caches its audio — i.e. when a deck loads it, AUTO's loads included — but this list was
+  // fetched once, when the Library opened, so nothing played since ever appeared until a reload.
+  // A deck loading a new track (`refreshKey` changes) now refetches it, after a pause that lets the
+  // server's background write land. Titles already backfilled here are kept.
+  useEffect(() => {
+    if (!refreshKey) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetchCommunity(5000)
+        .then((tracks) => {
+          if (cancelled) return;
+          setCommunity((cur) => {
+            const known = new Map(cur.map((t) => [t.videoId, t]));
+            const cache = communityMeta.get();
+            return tracks.map((t) => (t.title ? t : { ...t, ...(known.get(t.videoId) ?? cache[t.videoId] ?? {}) }));
+          });
+        })
+        .catch(() => {});
+    }, REFRESH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [refreshKey]);
   return community;
 }
+
+const REFRESH_DELAY_MS = 8000;

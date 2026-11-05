@@ -295,11 +295,20 @@
 
 /* -- row 1: the control bar -- */
 .mixq-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.mixq-bar-left,
+.mixq-bar-right {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
+.mixq-bar-right { justify-content: flex-end; }
+.mixq-bar-mid { display: flex; justify-content: center; }
 .mixq-group {
   display: inline-flex;
   padding: 2px;
@@ -334,12 +343,34 @@
 .mixq-chip.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
 .mixq-chip.on.hold { color: #1a1405; background: #ffb13c; box-shadow: none; }
 .mixq-chip:disabled { opacity: 0.35; cursor: default; }
-/* Spread: tracks source on the left, energy (and AUTO's buttons after it) on the right. Without the
-   energy group (playlist mode) the AUTO buttons take the right edge themselves. */
-.mixq-energy,
-.mixq-auto-ctl:not(.mixq-energy + .mixq-auto-ctl) { margin-left: auto; }
+
 .mixq-auto-ctl .mixq-chip { color: var(--text); }
-.mixq-bar .mixq-src-pick { height: 28px; flex: 0 1 220px; min-width: 0; }
+/* The playlist picker in the app's own dress: dark, same height and radius as the chip groups, a
+   drawn chevron instead of the OS arrow, and dark options (Chromium honours option colours). */
+.mixq-bar .mixq-src-pick {
+  height: 28px;
+  flex: 0 1 220px;
+  min-width: 0;
+  padding: 0 28px 0 10px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  background-color: var(--panel);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%238a8fa3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 10px 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  color-scheme: dark;
+}
+.mixq-bar .mixq-src-pick:hover,
+.mixq-bar .mixq-src-pick:focus-visible { border-color: color-mix(in srgb, var(--text) 30%, var(--line)); outline: none; }
+.mixq-bar .mixq-src-pick option { background: var(--panel-2); color: var(--text); }
 
 /* -- row 2: the stage -- */
 .mixq-stage {
@@ -538,7 +569,7 @@
 /* Phones: every control an icon (one row), no art, stats down to BPM, the pill to its clock. */
 @container (max-width: 480px) {
   .mixq-top { padding: 6px 8px 8px; gap: 6px; }
-  .mixq-bar { flex-wrap: nowrap; gap: 4px; }
+  .mixq-bar { gap: 4px; }
   .mixq-bar .mixq-chip-label { display: none; }
   .mixq-bar .mixq-chip { padding: 0 7px; }
   .mixq-bar .mixq-src-pick { flex: 1 1 0; }

@@ -270,8 +270,13 @@ export function radioSeeds(ctx: RadioContext, manual: TrackMeta | null): { track
   };
   // A track the user explicitly queued next IS the vibe, at full strength, until it plays.
   push(manual, 1);
-  push(ctx.current, 1);
-  push(ctx.anchor, anchorWeight(ctx.anchorAge));
+  // While a pick waits, it is the direction the user chose; what is playing is where they are
+  // LEAVING. Equal weights kept half the suggestions on the old direction until the pick went live
+  // (operator, 2026-11-05: replacing the next song left the engine "stuck on the song that was
+  // replaced"). The anchor is the old direction too — it re-anchors when the pick plays.
+  const leaving = manual ? 0.5 : 1;
+  push(ctx.current, leaving);
+  push(ctx.anchor, anchorWeight(ctx.anchorAge) * leaving);
   return out;
 }
 

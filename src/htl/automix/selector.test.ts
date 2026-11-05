@@ -221,6 +221,10 @@ describe("radioSeeds — two stable seeds, not a sliding window", () => {
     const s = radioSeeds(ctx({ anchor: A, current: B }), C);
     expect(s[0].track.videoId).toBe("Ctrack00003");
     expect(s[0].weight).toBe(1);
+    // …and what is playing (and the old anchor) count half while it waits: that is the direction
+    // the user is leaving.
+    expect(s.find((x) => x.track.videoId === B.videoId)?.weight).toBe(0.5);
+    expect(s.every((x) => x.track.videoId === C.videoId || x.weight <= 0.5)).toBe(true);
   });
 
   test("anchor === current collapses to one seed", () => {

@@ -140,6 +140,8 @@ export function useMixQueue(): MixQueue {
   const history = useRef<TrackMeta[]>([]);
   // THE CANDIDATE POOL — standing, scored, drawn from one track at a time. See the header note.
   const poolRef = useRef<Candidate[]>([]);
+  // Pool entries from BEFORE the last reseed (see reseedRadio): they must re-earn their place.
+  const staleIds = useRef<Set<string> | null>(null);
   // ISRC lookups already made this session (hit or miss). The public DBs behind /api/features do not
   // grow minute to minute, and a hit is written into D1, where the pooled lookup finds it.
   const isrcTried = useRef(new Set<string>());
@@ -265,7 +267,9 @@ export function useMixQueue(): MixQueue {
     let queued = false;
     if (t) {
       markPlayed(t);
-      queued = itemsRef.current.some((x) => sameSong(x, t));
+      // Only a SUGGESTION taken from the list counts as following it. A track the user queued
+      // themselves is their choice of direction: the suggestions should re-centre on it.
+      queued = itemsRef.current.some((x) => sameSong(x, t) && x.source === "radio");
       write((cur) => (cur.some((x) => sameSong(x, t)) ? cur.filter((x) => !sameSong(x, t)) : cur));
     }
     setCurrentState(t);
@@ -293,7 +297,29 @@ export function useMixQueue(): MixQueue {
   const mergePool = (lists: { track: TrackMeta; rel: number; from: string }[][]): void => {
     const now = Date.now();
     const byId = new Map<string, Candidate>();
-    for (const c of poolRef.current) byId.set(c.track.videoId, c);
+    // ★ AFTER A RESEED THE OLD POOL RE-EARNS ITS PLACE (operator, 2026-11-05: "when changing genre
+    // or replacing the next song ... the suggestion engine gets stuck on the song that was
+    // replaced, for example under your spell to genesis but it still wants to suggest the game and
+    // 50 cent"). Each candidate carries the relatedness it had to the seed that fetched it, and the
+    // pool survived reseeds, so a hip-hop pool kept outscoring a synth-pop seed's own radio. On the
+    // first fill after a reseed: an old candidate the NEW seeds also returned takes the new score
+    // (not the max with its old one), and one they did not return is dropped. If that fill brought
+    // nothing back (offline, a failed fetch), the old pool stays, at a quarter of its weight, so a
+    // change of records never empties the list.
+    const stale = staleIds.current;
+    const fetched = lists.reduce((n, l) => n + l.length, 0);
+    if (stale) {
+      staleIds.current = null;
+      const seen = new Set<string>();
+      for (const list of lists) for (const { track } of list) seen.add(track.videoId);
+      for (const c of poolRef.current) {
+        if (!stale.has(c.track.videoId)) byId.set(c.track.videoId, c);
+        else if (fetched === 0) byId.set(c.track.videoId, { ...c, rel: c.rel * 0.25 });
+        else if (seen.has(c.track.videoId)) byId.set(c.track.videoId, { ...c, rel: 0 }); // re-scored below
+      }
+    } else {
+      for (const c of poolRef.current) byId.set(c.track.videoId, c);
+    }
     for (const list of lists) {
       for (const { track, rel, from } of list) {
         const ex = byId.get(track.videoId);
@@ -528,6 +554,9 @@ export function useMixQueue(): MixQueue {
     // every row the user lined up — not just the last "play next" (the old rule), which silently
     // lost any track they had added or dragged in. Only radio suggestions are replaced.
     manualSeed.current = null;
+    // The pool is kept (above), but every candidate in it now has to be fetched again by the new
+    // seeds to keep its place — see mergePool.
+    staleIds.current = new Set(poolRef.current.map((c) => c.track.videoId));
     write(keepNonRadio);
   }, []);
 
@@ -543,11 +572,18 @@ export function useMixQueue(): MixQueue {
 
   const enqueueNext = useCallback((t: TrackMeta) => {
     if (sameSong(t, currentRef.current)) return;
-    write((cur) => [tagged(t, "user"), ...cur.filter((x) => x.videoId !== t.videoId)]);
     // In dynamic radio, the manual pick becomes the FRESHEST seed: pin it at the front and
     // refill the tail to flow from it (option A — suggestions follow your pick until a deck
     // changes). In playlist mode it's just an insertion, no reseed.
+    //
+    // ★ …AND THE OLD SUGGESTIONS GO (operator, 2026-11-05: replacing the next song left the engine
+    // "stuck on the song that was replaced"). The pick became a seed, but every suggestion drawn
+    // for the old direction stayed under it, and the list only tops up when it runs short — so the
+    // old direction stayed on screen. Now the radio rows are dropped (rows the user added stay) and
+    // the pool has to re-earn its place from the new seeds (mergePool), exactly as on a reseed.
+    write((cur) => [tagged(t, "user"), ...(isDynamic() ? keepNonRadio(cur) : cur).filter((x) => x.videoId !== t.videoId)]);
     if (isDynamic()) {
+      staleIds.current = new Set(poolRef.current.map((c) => c.track.videoId));
       manualSeed.current = t;
       lastSeed.current = null; // force the refill below to reseed from the new pick
       void ensureNextRef.current();

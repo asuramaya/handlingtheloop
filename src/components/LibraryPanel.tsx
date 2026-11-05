@@ -980,6 +980,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
             cacheFilter
+            searchPlaceholder="Filter collection…"
             stateKey="collection"
           />
         )}
@@ -1000,6 +1001,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToCollection={library.addTrack}
             inCollection={inCollection}
             cacheFilter
+            searchPlaceholder="Filter community…"
             stateKey="community"
           />
         )}
@@ -1031,6 +1033,10 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 playlists={playlistRefs.filter((p) => p.id !== pl.id)}
                 onAddToPlaylist={library.addToPlaylist}
                 onCreatePlaylistWith={createPlaylistWith}
+                // The same toolbar as Collection and Community (operator, 2026-11-05: "inconsistent
+                // presentation across menus, from collection/community to playlist").
+                cacheFilter
+                searchPlaceholder={`Filter ${pl.name}…`}
                 // Per PLAYLIST, not one shared "playlist" key: two playlists are different lists of
                 // different lengths, so one's scroll position restored into the other lands
                 // somewhere arbitrary. A deleted playlist leaves a dead key, which costs a few

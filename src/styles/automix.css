@@ -220,11 +220,15 @@
    ("paused", "2:46", "mixing 45%") changes every second, and the button resized the whole chin with
    it. The word and the dot stay put; the status has a slot of its own that never changes width. */
 .chin-btn.chin-auto {
-  flex: 0 0 auto;
-  width: 172px;
-  justify-content: flex-start;
-  padding: 0 14px;
-  gap: 8px;
+  /* EXACTLY the song-overview rail under it (board.css .song-overview: 128 px desktop), so the
+     button sits on that column the way the three on the right sit on theirs (operator,
+     2026-11-05: "it should match the width ... so it fits perfectly"). */
+  flex: 0 0 128px;
+  width: 128px;
+  box-sizing: border-box;
+  justify-content: center;
+  padding: 0 8px;
+  gap: 6px;
   letter-spacing: 0.12em;
   font-size: 12px;
   position: relative;
@@ -262,7 +266,7 @@
   .chin-btn.chin-auto.on .chin-auto-dot { animation: none; }
 }
 .chin-auto-chip {
-  width: 7.2em;
+  width: 3.6em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -575,7 +579,7 @@
   .mixq-kicker { display: none; }
 }
 
-@media (max-width: 600px) {
-  .chin-btn.chin-auto { width: 128px; padding: 0 10px; gap: 6px; }
-  .chin-auto-chip { width: 4.6em; }
+@media (max-width: 768px) {
+  /* Phones: the rail is 40 px — too narrow for a word — so AUTO keeps the 128 px slot. */
+  .chin-btn.chin-auto { flex-basis: 128px; width: 128px; }
 }

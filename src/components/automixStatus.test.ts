@@ -18,7 +18,7 @@ describe("autoLine: what AUTO is doing, in words", () => {
   });
   it("mixing shows progress (the old label could never appear)", () => {
     const l = autoLine(on({ phase: "mixing", mixProgress: 0.45, countdownSec: 8 }), "X");
-    expect(l.chip).toBe("mixing 45%");
+    expect(l.chip).toBe("45%");
     expect(l.tone).toBe("mix");
   });
   it("held, manual, and every wait reason say something different", () => {

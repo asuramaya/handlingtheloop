@@ -42,7 +42,7 @@ export function autoLine(st: AutoMixStatus, nextTitle: string | null): AutoLine 
   if (st.phase === "mixing") {
     const pct = st.mixProgress != null ? Math.round(st.mixProgress * 100) : null;
     return {
-      chip: pct != null ? `mixing ${pct}%` : "mixing",
+      chip: pct != null ? `${pct}%` : "mixing", // the tone colours it as mixing; the slot is fixed-width
       headline: `Mixing into ${next}${pct != null ? ` · ${pct}%` : ""}`,
       detail: plan,
       tone: "mix",

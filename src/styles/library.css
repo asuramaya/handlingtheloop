@@ -700,12 +700,24 @@ td.col-extra .mixq-badge {
   text-overflow: ellipsis;
   vertical-align: middle;
 }
-/* Search button living in the shared toolbar (Search context only). */
+/* Search button living in the shared toolbar (Search context only): the same chip as the filter's
+   neighbours (a soft fill, no outline), not the old raised .btn. */
+.tt-search-btn.btn,
 .tt-search-btn {
   flex: 0 0 auto;
-  padding: 3px 12px;
-  font-size: 12px;
+  height: 28px;
+  padding: 0 14px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  cursor: pointer;
 }
+.tt-search-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 16%, var(--panel)); }
+.tt-search-btn:disabled { opacity: 0.4; cursor: default; }
 /* Queue toolbar has no filter (curated order) — a label fills the left instead. It must
    be able to shrink (min-width:0) so it doesn't shove the Rows stepper off a narrow dock. */
 .tt-queue-label {

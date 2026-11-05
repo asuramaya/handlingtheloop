@@ -1126,3 +1126,71 @@ td.col-num {
 .lib-head-rows .tt-step:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 11%, var(--panel)); }
 .lib-head-rows .tt-step svg { width: 10px; height: 10px; display: block; }
 .lib-head-rows .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+
+/* ★ THE FIELD CARRIES ITS OWN FILTERS (TrackTable .tt-filter-trail): one box, the same width and
+   place in every view, with Cached / Stemmed (or Search's status) inside its right end. Taller
+   than before so the toggles sit inside with room around them. */
+.tt-filter,
+.lib-head-tools .tt-filter {
+  flex: 1 1 auto;
+  max-width: none;
+  height: 32px;
+  padding: 0 3px 0 11px;
+  gap: 8px;
+}
+.tt-filter-trail {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.tt-filter-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tt-filter-count:empty { display: none; }
+.tt-filter .tt-cache-chips,
+.lib-head-tools .tt-filter .tt-cache-chips {
+  margin-left: 0;
+  padding: 0;
+  gap: 2px;
+  background: transparent;
+}
+.tt-filter .tt-chip { height: 26px; border-radius: 6px; padding: 0 10px; }
+.tt-filter-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+}
+.tt-filter-clear svg { width: 9px; height: 9px; }
+.tt-filter-clear path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.tt-filter-clear:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+
+/* Rows −/＋: one joined pair, the field's height and fill, so it reads as the field's neighbour
+   rather than two loose boxes; the glyphs are drawn, centred in square cells. */
+.lib-head-rows {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  height: 32px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+}
+.lib-head-rows .tt-step {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+}
+.lib-head-rows .tt-step:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.lib-head-rows .tt-step svg { width: 11px; height: 11px; }
+.lib-head-tools:empty + .lib-head-rows { margin-left: auto; }

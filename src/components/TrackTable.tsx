@@ -530,32 +530,50 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             />
             {query && !searchMode && (
               <button className="tt-filter-clear" onClick={() => setQuery("")} aria-label="Clear filter">
-                ✕
+                <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" /></svg>
               </button>
             )}
+            {/* ★ ONE FIELD, EVERY VIEW (operator, 2026-11-05: the filter row's pieces jumped and
+                gapped between views). What narrows this list lives INSIDE the field at its right end:
+                the Cached / Stemmed toggles (their dots are also the legend for the row pips), or in
+                Search the status of the search. The field is the same box, same width, same place
+                in Collection, Community, a playlist and Search. */}
+            <span className="tt-filter-trail">
+              {!searchMode && (query.trim() || cacheOnly || stemOnly) && (
+                <span className="tt-filter-count" aria-live="polite">
+                  {view.length} of {rows.length}
+                </span>
+              )}
+              {searchMode && (
+                <span className="tt-filter-count" aria-live="polite">
+                  {searching ? "Searching…" : query.trim() && tracks.length ? `${tracks.length} results` : ""}
+                </span>
+              )}
+              {cacheFilter && !onReorder && (
+                <span className="tt-cache-chips" role="group" aria-label="Show only">
+                  <button
+                    className={`tt-chip ${cacheOnly ? "on" : ""}`}
+                    aria-pressed={cacheOnly}
+                    title="Show only tracks whose audio is cached"
+                    onClick={() => setCacheOnly((v) => !v)}
+                  >
+                    <span className="pip pip-song" />
+                    <span className="tt-chip-label">Cached</span>
+                  </button>
+                  <button
+                    className={`tt-chip ${stemOnly ? "on" : ""}`}
+                    aria-pressed={stemOnly}
+                    title="Show only tracks with separated stems"
+                    onClick={() => setStemOnly((v) => !v)}
+                  >
+                    <span className="pip pip-stems" />
+                    <span className="tt-chip-label">Stemmed</span>
+                  </button>
+                </span>
+              )}
+            </span>
           </div>
         )}
-        {cacheFilter && !onReorder && (
-          <div className="tt-cache-chips" role="group" aria-label="Filter by cache state">
-            <button
-              className={`tt-chip ${cacheOnly ? "on" : ""}`}
-              aria-pressed={cacheOnly}
-              onClick={() => setCacheOnly((v) => !v)}
-            >
-              <span className="pip pip-song" />
-              <span className="tt-chip-label">Cached</span>
-            </button>
-            <button
-              className={`tt-chip ${stemOnly ? "on" : ""}`}
-              aria-pressed={stemOnly}
-              onClick={() => setStemOnly((v) => !v)}
-            >
-              <span className="pip pip-stems" />
-              <span className="tt-chip-label">Stemmed</span>
-            </button>
-          </div>
-        )}
-        {searchMode && searching && <span className="tt-searching" aria-live="polite">Searching…</span>}
     </>
   );
   return (

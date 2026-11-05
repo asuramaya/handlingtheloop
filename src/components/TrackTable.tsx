@@ -12,9 +12,6 @@ import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
   RESIZABLE,
-  SCALE_MIN,
-  SCALE_MAX,
-  SCALE_STEP,
   VIRT_THRESHOLD,
   ROW_OVERSCAN,
   ROW_H_EST,
@@ -127,8 +124,20 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   const cacheVer = useCacheStatus(); // re-render rows (+ recompute the filter) when the manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   // Column sizing (persisted widths, row scale, # / thumb px widths + resize handlers).
-  const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, changeScale, colWidth } =
-    useColumnLayout(tableRef);
+  const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, colWidth } = useColumnLayout(tableRef);
+  // The pinned head's height (toolbar + topSlot) = the column headings' sticky offset.
+  const headRef = useRef<HTMLDivElement>(null);
+  const [headH, setHeadH] = useState(0);
+  useLayoutEffect(() => {
+    const el = headRef.current;
+    if (!el) return;
+    const measure = () => setHeadH(Math.round(el.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const anchor = useRef<number | null>(null);
   const longPress = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false); // a long-press opened the menu → swallow the trailing click
@@ -460,8 +469,17 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     );
   };
 
+  // The queue (onReorder) has nothing left for a toolbar — no filter, no chips, no "Up next" label.
+  const hasToolbar = !onReorder || !!cacheFilter || !!searchMode;
   return (
     <>
+      {/* ★ THE TOP IS ANCHORED, the list scrolls under it (operator, 2026-11-04: "anchor the top
+          part and make the scroll happen internally on the track list"). Toolbar + topSlot are one
+          sticky block; its measured height is the column headings' sticky offset, so the headings
+          ride directly under it and only the rows move. Sticky, not a nested scroller: the row
+          windowing measures the existing scroll container, which stays as it is. */}
+      <div className="tt-head" ref={headRef}>
+      {hasToolbar && (
       <div className="tt-toolbar">
         {!onReorder && (
           <div className="tt-filter">
@@ -495,7 +513,6 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             )}
           </div>
         )}
-        {onReorder && <span className="tt-queue-label">Up next</span>}
         {cacheFilter && !onReorder && (
           <div className="tt-cache-chips" role="group" aria-label="Filter by cache state">
             <button
@@ -519,20 +536,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {searching ? "…" : "Search"}
           </button>
         )}
-        {/* Rows-size stepper as ONE right-pinned unit — keeping − and ＋ together (they were
-            loose toolbar children, so space-between flung them to opposite ends). */}
-        <div className="tt-rows">
-          <span className="tt-rows-label">Rows</span>
-          <button className="tt-step" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
-            −
-          </button>
-          <button className="tt-step" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
-            ＋
-          </button>
-        </div>
+        {/* (The Rows −/＋ stepper lives in the Library's title row now — one row size for every
+            table; see trackTable.ts setRowScale.) */}
       </div>
-
+      )}
       {topSlot}
+      </div>
 
       {tracks.length === 0 ? (
         <div className="lib-empty">{emptyHint}</div>
@@ -540,7 +549,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
         <table
           ref={tableRef}
           className="track-table"
-          style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px` }}
+          style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px`, ["--tt-head-h" as string]: `${headH}px` }}
         >
           {/* Column widths live here (one place) so table-layout:fixed resizing is
               stable — the resizable columns carry the dragged width, Title (auto)

@@ -387,7 +387,8 @@
   /* Pinned exactly below the (also-sticky) toolbar. Driven by the SAME variable as
      the toolbar's height so the two can never drift apart and leak rows through a
      seam. */
-  top: var(--tt-toolbar-h, 30px);
+  /* Directly under the pinned head (toolbar + topSlot, measured: TrackTable --tt-head-h). */
+  top: var(--tt-head-h, var(--tt-toolbar-h, 30px));
   background: var(--panel);
   color: var(--muted);
   font-weight: 600;
@@ -982,7 +983,6 @@ th.col-thumb {
   font-weight: 700;
 }
 
-
 /* The A/B deck badge sits in the # cell (TrackTable): no trailing margin, tighter side padding,
    and clip rather than ellipsis so a badge a hair wider than the digits never prints "..". */
 td.col-num {
@@ -997,4 +997,31 @@ td.col-num {
 /* Narrow-view copy of the deck badge (TrackTable): hidden while the # column carries it. */
 .track-table .tt-deck-inline {
   display: none;
+}
+
+/* ★ The pinned head of every library table: toolbar + topSlot (the Queue's Now/AUTO/Tracks rows)
+   stay put; only the rows scroll beneath (TrackTable .tt-head). The toolbar inside is no longer
+   sticky on its own — the block is. */
+.tt-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.tt-head .tt-toolbar {
+  position: static;
+}
+
+/* Rows −/＋ in the Library's title row (LibraryPanel), pinned to its right end. */
+.lib-head-rows {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.lib-head-rows .tt-rows-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 4px;
 }

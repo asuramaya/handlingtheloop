@@ -135,154 +135,125 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
     queue.loadTracks(tracks, { smartSort: queue.smartSort, mode: "playlist" });
   };
 
-  // ★ THE QUEUE, REDESIGNED AROUND ONE QUESTION: WHAT IS AUTO DOING? (operator, 2026-11-04: "the
-  // auto mode is a bit broken and confusing ... possibly a redesign"). Top to bottom:
-  //   1. NOW / NEXT: the playing track, the one AUTO mixes into, and a sentence saying what happens
-  //      next and when (automixStatus.ts), with the mix progress while it mixes.
-  //   2. The three actions, always in the same place, each saying what it does. Hold is a toggle.
-  //   3. Where the queue comes from (Radio or a playlist, showing the CURRENT choice; the old menu's
-  //      label never changed) and the set's shape, as labelled buttons instead of "↔ Ride".
+  // ★ THE QUEUE HEADER, AS SMALL AS IT CAN BE (operator, 2026-11-04: "all this auto off and big turn
+  // auto on button is redundant, remove it. also remove text ... reorganize it so its more tracks
+  // less slop and bloat"). The list is the instrument; the header is three thin lines at most:
+  //   1. NOW → NEXT, one line each side.
+  //   2. Only while AUTO runs: what it is doing (the explanation is the tooltip) and Mix now /
+  //      Skip / Hold as small buttons on the same line, with the mix progress under it. AUTO off
+  //      shows nothing here — the AUTO button in the top bar is the way in.
+  //   3. Tracks (Suggestions | Playlist) and Energy on ONE row; what each means is its tooltip.
   const next = upcoming[0] ?? null;
   const line = autoLine(st, next ? displayTrack(next.title, next.artist).title || next.videoId : null);
   const progress = st.phase === "mixing" && st.mixProgress != null ? st.mixProgress : null;
   const mixAt = st.mixOutTime != null && st.liveDuration ? Math.min(1, st.mixOutTime / st.liveDuration) : null;
+  const playlistHint =
+    mode === "playlist"
+      ? `Plays ${seededName ? `“${seededName}”` : "the playlist"} in order${queue.augment ? ", then keeps going with suggestions" : ""}.`
+      : "Pick a playlist; it replaces the suggested tracks (tracks you added stay).";
   const topSlot = (
-    <>
-      <div className={`mixq-status tone-${line.tone}`} aria-live="polite">
-        <div className="mixq-pair">
-          <div className="mixq-slot">
-            <span className="mixq-slot-label">Now</span>
-            {current ? <TrackRow t={current} /> : <div className="mixq-empty">{mirror ? "Host isn’t playing yet" : "Nothing playing"}</div>}
-          </div>
-          <span className="mixq-arrow" aria-hidden="true">→</span>
-          <div className="mixq-slot">
-            <span className="mixq-slot-label">Next</span>
-            {next ? <TrackRow t={next} /> : <div className="mixq-empty">Queue empty</div>}
-          </div>
+    <div className={`mixq-top ${enabled ? `tone-${line.tone}` : ""}`} aria-live="polite">
+      <div className="mixq-pair">
+        <div className="mixq-slot">
+          <span className="mixq-slot-label">Now</span>
+          {current ? <TrackRow t={current} /> : <div className="mixq-empty">{mirror ? "Host isn’t playing yet" : "Nothing playing"}</div>}
         </div>
-        <div className="mixq-line">
-          <span className="mixq-headline">{line.headline}</span>
-          {line.detail && <span className="mixq-detail">{line.detail}</span>}
+        <span className="mixq-arrow" aria-hidden="true">→</span>
+        <div className="mixq-slot">
+          <span className="mixq-slot-label">Next</span>
+          {next ? <TrackRow t={next} /> : <div className="mixq-empty">Queue empty</div>}
         </div>
-        {(progress != null || mixAt != null) && (
-          <div className="mixq-bar" aria-hidden="true">
-            {progress != null ? <span className="mixq-bar-fill" style={{ width: `${progress * 100}%` }} /> : <span className="mixq-bar-mark" style={{ left: `${(mixAt ?? 0) * 100}%` }} />}
-          </div>
-        )}
       </div>
-      {/* AUTO OFF: one thing to do, not three greyed-out buttons. The three only mean anything
-          while AUTO runs, and with it off the queue offered no way to start it from here. */}
-      {!enabled && !mirror && (
-        <div className="mixq-controls mixq-controls-off">
-          <button
-            className="mixq-start"
-            onClick={onToggleAuto}
-            disabled={!canAuto}
-            title={canAuto ? "AUTO mixes through this queue, track to track" : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
-          >
-            Turn AUTO on
-          </button>
-        </div>
-      )}
-      <div className="mixq-controls" hidden={!enabled && !mirror}>
-        <button onClick={onMixNow} disabled={!enabled || !next} title="Start the mix into the next track now, from here">
-          Mix now
-        </button>
-        <button onClick={onSkip} disabled={!enabled || !next} title="Drop the next track from the queue; the one after it moves up">
-          Skip next
-        </button>
-        <button
-          className={st.held ? "on" : ""}
-          onClick={onHold}
-          disabled={!enabled}
-          aria-pressed={!!st.held}
-          title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
-        >
-          {st.held ? "Holding" : "Hold"}
-        </button>
-      </div>
-      {ownsSeed && (
-        // ★ WHERE THE TRACKS COME FROM, AND THE SET'S SHAPE (operator, 2026-11-04: "the 'from'
-        // dropdown is confusing and shape switches don't really feel intuitive"). The old menu put
-        // a mode ("Radio"), a state ("Playlist (loaded)") and actions ("load a playlist") in one
-        // list, and Steady/Build/Journey were three words with the meaning in a tooltip. Now:
-        //   • two choices, side by side — Suggestions or a Playlist — and only for Playlist a
-        //     picker naming WHICH one; a sentence under them says what will happen;
-        //   • the shape only where it does something (it steers suggestions, not a playlist),
-        //     each option drawn as the energy curve it means, with the choice spelled out below.
-        <div className="mixq-seed">
-          <div className="mixq-field">
-            <span className="mixq-field-label">Tracks</span>
-            <span className="seg-group mixq-src-seg" role="group" aria-label="Where the next tracks come from">
-              <button
-                className={`hw-btn small ${mode !== "playlist" ? "on" : ""}`}
-                aria-pressed={mode !== "playlist"}
-                onClick={() => {
-                  if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
-                  setPickingPlaylist(false);
-                }}
-              >
-                Suggestions
-              </button>
-              <button
-                className={`hw-btn small ${mode === "playlist" || pickingPlaylist ? "on" : ""}`}
-                aria-pressed={mode === "playlist"}
-                disabled={!library.playlists.length}
-                title={library.playlists.length ? "Play one of your playlists, in order" : "Make a playlist in the Library first"}
-                onClick={() => setPickingPlaylist(true)}
-              >
-                Playlist
-              </button>
-            </span>
-            {(mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
-              <select
-                className="mixq-src-pick"
-                value={mode === "playlist" && seededFrom ? seededFrom : ""}
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  seedPlaylist(e.target.value);
-                  setSeededFrom(e.target.value);
-                  setPickingPlaylist(false);
-                }}
-                aria-label="Which playlist"
-              >
-                <option value="" disabled>
-                  {mode === "playlist" ? "Loaded playlist" : "Choose a playlist…"}
-                </option>
-                {library.playlists.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.trackKeys.length}
-                  </option>
-                ))}
-              </select>
-            )}
-            <span className="mixq-hint">
-              {mode === "playlist"
-                ? `Plays ${seededName ? `“${seededName}”` : "the playlist"} in order${queue.augment ? ", then keeps going with suggestions" : ""}.`
-                : pickingPlaylist
-                  ? "Pick a playlist; it replaces the suggested tracks (tracks you added stay)."
-                  : "Picks tracks that fit what is playing, as each one starts."}
-            </span>
-          </div>
-          {mode !== "playlist" && !pickingPlaylist && (
-            <div className="mixq-field">
-              <span className="mixq-field-label">Energy</span>
-              <span className="seg-group mixq-arc" role="group" aria-label="How the energy moves across the set">
-                {ARCS.map((a) => (
-                  <button key={a.v} className={`hw-btn small ${queue.arc === a.v ? "on" : ""}`} aria-pressed={queue.arc === a.v} onClick={() => queue.setArc(a.v)}>
-                    <svg className="mixq-arc-ico" viewBox="0 0 22 12" aria-hidden="true">
-                      <path d={a.path} />
-                    </svg>
-                    {a.label}
-                  </button>
-                ))}
-              </span>
-              <span className="mixq-hint">{ARCS.find((a) => a.v === queue.arc)?.says}</span>
+      {enabled && (
+        <div className="mixq-autorow">
+          <span className="mixq-headline" title={line.detail ?? undefined}>
+            {line.headline}
+          </span>
+          <span className="mixq-autobtns">
+            <button onClick={onMixNow} disabled={!next} title="Start the mix into the next track now, from here">
+              Mix now
+            </button>
+            <button onClick={onSkip} disabled={!next} title="Drop the next track from the queue; the one after it moves up">
+              Skip
+            </button>
+            <button
+              className={st.held ? "on" : ""}
+              onClick={onHold}
+              aria-pressed={!!st.held}
+              title={st.held ? "Stop holding: AUTO mixes at the usual point again" : "Stay on this track: no mix until you press Hold again or Mix now"}
+            >
+              {st.held ? "Holding" : "Hold"}
+            </button>
+          </span>
+          {(progress != null || mixAt != null) && (
+            <div className="mixq-bar" aria-hidden="true">
+              {progress != null ? <span className="mixq-bar-fill" style={{ width: `${progress * 100}%` }} /> : <span className="mixq-bar-mark" style={{ left: `${(mixAt ?? 0) * 100}%` }} />}
             </div>
           )}
         </div>
       )}
-    </>
+      {ownsSeed && (
+        <div className="mixq-seedrow">
+          <span className="seg-group mixq-src-seg" role="group" aria-label="Where the next tracks come from">
+            <button
+              className={`hw-btn small ${mode !== "playlist" && !pickingPlaylist ? "on" : ""}`}
+              aria-pressed={mode !== "playlist"}
+              title="Tracks that fit what is playing, picked again as each one starts"
+              onClick={() => {
+                if (mode === "playlist") queue.loadTracks([], { mode: "radio" });
+                setPickingPlaylist(false);
+              }}
+            >
+              Suggestions
+            </button>
+            <button
+              className={`hw-btn small ${mode === "playlist" || pickingPlaylist ? "on" : ""}`}
+              aria-pressed={mode === "playlist"}
+              disabled={!library.playlists.length}
+              title={library.playlists.length ? playlistHint : "Make a playlist in the Library first"}
+              onClick={() => setPickingPlaylist(true)}
+            >
+              Playlist
+            </button>
+          </span>
+          {(mode === "playlist" || pickingPlaylist) && library.playlists.length > 0 && (
+            <select
+              className="mixq-src-pick"
+              value={mode === "playlist" && seededFrom ? seededFrom : ""}
+              title={playlistHint}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                seedPlaylist(e.target.value);
+                setSeededFrom(e.target.value);
+                setPickingPlaylist(false);
+              }}
+              aria-label="Which playlist"
+            >
+              <option value="" disabled>
+                {mode === "playlist" ? "Loaded playlist" : "Choose a playlist…"}
+              </option>
+              {library.playlists.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.trackKeys.length}
+                </option>
+              ))}
+            </select>
+          )}
+          {mode !== "playlist" && !pickingPlaylist && (
+            <span className="seg-group mixq-arc" role="group" aria-label="How the energy moves across the set">
+              {ARCS.map((a) => (
+                <button key={a.v} className={`hw-btn small ${queue.arc === a.v ? "on" : ""}`} aria-pressed={queue.arc === a.v} title={a.says} onClick={() => queue.setArc(a.v)}>
+                  <svg className="mixq-arc-ico" viewBox="0 0 22 12" aria-hidden="true">
+                    <path d={a.path} />
+                  </svg>
+                  {a.label}
+                </button>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 
   // The per-pair transition. Shown only when the pair is ANALYSED: for an unanalysed pair the old

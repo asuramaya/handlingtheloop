@@ -98,3 +98,37 @@ export function compareBy(a: TrackMeta, b: TrackMeta, key: SortKey): number {
       return 0;
   }
 }
+
+// ★ ONE ROW SIZE FOR THE WHOLE LIBRARY, owned here rather than by each table. The −/＋ stepper moved
+// from every table's toolbar to the Library's title row (operator, 2026-11-04: "move rows + - to the
+// topmost on the same line as the title of the library"), so the tables and that header share one
+// value: a tiny store every table subscribes to (useColumnLayout) and the header writes.
+let rowScale: number | null = null;
+const rowScaleSubs = new Set<() => void>();
+export function getRowScale(): number {
+  if (rowScale == null) {
+    try {
+      rowScale = loadScale();
+    } catch {
+      rowScale = 1;
+    }
+  }
+  return rowScale;
+}
+export function setRowScale(v: number): void {
+  const next = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) * 10) / 10;
+  if (next === rowScale) return;
+  rowScale = next;
+  try {
+    localStorage.setItem(SCALE_KEY, String(next));
+  } catch {
+    /* ignore */
+  }
+  for (const f of rowScaleSubs) f();
+}
+export function subscribeRowScale(f: () => void): () => void {
+  rowScaleSubs.add(f);
+  return () => {
+    rowScaleSubs.delete(f);
+  };
+}

@@ -101,23 +101,6 @@
   cursor: pointer;
   padding: 4px 6px;
 }
-.mixq-seed {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-}
-.mixq-seed select {
-  flex: 1;
-  min-width: 0;
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 6px;
-  font-size: 12px;
-}
 .mixq-smart { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .mixq-now {
   display: flex;
@@ -190,35 +173,6 @@
 }
 .mixq-item-actions button:disabled { opacity: 0.3; cursor: default; }
 .mixq-empty { padding: 16px 10px; text-align: center; color: var(--muted); font-size: 12px; }
-/* Transport pinned to the bottom of the scrolling content (embedded in .lib-main, or the
-   floating dialog) so Mix-now/Skip/Hold are always reachable — they used to scroll off the
-   end of a long queue. Opaque background so rows don't bleed through the sticky bar. */
-.mixq-controls {
-  display: flex;
-  gap: 6px;
-  padding: 10px;
-  border-top: 1px solid var(--line);
-  position: sticky;
-  bottom: 0;
-  background: var(--bg);
-  z-index: 2;
-}
-.mixq-controls button {
-  flex: 1 1 0;
-  min-width: 0; /* shrink below text on a narrow dock instead of pushing "Hold" off the edge */
-  padding: 7px 6px;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.mixq-controls button:disabled { opacity: 0.4; cursor: default; }
-.mixq-controls button:not(:disabled):hover { border-color: var(--accent); }
 
 /* Auto-mix controls when hosted in the library header (compact, inline). */
 .settings-head .automix-bar { margin: 0; flex: 0 0 auto; align-items: center; }
@@ -247,7 +201,6 @@
   color: var(--accent);
 }
 
-
 /* The energy-arc picker sits beside the seed dropdown — a narrow fixed control, because it has
    three short options and should never steal width from the playlist names next to it. */
 .mixq-arc {
@@ -266,19 +219,6 @@
   justify-content: flex-start;
   gap: 10px;
 }
-
-/* ---- Queue, redesigned around "what is AUTO doing?" (MixQueuePanel, 2026-11-04) ---- */
-.mixq-status {
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
-  border-left: 3px solid var(--line);
-}
-.mixq-status.tone-run { border-left-color: var(--accent); }
-.mixq-status.tone-mix { border-left-color: var(--neon-lime); }
-.mixq-status.tone-hold { border-left-color: #ffb13c; }
-.mixq-status.tone-wait { border-left-color: #ffe24a; }
-.mixq-status.tone-manual { border-left-color: #c77bff; }
 .mixq-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -293,9 +233,7 @@
   color: var(--muted);
 }
 .mixq-arrow { color: var(--muted); font-size: 16px; }
-.mixq-line { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .mixq-headline { font-size: 14px; font-weight: 600; color: var(--text); }
-.mixq-detail { font-size: 12px; color: var(--muted); }
 .mixq-bar {
   position: relative;
   height: 4px;
@@ -306,34 +244,6 @@
 }
 .mixq-bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--neon-lime); }
 .mixq-bar-mark { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--accent); }
-/* The actions now sit under the status, not stuck to the bottom of the list. */
-.mixq-controls {
-  position: static;
-  border-top: none;
-  border-bottom: 1px solid var(--line);
-  background: transparent;
-}
-.mixq-controls button.on {
-  color: #120c02;
-  background: #ffb13c;
-  border-color: #ffb13c;
-}
-.mixq-seed { flex-wrap: wrap; row-gap: 6px; }
-.mixq-field { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
-.mixq-field-label {
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
-  flex: none;
-}
-.mixq-seed .mixq-arc {
-  width: auto;
-  padding: 0;
-  background: none;
-  border: none;
-  flex: none;
-}
 /* Where an unanalysed queued row came from (its transition is not known yet). */
 .mixq-src {
   font-size: 10px;
@@ -401,35 +311,74 @@
 .chin-auto-chip.tone-hold { color: #ffb13c; }
 .chin-auto-chip.tone-mix { color: var(--neon-lime, #6ee7a8); }
 .chin-btn.chin-auto:disabled { opacity: 0.4; cursor: default; }
-
-/* ---- Queue › where the tracks come from, and the energy shape ---- */
-.mixq-seed .mixq-src-seg { display: inline-flex; }
 .mixq-src-pick { min-width: 0; flex: 1 1 160px; max-width: 320px; }
-.mixq-hint {
-  flex: 1 0 100%;
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: -2px;
-}
 .mixq-arc button { display: inline-flex; align-items: center; gap: 6px; }
 .mixq-arc-ico { width: 22px; height: 12px; flex: 0 0 auto; }
 .mixq-arc-ico path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-/* Each field is its choice with its sentence underneath (wraps), side by side when there is room. */
-.mixq-seed .mixq-field { flex-wrap: wrap; flex: 1 1 300px; row-gap: 4px; align-items: center; }
-.mixq-seed .mixq-hint { margin-top: 0; white-space: normal; min-width: 0; }
-.mixq-seed .seg-group button:disabled { opacity: 0.4; cursor: default; }
 
 /* A planned special move (tempo bridge, double drop) is not a "bad pair" in red: it is a gesture. */
 .mixq-badge.tier-move { color: #e3c7ff; background: transparent; box-shadow: inset 0 0 0 1px #b884f0; }
 
-/* AUTO off: the one action, in the accent, where the three transport buttons sit when it runs. */
-.mixq-controls-off { grid-template-columns: 1fr; }
-.mixq-controls .mixq-start {
-  color: #061018;
-  background: var(--accent);
-  border-color: var(--accent);
-  font-weight: 700;
-  letter-spacing: 0.04em;
+/* ---- The compact Queue header (MixQueuePanel topSlot): three thin lines at most ---- */
+.mixq-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 8px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
 }
-.mixq-controls .mixq-start:not(:disabled):hover { filter: brightness(1.08); }
-.mixq-controls[hidden] { display: none; }
+.mixq-top.tone-run { border-left-color: var(--accent); }
+.mixq-top.tone-mix { border-left-color: var(--neon-lime, #6ee7a8); }
+.mixq-top.tone-hold { border-left-color: #ffb13c; }
+.mixq-top.tone-wait { border-left-color: #ffe24a; }
+.mixq-top.tone-manual { border-left-color: #c77bff; }
+.mixq-top .mixq-pair { gap: 10px; }
+.mixq-top .mixq-slot { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; text-align: left; gap: 8px; min-width: 0; }
+.mixq-top .mixq-slot-label { flex: 0 0 auto; margin: 0; font-size: 9px; }
+.mixq-top .mixq-track img { width: 26px; height: 26px; }
+.mixq-top .mixq-track-text { min-width: 0; }
+.mixq-top .mixq-title,
+.mixq-top .mixq-artist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.mixq-top .mixq-title { font-size: 12px; }
+.mixq-top .mixq-artist { font-size: 10.5px; }
+.mixq-autorow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.mixq-autorow .mixq-headline {
+  flex: 1 1 160px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mixq-autobtns { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.mixq-autobtns button {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.mixq-autobtns button:disabled { opacity: 0.4; cursor: default; }
+.mixq-autobtns button:not(:disabled):hover { border-color: var(--accent); }
+.mixq-autobtns button.on { color: #1a1405; background: #ffb13c; border-color: #ffb13c; }
+.mixq-autorow .mixq-bar { flex: 1 0 100%; margin: 0; }
+.mixq-seedrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.mixq-seedrow .mixq-src-pick { flex: 0 1 220px; min-width: 0; }
+.mixq-seedrow .seg-group button { padding: 3px 9px; font-size: 11px; }
+.mixq-seedrow .seg-group button:disabled { opacity: 0.4; cursor: default; }
+/* The old energy DROPDOWN's box (.mixq-arc: 104px, padded, bordered) must not clip the buttons. */
+.mixq-seedrow .mixq-arc { margin-left: auto; width: auto; padding: 0; background: none; border: none; border-radius: 0; }

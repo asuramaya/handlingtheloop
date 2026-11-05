@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { useSyncExternalStore } from "react";
+import { SCALE_MAX, SCALE_MIN, SCALE_STEP, getRowScale, setRowScale, subscribeRowScale } from "./lib/trackTable";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -689,6 +691,9 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 </span>
                 {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
               </button>
+              {/* ROWS −/＋ up here, on the title line (operator, 2026-11-04): one row size for every
+                  table in the Library, so it belongs to the Library, not to each table's toolbar. */}
+              <RowsStepper />
               {/* No ✕: the Library is a dock you close with its chin button (this matches
                   Settings/Profile/Session + the embedded tabs — exit by opening another). */}
             </div>
@@ -1093,3 +1098,19 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
     </>
   );
 });
+
+/** The Library's one row-size control (see trackTable.ts setRowScale). */
+function RowsStepper() {
+  const scale = useSyncExternalStore(subscribeRowScale, getRowScale, getRowScale);
+  return (
+    <span className="lib-head-rows" role="group" aria-label="Row size">
+      <span className="tt-rows-label">Rows</span>
+      <button className="tt-step" onClick={() => setRowScale(scale - SCALE_STEP)} disabled={scale <= SCALE_MIN} aria-label="Smaller rows">
+        −
+      </button>
+      <button className="tt-step" onClick={() => setRowScale(scale + SCALE_STEP)} disabled={scale >= SCALE_MAX} aria-label="Bigger rows">
+        ＋
+      </button>
+    </span>
+  );
+}

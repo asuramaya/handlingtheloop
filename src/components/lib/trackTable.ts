@@ -26,9 +26,9 @@ export interface MenuState {
 // falls under TITLE_MIN.
 export const RESIZABLE: { id: SortKey; min: number; def: number }[] = [
   { id: "artist", min: 70, def: 0.22 },
-  { id: "bpm", min: 44, def: 0.09 },
-  { id: "key", min: 40, def: 0.08 },
-  { id: "time", min: 48, def: 0.1 },
+  { id: "bpm", min: 44, def: 0.07 },
+  { id: "key", min: 40, def: 0.06 },
+  { id: "time", min: 48, def: 0.07 },
 ];
 export const TITLE_MIN = 120; // px — Title never collapses below this; caps how wide the others grow
 

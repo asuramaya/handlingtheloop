@@ -144,17 +144,19 @@
 }
 .mixq-badge {
   display: inline-block;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  padding: 2px 5px;
-  border-radius: 4px;
+  letter-spacing: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
   white-space: nowrap;
   flex-shrink: 0;
 }
-.mixq-badge.tier-high { color: #061810; background: #3ddc84; }
-.mixq-badge.tier-mid { color: #1a1405; background: #e8b84b; }
-.mixq-badge.tier-low { color: #fff; background: #c8506a; }
+/* Tinted text on a faint wash: the colour still says how well the pair fits, without a column of
+   solid stickers shouting over the track names. */
+.mixq-badge.tier-high { color: #6ff0a6; background: color-mix(in srgb, #3ddc84 12%, transparent); }
+.mixq-badge.tier-mid { color: #f0c463; background: color-mix(in srgb, #e8b84b 12%, transparent); }
+.mixq-badge.tier-low { color: #f0839a; background: color-mix(in srgb, #c8506a 14%, transparent); }
 .mixq-item-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .mixq-item-actions button {
   width: 22px;
@@ -204,10 +206,8 @@
 }
 /* Where an unanalysed queued row came from (its transition is not known yet). */
 .mixq-src {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font-size: 10.5px;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
 }
 .mixq-src.src-user { color: var(--accent); }
 .automix-count.tone-wait { color: #ffe24a; }
@@ -275,7 +275,7 @@
 .mixq-arc-ico path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
 /* A planned special move (tempo bridge, double drop) is not a "bad pair" in red: it is a gesture. */
-.mixq-badge.tier-move { color: #e3c7ff; background: transparent; box-shadow: inset 0 0 0 1px #b884f0; }
+.mixq-badge.tier-move { color: #d9b8ff; background: color-mix(in srgb, #b884f0 14%, transparent); }
 
 /* ---- THE STAGE: the Queue's header (MixQueuePanel topSlot) ----
    Row 1: NOW card · a narrow bridge (what AUTO is doing, the clock, a mini crossfader, the
@@ -326,6 +326,16 @@
   border-radius: 7px;
   object-fit: cover;
   background: var(--panel-2);
+}
+.mixq-card-art.is-blank {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--col) 30%, var(--panel-2)), var(--panel-2));
+}
+.mixq-card-art.is-blank::after {
+  content: "♪";
+  font-size: 18px;
+  color: color-mix(in srgb, var(--col) 70%, var(--text));
 }
 .mixq-card-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
 .mixq-card-kicker {
@@ -438,7 +448,19 @@
   border-radius: 1px;
   transition: width 1s linear;
 }
-.mixq-fader-approach { width: calc(var(--approach) * 100%); background: var(--now-col); }
+.mixq-fader-approach { width: calc(var(--approach) * 100%); background: linear-gradient(90deg, transparent, var(--now-col)); }
+/* The approach ends in a small round head — where the track is, heading for the mix point. */
+.mixq-fader-approach::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--now-col);
+  box-shadow: 0 0 6px var(--now-col);
+}
 .mixq-top.is-mixing .mixq-fader-approach { opacity: 0; }
 .mixq-fader-blend { width: calc(var(--p) * 100%); background: linear-gradient(90deg, var(--now-col), var(--next-col)); }
 .mixq-fader-knob {
@@ -451,7 +473,10 @@
   background: var(--text);
   box-shadow: 0 0 0 2px var(--bg);
   transition: left 1s linear;
+  opacity: 0;
 }
+/* The knob only appears when there is a blend to ride. */
+.mixq-top.is-mixing .mixq-fader-knob { opacity: 1; }
 
 /* -- the control bar: one chip style for every control -- */
 .mixq-bar {
@@ -494,7 +519,8 @@
 .mixq-chip.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent); }
 .mixq-chip.on.hold { color: #1a1405; background: #ffb13c; box-shadow: none; }
 .mixq-chip:disabled { opacity: 0.35; cursor: default; }
-.mixq-auto-ctl { margin-left: auto; }
+.mixq-energy,
+.mixq-auto-ctl:not(.mixq-energy + .mixq-auto-ctl) { margin-left: auto; }
 .mixq-auto-ctl .mixq-chip { color: var(--text); }
 .mixq-bar .mixq-src-pick { height: 30px; flex: 0 1 220px; min-width: 0; }
 

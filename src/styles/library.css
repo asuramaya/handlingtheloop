@@ -675,7 +675,7 @@
 .col-extra {
   /* em, not px: it scales with the row-size stepper, and holds the longest badge ("Harmonic 32",
      which clipped to "Harmoni…" at 84px). */
-  width: 7.6em;
+  width: 8em;
 }
 td.col-extra {
   text-align: right;

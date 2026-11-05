@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ToolbarHostContext } from "./lib/toolbarHost";
+import { RowsStepper } from "./lib/RowsStepper";
 import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
 import { displayTrack, fmtTime } from "../util/format";
@@ -571,6 +572,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   </button>
                 </span>
               )}
+              {toolbarHost && <RowsStepper inField />}
             </span>
           </div>
         )}

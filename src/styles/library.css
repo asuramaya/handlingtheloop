@@ -1194,3 +1194,32 @@ td.col-num {
 .lib-head-rows .tt-step:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
 .lib-head-rows .tt-step svg { width: 11px; height: 11px; }
 .lib-head-tools:empty + .lib-head-rows { margin-left: auto; }
+
+/* −/＋ INSIDE the field (RowsStepper inField): the bar is one piece. A hairline sets the view
+   control apart from the filters before it. The title row's own stepper only shows where no table
+   field exists (the Queue). */
+.tt-rows-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 7px;
+  margin-left: 1px;
+  border-left: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.tt-rows-in .tt-step {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tt-rows-in .tt-step:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.tt-rows-in .tt-step:disabled { opacity: 0.35; cursor: default; }
+.tt-rows-in .tt-step svg { width: 11px; height: 11px; display: block; }
+.tt-rows-in .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.lib-head-tools:not(:empty) + .lib-head-rows { display: none; }

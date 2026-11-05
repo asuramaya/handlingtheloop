@@ -1,7 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
-import { useSyncExternalStore } from "react";
+import { RowsStepper } from "./lib/RowsStepper";
 import { ToolbarHostContext } from "./lib/toolbarHost";
-import { SCALE_MAX, SCALE_MIN, SCALE_STEP, getRowScale, setRowScale, subscribeRowScale } from "./lib/trackTable";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -1114,19 +1113,3 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   );
 });
 
-/** The Library's one row-size control (see trackTable.ts setRowScale). */
-function RowsStepper() {
-  const scale = useSyncExternalStore(subscribeRowScale, getRowScale, getRowScale);
-  return (
-    // Drawn glyphs, not "−"/"＋" text: a font's minus and full-width plus sit at different heights
-    // and widths, which is what put them visibly off centre in their boxes.
-    <span className="lib-head-rows" role="group" aria-label="Row size" title="Row size">
-      <button className="tt-step" onClick={() => setRowScale(scale - SCALE_STEP)} disabled={scale <= SCALE_MIN} aria-label="Smaller rows">
-        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5h6" /></svg>
-      </button>
-      <button className="tt-step" onClick={() => setRowScale(scale + SCALE_STEP)} disabled={scale >= SCALE_MAX} aria-label="Bigger rows">
-        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 5h6M5 2v6" /></svg>
-      </button>
-    </span>
-  );
-}

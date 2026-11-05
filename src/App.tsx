@@ -3356,10 +3356,11 @@ function AppBody() {
       if (vid !== liveVidRef.current) {
         const had = liveVidRef.current;
         liveVidRef.current = vid;
-        mixQueue.setCurrent(live);
+        const wasQueued = mixQueue.setCurrent(live) === true;
         // A REAL change of song (not the first look) re-centres the list on it: the suggested rows
-        // are replaced, rows you added stay — exactly what AUTO does on a live-track change.
-        if (had && vid) mixQueue.reseedRadio();
+        // are replaced, rows you added stay — exactly what AUTO does on a live-track change. A song
+        // picked FROM the list keeps the list (it just leaves it): the rest still fits.
+        if (had && vid && !wasQueued) mixQueue.reseedRadio();
         lastFill = 0; // a new song: ask for suggestions from it right away
       }
       // Off-AUTO every track change IS the user's own choice, so the live track is both the

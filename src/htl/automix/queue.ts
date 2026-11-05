@@ -49,7 +49,9 @@ export interface MixQueue {
   setSmartSort: (on: boolean) => void;
   setAugment: (on: boolean) => void;
   loadTracks: (tracks: TrackMeta[], opts?: { smartSort?: boolean; mode?: MixMode }) => void;
-  setCurrent: (t: TrackMeta | null) => void;
+  /** Returns true when `t` was waiting in the list (it is taken out of it) — the caller then knows
+   *  the set moved ALONG the suggestions rather than away from them, and keeps the rest. */
+  setCurrent: (t: TrackMeta | null) => boolean | void;
   getCurrent: () => TrackMeta | null;
   advance: () => QueueItem | null;
   peekNext: () => QueueItem | null;
@@ -259,12 +261,15 @@ export function useMixQueue(): MixQueue {
   // ★ WHAT IS PLAYING IS NEVER "NEXT". Loading the queue's head by hand (or another upload of
   // it) made it the live track while it stayed at the top of Up next, and AUTO then mixed S&M into
   // S&M. The moment a track goes live, every row that is the same song leaves the queue.
-  const setCurrent = useCallback((t: TrackMeta | null) => {
+  const setCurrent = useCallback((t: TrackMeta | null): boolean => {
+    let queued = false;
     if (t) {
       markPlayed(t);
+      queued = itemsRef.current.some((x) => sameSong(x, t));
       write((cur) => (cur.some((x) => sameSong(x, t)) ? cur.filter((x) => !sameSong(x, t)) : cur));
     }
     setCurrentState(t);
+    return queued;
   }, []);
 
   const getCurrent = useCallback((): TrackMeta | null => currentRef.current, []);

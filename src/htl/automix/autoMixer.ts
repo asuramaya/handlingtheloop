@@ -867,7 +867,7 @@ export class AutoMixer {
     this.liveId = id;
     this.liveVideoId = this.deps.deckTrack(id)?.videoId ?? null;
     this.claimable[id] = this.liveVideoId; // it has been live → AUTO may load over it later
-    this.deps.queue.setCurrent(this.deps.deckTrack(id));
+    const wasQueued = this.deps.queue.setCurrent(this.deps.deckTrack(id)) === true;
     if (this.liveVideoId && this.liveVideoId !== prev) {
       // A user-driven track change resets the "vibe" anchor — suggestions should now
       // tether to what they just put on, not the original auto-mix seed. A fresh anchor is at
@@ -878,7 +878,10 @@ export class AutoMixer {
       // Re-seed only on a real CHANGE of live track. From nothing (prev null — AUTO just switched
       // on, or the decks were stopped) there is no old seed to replace, and reseeding here is what
       // made pressing AUTO throw away the queue the user was looking at.
-      if (prev) this.deps.queue.reseedRadio();
+      // …and not when the new track came OUT of the list (operator, 2026-11-05: "loading a song
+      // completely reloads all the suggestions even though the song loaded is part of the
+      // suggestions"). Playing one of them is following the list, not leaving it.
+      if (prev && !wasQueued) this.deps.queue.reseedRadio();
     }
     this.resetArm();
     this.phase = "armed";

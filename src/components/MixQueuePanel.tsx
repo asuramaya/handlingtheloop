@@ -69,6 +69,16 @@ const ARCS: { v: EnergyArc; label: string; path: string; says: string }[] = [
 
 // One side of the stage: a deck-coloured card (the colour of the deck the track is on, when it is on
 // one), cover art with the deck letter on it, the title, and the numbers a DJ reads at a glance.
+const mmss = (sec: number | null | undefined): string | null => {
+  if (!sec || !isFinite(sec) || sec <= 0) return null;
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+};
+
+// One side of the stage. Both cards share ONE structure so they read as a pair (operator,
+// 2026-11-05: "lots of empty space wasted in these cards, need a more standardized structured
+// layout"): art · who/what · a fixed block of BPM / KEY / TIME columns, labelled, always in the same
+// place — the numbers a DJ compares across the two decks line up with each other.
 function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" | "next"; deck: "A" | "B" | null; empty: string }) {
   const kicker = (
     <span className="mixq-card-kicker">
@@ -91,6 +101,11 @@ function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" 
     );
   }
   const d = displayTrack(t.title, t.artist);
+  const stats: [string, string | null][] = [
+    ["BPM", t.bpm ? String(Math.round(t.bpm)) : null],
+    ["Key", t.key ?? null],
+    ["Time", mmss(t.duration)],
+  ];
   return (
     <div className={`mixq-card ${side}`}>
       {t.thumbnail ? <img className="mixq-card-art" src={t.thumbnail} alt="" loading="lazy" /> : <span className="mixq-card-art is-blank" aria-hidden="true" />}
@@ -99,12 +114,16 @@ function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" 
         <span className="mixq-card-title" title={t.title}>
           {d.title || t.videoId}
         </span>
-        <span className="mixq-card-meta">
-          <span className="mixq-card-artist">{d.artist}</span>
-          {t.bpm ? <span className="mixq-card-num">{Math.round(t.bpm)}</span> : null}
-          {t.key ? <span className="mixq-card-num key">{t.key}</span> : null}
-        </span>
+        <span className="mixq-card-artist">{d.artist}</span>
       </div>
+      <dl className="mixq-card-stats">
+        {stats.map(([k, v]) => (
+          <div key={k} className={`mixq-stat stat-${k.toLowerCase()}`}>
+            <dt>{k}</dt>
+            <dd>{v ?? "—"}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }
@@ -241,34 +260,6 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
   );
   const topSlot = (
     <div className={`mixq-top tone-${tone}${enabled ? " is-auto" : ""}${progress != null ? " is-mixing" : ""}`} style={stageStyle} aria-live="polite">
-      <div className="mixq-stage">
-        <TrackCard t={current} side="now" deck={nowDeck} empty={mirror ? "Host isn’t playing yet" : "Nothing playing"} />
-        <div
-          className="mixq-bridge"
-          data-soon={clock && (st.countdownSec ?? 99) <= 8 ? "" : undefined}
-          title={[enabled ? line.headline : null, enabled ? line.detail : null, !enabled ? pv?.why : null].filter(Boolean).join(" — ") || undefined}
-        >
-          {enabled ? <span className="mixq-kicker">{kickerFor(tone, line.chip ?? line.headline)}</span> : null}
-          {clock ? (
-            <span className="mixq-clock">{clock}</span>
-          ) : (
-            <svg className="mixq-bridge-arrow" viewBox="0 0 24 10" aria-hidden="true">
-              <path d="M1 5h20M17 1l4 4-4 4" />
-            </svg>
-          )}
-          {enabled && (
-            <span className="mixq-fader" aria-hidden="true">
-              <span className="mixq-fader-approach" />
-              <span className="mixq-fader-blend" />
-              <span className="mixq-fader-knob" />
-            </span>
-          )}
-          {planName && (
-            <span className="mixq-style">{planName}</span>
-          )}
-        </div>
-        <TrackCard t={next} side="next" deck={nextDeck} empty="Queue empty" />
-      </div>
       {(ownsSeed || enabled) && (
         <div className="mixq-bar">
           {ownsSeed && (
@@ -337,6 +328,31 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
           {autoBtns}
         </div>
       )}
+      <div className="mixq-stage">
+        <TrackCard t={current} side="now" deck={nowDeck} empty={mirror ? "Host isn’t playing yet" : "Nothing playing"} />
+        {/* The CONNECTOR: a line from one card to the other in the two decks' colours, the approach
+            and then the blend running along it, and in the middle a pill naming the move, with the
+            clock. It is the transition, drawn as what it is: a bridge from this track to that one. */}
+        <div
+          className="mixq-bridge"
+          data-soon={clock && (st.countdownSec ?? 99) <= 8 ? "" : undefined}
+          title={[enabled ? line.headline : null, enabled ? line.detail : null, pv?.why ?? null].filter(Boolean).join(" — ") || undefined}
+        >
+          <span className="mixq-wire" aria-hidden="true">
+            <span className="mixq-wire-fill" />
+          </span>
+          {enabled && <span className="mixq-kicker">{kickerFor(tone, line.chip ?? line.headline)}</span>}
+          <span className="mixq-pill">
+            <svg className="mixq-pill-ico" viewBox="0 0 20 12" aria-hidden="true">
+              <path className="out" d="M1 2 C8 2 12 10 19 10" />
+              <path className="in" d="M1 10 C8 10 12 2 19 2" />
+            </svg>
+            <span className="mixq-pill-name">{planName ?? (next ? "Mix" : "—")}</span>
+            {clock && <span className="mixq-pill-clock">{clock}</span>}
+          </span>
+        </div>
+        <TrackCard t={next} side="next" deck={nextDeck} empty="Queue empty" />
+      </div>
     </div>
   );
 

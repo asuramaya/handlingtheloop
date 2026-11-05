@@ -267,8 +267,11 @@ class FakeQueue {
   getCurrent(): TrackMeta | null {
     return this.current;
   }
-  setCurrent(t: TrackMeta | null): void {
+  setCurrent(t: TrackMeta | null): boolean {
     this.current = t;
+    const queued = !!t && this.upcoming.some((x) => x.videoId === t.videoId);
+    if (queued) this.upcoming = this.upcoming.filter((x) => x.videoId !== t!.videoId);
+    return queued;
   }
   // A real ensureNext can be a network round trip; >0 makes it one, to expose re-entrancy.
   ensureDelayMs = 0;
@@ -1349,6 +1352,21 @@ describe("AutoMixer machine — AUTO from stopped decks (P1)", () => {
     r.loadAndPlay("B", mkTrack("t2"));
     await r.tick();
     expect(r.queue.reseeds).toBe(1);
+  });
+
+  // Operator, 2026-11-05: loading a song that was IN the suggestions threw the whole list away.
+  test("playing a track picked FROM the list keeps the rest of the list", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2", "q3"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2"), mkTrack("q3")];
+    r.mixer.enable();
+    await r.tick();
+    r.engine.A.pause();
+    r.loadAndPlay("B", mkTrack("q2"));
+    await r.tick();
+    expect(r.queue.reseeds).toBe(0);
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["q1", "q3"]);
   });
 });
 

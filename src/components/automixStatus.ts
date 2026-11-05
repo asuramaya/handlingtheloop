@@ -32,7 +32,7 @@ export function autoLine(st: AutoMixStatus, nextTitle: string | null): AutoLine 
     return {
       chip: null,
       headline: "AUTO is off",
-      detail: "The queue waits. Turn AUTO on and it mixes through it, track to track.",
+      detail: "The queue waits. With AUTO on, it mixes through it track to track.",
       tone: "idle",
     };
   }

@@ -170,7 +170,21 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
           </div>
         )}
       </div>
-      <div className="mixq-controls">
+      {/* AUTO OFF: one thing to do, not three greyed-out buttons. The three only mean anything
+          while AUTO runs, and with it off the queue offered no way to start it from here. */}
+      {!enabled && !mirror && (
+        <div className="mixq-controls mixq-controls-off">
+          <button
+            className="mixq-start"
+            onClick={onToggleAuto}
+            disabled={!canAuto}
+            title={canAuto ? "AUTO mixes through this queue, track to track" : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
+          >
+            Turn AUTO on
+          </button>
+        </div>
+      )}
+      <div className="mixq-controls" hidden={!enabled && !mirror}>
         <button onClick={onMixNow} disabled={!enabled || !next} title="Start the mix into the next track now, from here">
           Mix now
         </button>

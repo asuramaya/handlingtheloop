@@ -850,6 +850,56 @@ th.col-thumb {
   }
 }
 
+/* ★ THE MIDDLE WIDTH (441–680px of table): a docked Library at its default width. Every column
+   still fits in principle, but they were sized as PERCENTAGES of the table plus fixed #/artwork/
+   Mix columns, so Title — the one that matters — was what was left: ~45px, "Say…" "Nic…", next to
+   a roomy Artist column and a "SUGGESTED" tag (operator's queue, 2026-11-04). Here BPM/Key/Time
+   take what their text needs (em, so they follow the row-size stepper), Artist is capped, the
+   artwork goes, and Title keeps the rest. !important because the widths are inline styles on the
+   <col>s (the drag-to-resize model) — this tier deliberately overrides them, as the 440px one does
+   by hiding columns. */
+@container (min-width: 441px) and (max-width: 680px) {
+  .track-table .col-thumb {
+    display: none;
+  }
+  .track-table col.col-thumb {
+    width: 0 !important;
+  }
+  .track-table col.col-bpm {
+    width: 3.6em !important;
+  }
+  .track-table col.col-key {
+    width: 2.9em !important;
+  }
+  .track-table col.col-time {
+    width: 3.3em !important;
+  }
+  .track-table col.col-artist {
+    width: 22% !important;
+  }
+  .track-table col.col-extra {
+    width: 6.8em; /* "Harmonic 16", the longest badge, whole */
+  }
+  /* The narrow numeric cells lose their gutters: 12px a side was a third of a 3.6em column, which
+     is what clipped "130.0" to "13…" and "12A" to "1…". */
+  .track-table :is(th, td):is(.col-bpm, .col-key, .col-time) {
+    padding-left: 3px;
+    padding-right: 3px;
+    text-overflow: clip;
+  }
+  .track-table td.col-extra {
+    padding-left: 3px;
+    padding-right: 6px;
+  }
+  .track-table .mixq-src {
+    font-size: 8.5px;
+    letter-spacing: 0;
+  }
+  .track-table .col-resize {
+    display: none; /* the widths here are the tier's, not the drag model's */
+  }
+}
+
 /* Sidebar playlist as a drag drop-target */
 .lib-nav.drag-over {
   border-color: var(--neon-lime);

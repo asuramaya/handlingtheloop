@@ -380,3 +380,15 @@
 
 /* A planned special move (tempo bridge, double drop) is not a "bad pair" in red: it is a gesture. */
 .mixq-badge.tier-move { color: #e3c7ff; background: transparent; box-shadow: inset 0 0 0 1px #b884f0; }
+
+/* AUTO off: the one action, in the accent, where the three transport buttons sit when it runs. */
+.mixq-controls-off { grid-template-columns: 1fr; }
+.mixq-controls .mixq-start {
+  color: #061018;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.mixq-controls .mixq-start:not(:disabled):hover { filter: brightness(1.08); }
+.mixq-controls[hidden] { display: none; }

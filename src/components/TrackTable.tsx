@@ -1,4 +1,6 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { ToolbarHostContext } from "./lib/toolbarHost";
 import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
 import { displayTrack, fmtTime } from "../util/format";
@@ -11,7 +13,6 @@ import { loadTableState, saveTableState } from "./lib/trackTableState";
 import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
-  RESIZABLE,
   VIRT_THRESHOLD,
   ROW_OVERSCAN,
   ROW_H_EST,
@@ -118,6 +119,20 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   // `initialQuery` still wins: a SEARCH table's text belongs to whoever ran the search, and this
   // memory must never overwrite it.
   const [query, setQuery] = useState(initialQuery ?? saved.query ?? ""); // filter (library/queue) OR search box text
+  const toolbarHost = useContext(ToolbarHostContext);
+  // SEARCH WITHOUT A BUTTON: a pause in typing runs it (Enter still runs it at once). Three
+  // characters at least, and never the same text twice in a row.
+  const lastSearched = useRef((initialQuery ?? "").trim());
+  useEffect(() => {
+    if (!onSubmitSearch) return;
+    const q = query.trim();
+    if (q.length < 3 || q === lastSearched.current) return;
+    const t = setTimeout(() => {
+      lastSearched.current = q;
+      onSubmitSearch(q);
+    }, 650);
+    return () => clearTimeout(t);
+  }, [query, onSubmitSearch]);
   const [reorderOver, setReorderOver] = useState<number | null>(null); // queue: row being hovered for reorder
   const [cacheOnly, setCacheOnly] = useState(saved.cacheOnly ?? false); // narrow to pooled (instant-load) tracks
   const [stemOnly, setStemOnly] = useState(saved.stemOnly ?? false); // narrow to tracks whose stems are cached
@@ -451,7 +466,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // resizable data column. Title isn't in RESIZABLE — it's the flex absorber — so it's
     // called out explicitly. A `pxResize` handler (the # column) drags a px width instead
     // of trading fractions.
-    const hasHandle = !!pxResize || id === "title" || RESIZABLE.some((c) => c.id === id);
+    // Handles on the columns that share the width: Title|Artist (and the px-sized # column).
+    const hasHandle = !!pxResize || id === "title";
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
@@ -471,16 +487,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
 
   // The queue (onReorder) has nothing left for a toolbar — no filter, no chips, no "Up next" label.
   const hasToolbar = !onReorder || !!cacheFilter || !!searchMode;
-  return (
+  const toolbarBody = (
     <>
-      {/* ★ THE TOP IS ANCHORED, the list scrolls under it (operator, 2026-11-04: "anchor the top
-          part and make the scroll happen internally on the track list"). Toolbar + topSlot are one
-          sticky block; its measured height is the column headings' sticky offset, so the headings
-          ride directly under it and only the rows move. Sticky, not a nested scroller: the row
-          windowing measures the existing scroll container, which stays as it is. */}
-      <div className="tt-head" ref={headRef}>
-      {hasToolbar && (
-      <div className="tt-toolbar">
         {!onReorder && (
           <div className="tt-filter">
             <svg className="tt-filter-ico" viewBox="0 0 16 16" aria-hidden="true">
@@ -496,7 +504,10 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  if (searchMode) onSubmitSearch!(query.trim());
+                  if (searchMode) {
+                    lastSearched.current = query.trim();
+                    onSubmitSearch!(query.trim());
+                  }
                   e.currentTarget.blur(); // hand the keyboard back to the decks after committing
                 }
                 // ★ ↓ / ↑ LEAVE THE FILTER FOR THE RESULTS. Type to filter, ↓ to the first match, Enter
@@ -523,26 +534,32 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
               aria-pressed={cacheOnly}
               onClick={() => setCacheOnly((v) => !v)}
             >
-              <span className="pip pip-song" /> Cached
+              <span className="pip pip-song" />
+              <span className="tt-chip-label">Cached</span>
             </button>
             <button
               className={`tt-chip ${stemOnly ? "on" : ""}`}
               aria-pressed={stemOnly}
               onClick={() => setStemOnly((v) => !v)}
             >
-              <span className="pip pip-stems" /> Stemmed
+              <span className="pip pip-stems" />
+              <span className="tt-chip-label">Stemmed</span>
             </button>
           </div>
         )}
-        {searchMode && (
-          <button className="tt-search-btn btn" onClick={() => onSubmitSearch!(query.trim())} disabled={searching || !query.trim()}>
-            {searching ? "…" : "Search"}
-          </button>
-        )}
-        {/* (The Rows −/＋ stepper lives in the Library's title row now — one row size for every
-            table; see trackTable.ts setRowScale.) */}
-      </div>
-      )}
+        {searchMode && searching && <span className="tt-searching" aria-live="polite">Searching…</span>}
+    </>
+  );
+  return (
+    <>
+      {hasToolbar && toolbarHost && createPortal(toolbarBody, toolbarHost)}
+      {/* ★ THE TOP IS ANCHORED, the list scrolls under it (operator, 2026-11-04: "anchor the top
+          part and make the scroll happen internally on the track list"). Toolbar + topSlot are one
+          sticky block; its measured height is the column headings' sticky offset, so the headings
+          ride directly under it and only the rows move. Sticky, not a nested scroller: the row
+          windowing measures the existing scroll container, which stays as it is. */}
+      <div className="tt-head" ref={headRef}>
+      {hasToolbar && !toolbarHost && <div className="tt-toolbar">{toolbarBody}</div>}
       {topSlot}
       </div>
 
@@ -563,9 +580,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             <col className="col-thumb" style={{ width: `${thumbW}px` }} />
             <col className="col-title" />
             <col className="col-artist" style={{ width: colWidth("artist") }} />
-            <col className="col-bpm" style={{ width: colWidth("bpm") }} />
-            <col className="col-key" style={{ width: colWidth("key") }} />
-            <col className="col-time" style={{ width: colWidth("time") }} />
+            {/* BPM / Key / Time are sized to what they hold ("128.0", "12A", "12:34") and do not grow
+                with the table: as fractions they took ~200 px each on a wide library while Title cut
+                off. Title and Artist share everything else. */}
+            <col className="col-bpm" style={{ width: "4.6em" }} />
+            <col className="col-key" style={{ width: "3.6em" }} />
+            <col className="col-time" style={{ width: "4em" }} />
             {extraCol && <col className="col-extra" />}
           </colgroup>
           <thead>

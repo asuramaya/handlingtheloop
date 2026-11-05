@@ -1047,3 +1047,49 @@ td.col-num {
   color: var(--muted);
   margin-right: 4px;
 }
+
+/* ★ THE TOOLBAR IN THE TITLE ROW (lib/toolbarHost.ts): the filter / search field and its chips sit
+   between the library's title and Rows −/＋, so there is no separate toolbar row of dead space. */
+.settings-head.lib-head-row { container-type: inline-size; }
+.lib-head-tools {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 12px;
+}
+.lib-head-tools:empty { display: none; }
+.lib-head-tools .tt-filter { flex: 1 1 auto; max-width: 720px; }
+.lib-head-tools .tt-cache-chips { margin-left: auto; }
+.tt-searching { flex: none; font-size: 11px; color: var(--muted); }
+@container (max-width: 700px) {
+  .lib-head-from,
+  .lib-head-rows .tt-rows-label { display: none; }
+  .tt-chip .tt-chip-label { display: none; }
+  .tt-chip { padding: 0 8px; }
+  .lib-head-tools { margin: 0 8px; }
+}
+
+/* ★ LINEWORK (operator, 2026-11-05: "lets clean up this linework"). The table drew a rule on every
+   side of every cell, in the theme's line colour — a grid. Rows are what you read, so rows keep a
+   whisper of a separator and columns keep none (the resize handle still shows on hover); the
+   header keeps one soft rule under it. */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 0;
+}
+.track-table thead th {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: var(--bg);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.track-table tbody tr {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+}
+/* Numbers read as numbers: tabular, right-aligned under right-aligned headings. */
+.track-table :is(th, td):is(.col-bpm, .col-key, .col-time) { text-align: right; padding-left: 4px; padding-right: 12px; }
+.track-table td.col-num { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.track-table th.col-extra { text-align: right; padding-right: 12px; }

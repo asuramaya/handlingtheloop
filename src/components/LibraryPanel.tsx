@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSyncExternalStore } from "react";
+import { ToolbarHostContext } from "./lib/toolbarHost";
 import { SCALE_MAX, SCALE_MIN, SCALE_STEP, getRowScale, setRowScale, subscribeRowScale } from "./lib/trackTable";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
@@ -108,6 +109,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   // single ref because they're mutually exclusive, so only the mounted one holds it. The
   // Explorer/Queue views don't forward a cursor yet, so the wheel no-ops there.
   const activeTableRef = useRef<TrackTableHandle>(null);
+  // The slot in the title row that the visible table's toolbar portals into (lib/toolbarHost.ts).
+  const [toolsHost, setToolsHost] = useState<HTMLElement | null>(null);
   // Browse cursor target: the track list, or the source list (Collection / Community /
   // playlists) in the sidebar. The encoder PRESS flips between them (rekordbox tree/list).
   const [sourceNav, setSourceNav] = useState(false);
@@ -664,7 +667,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   })();
 
   return (
-    <>
+    <ToolbarHostContext.Provider value={toolsHost}>
       {open && (
         <div
           className={`modal-backdrop dock-${dockMode} ${passthrough ? "drag-passthrough" : ""}`}
@@ -691,6 +694,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 </span>
                 {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
               </button>
+              {/* The visible table's filter / search field and chips land here (ToolbarHostContext). */}
+              <div className="lib-head-tools" ref={setToolsHost} />
               {/* ROWS −/＋ up here, on the title line (operator, 2026-11-04): one row size for every
                   table in the Library, so it belongs to the Library, not to each table's toolbar. */}
               <RowsStepper />
@@ -1106,7 +1111,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           onClose={() => setDialog(null)}
         />
       )}
-    </>
+    </ToolbarHostContext.Provider>
   );
 });
 

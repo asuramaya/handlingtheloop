@@ -2326,7 +2326,15 @@ function AppBody() {
       // track load below, behind `if (!d.videoId) return` — so an empty deck restored nothing, and
       // the FX chains a DJ had built were silently gone on every refresh. The rack belongs to the
       // DECK, not to whatever is playing through it.
-      applyDeckRack(engine.deck(id), d);
+      // …but not before the FX worklets exist: built now, every reverb/comp in the rack was a
+      // pass-through that the repair then rebuilt (two console warnings and a repair line on every
+      // boot; the operator's console, 2026-11-04). A fraction of a second at startup.
+      if (engine.fxWorkletsReady) applyDeckRack(engine.deck(id), d);
+      else
+        void engine
+          .ensureWorklets()
+          .catch(() => {}) // modules failed: apply anyway — degrade + repair is the fallback
+          .then(() => applyDeckRack(engine.deck(id), d));
       if (!d.videoId) return;
       const track: TrackMeta = {
         videoId: d.videoId,

@@ -448,6 +448,15 @@ export class AudioEngine {
   // throws), but still re-creates any NODE that failed to attach.
   private modulesAdded = new Set<string>();
 
+  /** The FX devices' worklets (reverb, crush, mod delay, comp, tape) are all registered, so a rack
+   *  built now gets real devices, not pass-throughs. Callers that RESTORE a rack (a stored room
+   *  snapshot at boot) check this and wait for ensureWorklets() when it is false, instead of
+   *  building every device degraded and leaning on the repair (operator console, 2026-11-04: two
+   *  "worklet unavailable" warnings per boot, then "fx repaired… 4 device(s) rebuilt"). */
+  get fxWorkletsReady(): boolean {
+    return ["reverb", "crush", "moddelay", "comp", "tape"].every((m) => this.modulesAdded.has(m));
+  }
+
   /** addModule() a worklet source exactly once. Records the failure (surfaced in Settings ▸
    *  Debug) and returns false so the caller skips node creation this round. */
   private async addModuleOnce(name: string, src: string): Promise<boolean> {

@@ -18,6 +18,7 @@ import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
+import { pickLiveDeck } from "./App/liveDeck";
 import { displayTrack } from "./util/format";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
@@ -3312,27 +3313,62 @@ function AppBody() {
   // Runs during AUTO, and also when the queue panel is open off-AUTO so radio picks
   // show real key/tempo while you're looking at them (the cheap ISRC/global-DB lookup
   // fills known tracks without a decode; only novel ones decode, one at a time).
-  useQueuePrefetch(mixQueue, engine.ctx, (autoStatus.enabled || mixqOpen) && !isMobileDevice());
+  // Always on a desktop (was: AUTO on, or the Queue open): the suggestions run all the time now, and
+  // ten rows of them are only useful with their BPM / key in. Heavy steps wait out AUTO's quiet
+  // window and the fingerprint runs in a worker, so this costs nothing audible.
+  useQueuePrefetch(mixQueue, engine.ctx, !isMobileDevice());
 
-  // Keep the queue aware of what's loaded on the decks even when AUTO is OFF, so the
-  // panel shows the loaded/playing track as "now playing" and Radio can build
-  // suggestions from both decks without the auto-mixer running. When AUTO is on the
-  // mixer owns `current`, so we step aside.
+  // ★ THE SUGGESTIONS FOLLOW THE SET, AUTO OR NOT (operator, 2026-11-04: "i need the suggestions
+  // engine to work all the time as i play songs ... whether or not auto is on"). Off-AUTO this used
+  // to re-centre only when a track was LOADED, so starting the other deck or fading across to it
+  // never moved the list, and nothing topped it up in between. Now a once-a-second look at the
+  // decks (pickLiveDeck: the deck you can hear) re-centres the queue the moment the live track
+  // changes — the track that went live leaves the list (queue.setCurrent) — and the radio is asked
+  // to top up every few seconds (its own cooldown and pool rules keep that cheap). When AUTO is on
+  // the mixer owns `current` and does all of this itself, so this steps aside.
+  const liveDeckRef = useRef<DeckId | null>(null);
+  const liveVidRef = useRef<string | null>(null);
   useEffect(() => {
     if (autoStatus.enabled) return;
     // A queue-remote (any non-anchor device — my own iPad, a co-DJ, a listener) mirrors the
     // authority's queue via remoteAutomix; running a SECOND local radio engine here just burns
     // recommendation fetches on a queue it never uses (audit #4). Only the authority seeds.
     if (autoIsRemote) return;
-    const a = deckTrack("A");
-    const b = deckTrack("B");
-    const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
-    mixQueue.setCurrent(live);
-    // AUTO IS OFF, but the Queue tab is still showing suggestions, so the radio still runs — seeded
-    // from whatever the user has on the decks. There is no vibe anchor here: off-AUTO, every track
-    // change IS the user's own choice, so the live deck is both the anchor and the current track,
-    // and `anchorAge` is permanently 0.
-    if (live) void mixQueue.ensureNext({ anchor: live, current: live, anchorAge: 0, played: 0, arc: mixQueue.arc });
+    let lastFill = 0;
+    const look = () => {
+      const a = deckTrack("A");
+      const b = deckTrack("B");
+      const id = pickLiveDeck({
+        aPlay: engine.deckA.playing,
+        bPlay: engine.deckB.playing,
+        crossfade: crossfadeRef.current,
+        prev: liveDeckRef.current,
+        aLoaded: !!a,
+        bLoaded: !!b,
+      });
+      liveDeckRef.current = id;
+      const live = id === "A" ? a : id === "B" ? b : null;
+      const vid = live?.videoId ?? null;
+      const now = performance.now();
+      if (vid !== liveVidRef.current) {
+        const had = liveVidRef.current;
+        liveVidRef.current = vid;
+        mixQueue.setCurrent(live);
+        // A REAL change of song (not the first look) re-centres the list on it: the suggested rows
+        // are replaced, rows you added stay — exactly what AUTO does on a live-track change.
+        if (had && vid) mixQueue.reseedRadio();
+        lastFill = 0; // a new song: ask for suggestions from it right away
+      }
+      // Off-AUTO every track change IS the user's own choice, so the live track is both the
+      // anchor and the current track, and `anchorAge` is permanently 0.
+      if (live && now - lastFill > 4000) {
+        lastFill = now;
+        void mixQueue.ensureNext({ anchor: live, current: live, anchorAge: 0, played: 0, arc: mixQueue.arc });
+      }
+    };
+    look();
+    const t = setInterval(look, 1000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, autoIsRemote, mixQueue.mode]);
 

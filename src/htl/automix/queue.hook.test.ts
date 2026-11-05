@@ -57,7 +57,7 @@ describe("queue provenance", () => {
     let q = render();
     await q.ensureNext(ctx(t("seed0000001")));
     q = render();
-    expect(q.upcoming.length).toBe(4);
+    expect(q.upcoming.length).toBe(5); // all five the radio returned (the list runs ten deep now)
     expect(q.upcoming.every((x) => x.source === "radio")).toBe(true);
     q.enqueue(t("mine0000001"));
     q.enqueueNext(t("mine0000002"));

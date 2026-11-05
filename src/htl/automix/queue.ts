@@ -80,7 +80,9 @@ export interface MixQueue {
   clear: () => void;
 }
 
-const RADIO_MIN_AHEAD = 4; // keep at least this many tracks queued
+// Ten ahead (was four): the operator performs FROM this list — "longer list maybe up to 10 ...
+// its kind of a superpower when performing". The pool (60, refilled below 20) covers it.
+const RADIO_MIN_AHEAD = 10; // keep at least this many tracks queued
 const FILL_COOLDOWN_MS = 12_000; // don't refetch the graph more often than this
 const MAX_QUEUE = 14; // cap the radio queue so it never grows unbounded
 const PLAYED_CAP = 100; // remember only the last N plays — older ones can resurface

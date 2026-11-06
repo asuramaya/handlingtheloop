@@ -2943,15 +2943,19 @@ function AppBody() {
     if (!settings.midiEnabled || midi.status.state !== "connected") return;
     const held: Record<DeckId, number> = { A: 0, B: 0 };
     const FLOOR = -48;
+    // One deck at a time, by name rather than a loop over both: this only READS each deck's meter,
+    // and the both-deck scan (bothDeckActionScan.test.ts) treats any plain Deck method in a loop
+    // over both decks as a write.
+    const level = (id: DeckId, d: Deck) => {
+      const m = d.playing ? d.meterStereo() : { l: -100, r: -100 };
+      const db = Math.max(m.l, m.r);
+      const target = db <= FLOOR ? 0 : Math.min(1, (db - FLOOR) / -FLOOR);
+      held[id] = target >= held[id] ? target : Math.max(target, held[id] - 0.06); // fall ~1.5 col/s
+      midi.setMeter(id, held[id] * 127);
+    };
     const tick = () => {
-      for (const id of ["A", "B"] as const) {
-        const d = engine.deck(id);
-        const m = d.playing ? d.meterStereo() : { l: -100, r: -100 };
-        const db = Math.max(m.l, m.r);
-        const target = db <= FLOOR ? 0 : Math.min(1, (db - FLOOR) / -FLOOR);
-        held[id] = target >= held[id] ? target : Math.max(target, held[id] - 0.06); // fall ~1.5 col/s
-        midi.setMeter(id, held[id] * 127);
-      }
+      level("A", engine.deckA);
+      level("B", engine.deckB);
     };
     const iv = setInterval(tick, 40);
     return () => {

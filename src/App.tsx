@@ -781,10 +781,6 @@ function AppBody() {
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed.
   const xfaderLedRef = useRef<boolean | null>(null);
-  // Tracks our last eqStemMode edge so we can FORCE the FLX hardware Smart-CFX off (0x96/0x00 0x00)
-  // on connect + every toggle — see the feedback push. We NEVER send 0x7F (that latches the hardware
-  // feature ON, which remaps the COLOR knob onto the trim CC and fights trim).
-  const cfxLedRef = useRef<boolean | null>(null);
   const beatFxLedRef = useRef<boolean | null>(null); // last FX-bypass (RELEASE FX) lamp state sent (diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
@@ -792,11 +788,9 @@ function AppBody() {
   const eqStemModeRef = useRef(false);
   useEffect(() => { eqStemModeRef.current = eqStemMode; }, [eqStemMode]);
   // ★ WHAT THE HARDWARE KNOBS DRIVE, ON SCREEN (operator, 2026-11-06: "some kind of indicator in
-  // board mode that shows whether im in eq mode or stem volume mode"). The SMART CFX lamp cannot say
-  // it: lighting it (0x7F on 0x96/0x00) engages Pioneer's own Smart CFX, which remaps the COLOR knob
-  // onto the trim CC — the "midi comms" breakage — so it is forced dark (see the feedback push).
-  // Instead the deck banks ring the row the knobs drive. Only with a controller connected: without
-  // one there are no knobs to describe.
+  // board mode that shows whether im in eq mode or stem volume mode"). On the board the SMART CFX
+  // lamp says it (lit = stems; see the feedback push). On screen each deck bank tags the row the
+  // knobs drive. Only with a controller connected: without one there are no knobs to describe.
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -1160,9 +1154,8 @@ function AppBody() {
         fxCtlFor(id)?.cyclePreset(s ? -1 : 1);
       },
       // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
-      // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down
-      // engaged it; close the COLOR-knob remap window now instead of waiting for the 150ms tick).
-      eqStemToggle: () => { setEqStemMode((v) => !v); midiSendRef.current?.([0x96, 0x00, 0x00]); },
+      // Flip eq/stem mode; the SMART CFX lamp follows it on the next feedback push (lit = stems).
+      eqStemToggle: () => setEqStemMode((v) => !v),
       // Own key (Z), not ⇧F — see keybinds.ts. Same flag the on-screen lock button drives.
       keylock: (deck, id) => {
         const on = !deck.keylock;
@@ -2901,15 +2894,11 @@ function AppBody() {
         };
         midi.setFeedback(id, fb);
       });
-      // FORCE the FLX hardware Smart-CFX OFF. That feature (host-controlled, LATCHING, on 0x96/0x00)
-      // remaps the COLOR knob onto the trim CC and fights trim. We do eq/stem entirely in SOFTWARE,
-      // so the hardware feature must stay disengaged — send 0x00 on connect (initial diff) and after
-      // every toggle, NEVER 0x7F. The lamp stays dark; eq/stem mode is shown on-screen.
-      const cfxOn = eqStemModeRef.current;
-      if (cfxOn !== cfxLedRef.current) {
-        cfxLedRef.current = cfxOn;
-        midi.send([0x96, 0x00, 0x00]);
-      }
+      // ★ THE SMART CFX LAMP SAYS STEM MODE (operator, 2026-11-06). Lighting it engages Pioneer's
+      // hardware Smart CFX, which makes the COLOR knob ALSO send TRIM; MidiEngine's echo filter
+      // drops those by timing (the profile's echoLamp, from the 2026-11-06 capture), so the lamp can
+      // finally be lit. Diffed in the engine and resent after a reconnect.
+      midi.setEchoLamp(eqStemModeRef.current);
       // FORCE the FLX hardware SMART FADER OFF too — SAME pathology as Smart-CFX (host-controlled,
       // latching, on 0x96/0x01): driving 0x7F engages the hardware feature and changes crossfader
       // behaviour. We do the crossfader-enable in software, so keep the hardware feature disengaged:

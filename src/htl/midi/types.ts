@@ -100,8 +100,18 @@ export interface DeviceProfile {
   noteStatus?: Record<DeckId, number>; // button LEDs (e.g. {A:0x90, B:0x91})
   padStatus?: Record<DeckId, number>; // hot-cue pad LEDs (e.g. {A:0x97, B:0x99})
   /** The channel LEVEL METER (VU) LEDs: a CC per deck, value 0–127 = how much of the column is lit.
-   *  Output-only: no button, no firmware toggle state to desync (unlike the SMART CFX lamp). */
+   *  Output-only: no button, no firmware toggle state to desync. */
   meter?: { status: Record<DeckId, number>; data: number };
+  /** A host-lit "smart" lamp whose hardware feature ECHOES one knob onto another knob's CCs
+   *  (FLX4 SMART CFX: lit, the COLOR knob also sends TRIM). While lit, a message on an `echoes`
+   *  address that lands within `windowMs` of a message on that deck's `source` addresses is the
+   *  echo, not a real turn, and is dropped. `[status, data]` pairs. */
+  echoLamp?: {
+    lamp: [number, number];
+    source: Record<DeckId, [number, number][]>;
+    echoes: Record<DeckId, [number, number][]>;
+    windowMs: number;
+  };
   feedback?: MidiFeedbackMap;
   // SysEx sent once on connect AND repeated on `keepAliveMs` to keep some Pioneer
   // gear awake / streaming (the "rekordbox handshake"). Needs sysex permission.

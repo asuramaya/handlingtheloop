@@ -29,6 +29,7 @@ interface MidiAccess {
 type RequestMIDIAccess = (opts?: { sysex?: boolean }) => Promise<MidiAccess>;
 
 const addr = (status: number, data: number) => (status << 8) | data;
+const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 // OS loopback / virtual MIDI ports that aren't a real controller — skip them when
 // auto-picking the device and when sending output (they echo back as fake input).
@@ -193,6 +194,9 @@ export class MidiEngine {
 
   stop(): void {
     if (this.keepAlive) clearInterval(this.keepAlive);
+    if (this.echoTimer != null) clearTimeout(this.echoTimer);
+    this.echoTimer = null;
+    this.echoPending = [];
     this.keepAlive = null;
     if (this.access) {
       for (const input of this.access.inputs.values()) input.onmidimessage = null;
@@ -231,6 +235,8 @@ export class MidiEngine {
     this.outputs = Array.from(this.access.outputs.values()).filter((o) => !isVirtualPort(o.name));
     this.profile = profile;
     this.lastMeter = { A: -1, B: -1 }; // a (re)connected board starts dark — resend whatever is current
+    this.lampSent = null; // the board's lamp state is unknown after a (re)connect — resend it
+    this.echoPending = [];
     this.buildIndex();
     this.startKeepAlive();
     this.opts.onStatus({ state: "connected", device: chosen?.name ?? null, profile: profile?.name ?? null });
@@ -398,6 +404,8 @@ export class MidiEngine {
       this.opts.onLearnCapture?.({ status, data: d1, type });
       return;
     }
+
+    if (isCC && this.echoFilter(status, d1, d2)) return;
 
     if (isNote) {
       const pressed = hi === 0x90 && d2 > 0;
@@ -603,6 +611,70 @@ export class MidiEngine {
         // sysex permission was denied — keep-alive unavailable (degraded, non-fatal).
       }
     }
+  }
+
+  // --- Echo lamp (FLX4 SMART CFX) ---
+  // Lit, the hardware feature makes the COLOR knob ALSO send TRIM. Every echo lands within a few ms
+  // of a COLOR message, a hair before or after it; real TRIM turns never do. So while the lamp is lit
+  // (and briefly after it changes, in case the firmware lags), a TRIM-address message within
+  // windowMs AFTER a COLOR message is dropped at once, and one with no COLOR message yet is held for
+  // windowMs and dropped if one arrives. Trim gains ≤ windowMs of latency, only while lit.
+  private lampSent: boolean | null = null;
+  private lampChangedAt = -Infinity;
+  private lastSourceAt: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
+  private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
+  private echoTimer: ReturnType<typeof setTimeout> | null = null;
+  static readonly LAMP_GRACE_MS = 600;
+
+  /** Light or darken the profile's echo lamp. Diffed (and reset on connect), so it is safe to call
+   *  every feedback tick. No-op on a board without one. */
+  setEchoLamp(on: boolean): void {
+    const l = this.profile?.echoLamp;
+    if (!l || !this.outputs.length || on === this.lampSent) return;
+    this.lampSent = on;
+    this.lampChangedAt = nowMs();
+    this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
+  }
+
+  private echoDeck(kind: "source" | "echoes", status: number, d1: number): DeckId | null {
+    const l = this.profile?.echoLamp;
+    if (!l) return null;
+    for (const d of ["A", "B"] as const) if (l[kind][d].some(([s, c]) => s === status && c === d1)) return d;
+    return null;
+  }
+
+  /** true = the message was consumed (dropped as an echo, or held to decide). */
+  private echoFilter(status: number, d1: number, d2: number): boolean {
+    const l = this.profile?.echoLamp;
+    if (!l) return false;
+    const t = nowMs();
+    const active = this.lampSent === true || t - this.lampChangedAt < MidiEngine.LAMP_GRACE_MS;
+    if (!active) return false;
+    const src = this.echoDeck("source", status, d1);
+    if (src) {
+      this.lastSourceAt[src] = t;
+      // anything held for this deck arrived just before its COLOR message: an echo
+      this.echoPending = this.echoPending.filter((p) => p.deck !== src || t - p.t > l.windowMs);
+      return false; // the COLOR message itself is real
+    }
+    const deck = this.echoDeck("echoes", status, d1);
+    if (!deck) return false;
+    if (t - this.lastSourceAt[deck] <= l.windowMs) return true; // right after COLOR: an echo
+    this.echoPending.push({ deck, status, d1, d2, t });
+    this.scheduleEchoFlush(l.windowMs);
+    return true;
+  }
+
+  private scheduleEchoFlush(windowMs: number): void {
+    if (this.echoTimer != null) return;
+    this.echoTimer = setTimeout(() => {
+      this.echoTimer = null;
+      const cut = nowMs() - windowMs;
+      const due = this.echoPending.filter((p) => p.t <= cut);
+      this.echoPending = this.echoPending.filter((p) => p.t > cut);
+      for (const p of due) this.dispatchCC(p.status, p.d1, p.d2);
+      if (this.echoPending.length) this.scheduleEchoFlush(windowMs);
+    }, windowMs + 1);
   }
 
   // --- Level meters ---

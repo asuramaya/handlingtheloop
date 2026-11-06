@@ -154,3 +154,71 @@ describe("MidiEngine — FLX4 channel level meters", () => {
     ]);
   });
 });
+
+// ★ THE SMART CFX LAMP, LIT (operator, 2026-11-06). Lit, Pioneer's hardware Smart CFX makes the
+// COLOR knob ALSO send TRIM. The fixture is the real capture: a COLOR sweep (52.8–55.6 s) whose
+// echoes land on B0 04/24, then a TRIM-only sweep (55.8–59.2 s). Replayed on its own clock.
+describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => {
+  async function flxOut() {
+    const events: { e: MidiEvent; t: number }[] = [];
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null as null | ((e: { data: Uint8Array }) => void) };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: (e) => events.push({ e, t: performance.now() }), onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    return { engine, events, sent, send: (...b: number[]) => input.onmidimessage!({ data: new Uint8Array(b) }) };
+  }
+  const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-cfx-lamp-lit-2026-11-06.json", import.meta.url), "utf8")) as MidiCapture;
+  async function replay(lit: boolean) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+    try {
+      const rig = await flxOut();
+      rig.engine.setEchoLamp(lit);
+      vi.advanceTimersByTime(2000); // past the post-change grace window
+      const t0 = performance.now() - cap.events[0].t;
+      for (const e of cap.events) {
+        const due = t0 + e.t - performance.now();
+        if (due > 0) vi.advanceTimersByTime(due);
+        rig.send(e.s, e.d1, e.d2);
+      }
+      vi.advanceTimersByTime(100); // flush anything still held
+      const trim = rig.events
+        .filter(({ e }) => e.type === "fader" && e.target === "trim" && e.deck === "A")
+        .map(({ e, t }) => ({ t: t - t0, v: (e as { value: number }).value }));
+      return { ...rig, trim };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+  const inColor = (t: number) => t >= 52_800 && t <= 55_650;
+  const inTrim = (t: number) => t >= 55_800;
+
+  it("lit: the COLOR sweep's trim echoes are dropped; the real TRIM sweep still drives trim end to end", async () => {
+    const { trim, sent } = await replay(true);
+    expect(sent).toContainEqual([0x96, 0x00, 0x7f]);
+    expect(trim.filter((x) => inColor(x.t))).toEqual([]);
+    const real = trim.filter((x) => inTrim(x.t)).map((x) => x.v);
+    expect(real.length).toBeGreaterThan(100);
+    expect(Math.min(...real)).toBeLessThan(0.02);
+    expect(Math.max(...real)).toBeGreaterThan(0.98);
+  });
+
+  it("dark: the same bytes DO move trim during the COLOR sweep (so the filter is what removes them)", async () => {
+    const { trim, sent } = await replay(false);
+    expect(sent).not.toContainEqual([0x96, 0x00, 0x7f]);
+    expect(trim.filter((x) => inColor(x.t)).length).toBeGreaterThan(20);
+  });
+
+  it("setEchoLamp is diffed and resent after a reconnect", async () => {
+    const { engine, sent } = await flxOut();
+    sent.length = 0;
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(false);
+    expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x00]]);
+  });
+});

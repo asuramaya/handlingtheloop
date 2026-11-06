@@ -167,8 +167,9 @@ export const DDJ_FLX4: DeviceProfile = {
     // SMART CFX (0x96/0x00) → toggle the HI/MID/LOW knobs between EQ and STEM volume.
     // SMART FADER (0x96/0x01) → arm/disarm OUR Smart Fader (crossfader-driven auto-transition).
     //   SHIFT + SMART FADER (0x96/0x09) → enable/disable the crossfader entirely (the old toggle).
-    // (We always force the HW Smart-CFX/Fader features OFF — see App's force-off — so these
-    //  buttons drive our software versions, never Pioneer's.)
+    // (These buttons drive our software versions. The SMART CFX lamp is lit for stem mode, and the
+    //  hardware feature that comes with it is neutralised by the echoLamp filter below the bindings;
+    //  the SMART FADER hardware feature is still forced OFF — see App's feedback push.)
     { control: { kind: "action", action: "eqStemToggle" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "smartFaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x09, type: "note", shift: true },
@@ -251,6 +252,20 @@ export const DDJ_FLX4: DeviceProfile = {
   // bottom-up — the same message rekordbox / Mixxx drive them with. Fed from the deck's post-fader
   // peak (App: the meter loop), so the board shows what the app is actually playing.
   meter: { status: { A: 0xb0, B: 0xb1 }, data: 0x02 },
+  // SMART CFX lamp (0x96/0x00). Lighting it engages Pioneer's hardware Smart CFX, which makes the
+  // COLOR knob ALSO send that deck's TRIM CC (and an unbound B4/B5 0x03). Captured 2026-11-06,
+  // deck A: 95/95 echoed trim messages landed within 6 ms of a COLOR message (92 within 2 ms,
+  // a few arrive just BEFORE it); 0/794 real TRIM messages had a COLOR message within 15 ms.
+  // So the echo is separable by timing. Deck B is assumed to mirror deck A (COLOR 0x18, trim B1).
+  echoLamp: {
+    lamp: [0x96, 0x00],
+    source: { A: [[0xb6, 0x17], [0xb6, 0x37]], B: [[0xb6, 0x18], [0xb6, 0x38]] },
+    echoes: {
+      A: [[0xb0, 0x04], [0xb0, 0x24], [0xb4, 0x03], [0xb4, 0x23]],
+      B: [[0xb1, 0x04], [0xb1, 0x24], [0xb5, 0x03], [0xb5, 0x23]],
+    },
+    windowMs: 12,
+  },
   initSysex: FLX4_HANDSHAKE,
   keepAliveMs: 200,
 };

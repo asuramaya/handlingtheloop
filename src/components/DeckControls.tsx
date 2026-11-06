@@ -49,7 +49,7 @@ interface DeckControlsProps {
   onKey: () => void;
   cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
   /** What the controller's HI/MID/LOW/CFX knobs drive right now (App eqStemMode), or undefined with
-   *  no controller. The bank rings that row — the SMART CFX lamp cannot be lit safely. */
+   *  no controller. The bank tags that row; on the board the SMART CFX lamp mirrors it. */
   knobs?: "eq" | "stems";
   locked?: boolean; // a watch-only / off-seat deck: the whole bank is non-interactive (control blocked)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)

@@ -221,4 +221,15 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
     engine.setEchoLamp(false);
     expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x00]]);
   });
+
+  it("after a SMART CFX press/release the lamp state is re-asserted (the firmware flips the lamp itself)", async () => {
+    const { engine, sent, send } = await flxOut();
+    engine.setEchoLamp(true);
+    sent.length = 0;
+    send(0x96, 0x00, 0x7f); // press
+    send(0x96, 0x00, 0x00); // release
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(true);
+    expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x7f]]);
+  });
 });

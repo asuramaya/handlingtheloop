@@ -406,6 +406,11 @@ export class MidiEngine {
     }
 
     if (isCC && this.echoFilter(status, d1, d2)) return;
+    const lamp = this.profile?.echoLamp?.lamp;
+    if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
+      this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
+      this.lampChangedAt = nowMs(); // and the echo filter stays armed through the flip
+    }
 
     if (isNote) {
       const pressed = hi === 0x90 && d2 > 0;
@@ -625,14 +630,19 @@ export class MidiEngine {
   private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
   private echoTimer: ReturnType<typeof setTimeout> | null = null;
   static readonly LAMP_GRACE_MS = 600;
+  // The lamp's own button: the firmware flips the lamp itself on press/release, after (or around)
+  // our send, so for a while after any press/release every setEchoLamp call re-asserts the state.
+  private lampReassertUntil = -Infinity;
+  static readonly LAMP_REASSERT_MS = 900;
 
   /** Light or darken the profile's echo lamp. Diffed (and reset on connect), so it is safe to call
    *  every feedback tick. No-op on a board without one. */
   setEchoLamp(on: boolean): void {
     const l = this.profile?.echoLamp;
-    if (!l || !this.outputs.length || on === this.lampSent) return;
+    if (!l || !this.outputs.length) return;
+    if (on === this.lampSent && nowMs() > this.lampReassertUntil) return;
+    if (on !== this.lampSent) this.lampChangedAt = nowMs();
     this.lampSent = on;
-    this.lampChangedAt = nowMs();
     this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
   }
 

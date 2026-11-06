@@ -115,6 +115,10 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   // again. Read once, on mount: `stateKey` changing means a different list, and a different list
   // gets its own remount via React's key, not a mutation of this one.
   const saved = useMemo(() => loadTableState(stateKey), [stateKey]);
+  // ★ THE CURSOR COMES BACK WITH THE LIST (operator, 2026-11-06: "when navigating in and out of the
+  // lists make it remember the position of the selector so i dont have to scroll all the way down to
+  // the last position"). Held by track identity; saved with the rest of the table's state.
+  const cursorKeyRef = useRef<string | null>(saved.cursorKey ?? null);
   const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey ?? "index");
   const [sortDir, setSortDir] = useState<1 | -1>(saved.sortDir ?? 1);
   // `initialQuery` still wins: a SEARCH table's text belongs to whoever ran the search, and this
@@ -286,7 +290,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // to the tracked value, which is the only thing available once the node is gone.
     const sc = scrollerRef.current;
     if (sc?.isConnected) savedScroll.current = sc.scrollTop;
-    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current });
+    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current, cursorKey: cursorKeyRef.current });
   }, [stateKey, sortKey, sortDir, query, cacheOnly, stemOnly]);
   // Save when a control moves, AND on unmount — the cleanup is the one that catches closing the
   // panel or loading a track, where nothing changed but the component is about to be destroyed.
@@ -369,11 +373,14 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       const row0 = table.getBoundingClientRect().top + theadH;
       const rowTop = row0 + idx * rowH;
       const rowBot = rowTop + rowH;
-      const viewTop = scRect.top + theadH; // keep clear of the sticky header
+      // Keep clear of EVERYTHING pinned above the rows: the column headings AND the pinned head over
+      // them (the Queue's Now/Next stage — TrackTable .tt-head, measured as headH). Counting only the
+      // headings left a stepped-up cursor row hidden under the stage (operator, 2026-11-06).
+      const viewTop = scRect.top + headH + theadH;
       if (rowTop < viewTop) sc.scrollTop -= viewTop - rowTop + rowH;
       else if (rowBot > scRect.bottom) sc.scrollTop += rowBot - scRect.bottom + rowH;
     },
-    [rowH],
+    [rowH, headH],
   );
   // One cursor step, shared by the hardware browse knob, the keyboard (via the handle) and the
   // filter box's ↓ / ↑ below.
@@ -384,7 +391,25 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     cursorRef.current = next;
     setCursor(next);
     scrollCursorIntoView(next);
+    cursorKeyRef.current = view[next] ? trackKey(view[next]) : null;
+    persistCursor();
   };
+  // Save the cursor's track as it moves (cheap: one small localStorage write per step).
+  const persistCursor = () => persist();
+  // Put the cursor back on its track once the list has rows, after the scroll position is restored.
+  const cursorRestored = useRef(false);
+  useLayoutEffect(() => {
+    if (cursorRestored.current || !stateKey || view.length === 0) return;
+    cursorRestored.current = true;
+    const k = cursorKeyRef.current;
+    if (!k) return;
+    const idx = view.findIndex((t) => trackKey(t) === k);
+    if (idx < 0) return;
+    cursorRef.current = idx;
+    setCursor(idx);
+    requestAnimationFrame(() => scrollCursorIntoView(idx));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey, view.length]);
   useImperativeHandle(
     ref,
     () => ({

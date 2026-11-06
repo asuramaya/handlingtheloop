@@ -467,6 +467,7 @@ export function MixQueuePanel({ queue, status, library, mirror, edit, canEdit, c
         inCollection={inCollection}
         extraCol={extraCol}
         topSlot={topSlot}
+        stateKey="queue"
         emptyHint={
           canEdit
             ? mode === "radio"

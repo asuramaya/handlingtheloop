@@ -48,6 +48,9 @@ interface DeckControlsProps {
   onSync: () => void;
   onKey: () => void;
   cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
+  /** What the controller's HI/MID/LOW/CFX knobs drive right now (App eqStemMode), or undefined with
+   *  no controller. The bank rings that row — the SMART CFX lamp cannot be lit safely. */
+  knobs?: "eq" | "stems";
   locked?: boolean; // a watch-only / off-seat deck: the whole bank is non-interactive (control blocked)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
   sampler?: SamplerApi; // shared sampler — this deck's 8 region pads fill the SAMPLER pad-mode
@@ -85,7 +88,7 @@ const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: st
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, knobs, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
@@ -353,7 +356,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} data-knobs={knobs} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main" ref={setStackEl}>
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}

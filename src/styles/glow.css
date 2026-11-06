@@ -194,3 +194,35 @@ body:not(.no-glow) .eq-tool:hover {
 body:not(.no-glow) .eq-tool.on {
   box-shadow: 0 0 20px color-mix(in srgb, var(--tool, var(--accent)) 90%, transparent);
 }
+
+/* ★ WHERE THE HARDWARE KNOBS ARE (DeckControls data-knobs, App knobsOn): the row the controller's
+   HI/MID/LOW/CFX knobs drive gets a ring in the deck colour and a small KNOBS tag — the stem cells
+   in stem mode, the EQ in EQ mode. Flipping SMART CFX moves the ring on both decks at once. */
+.bank[data-knobs="stems"] .stems-row,
+.bank[data-knobs="eq"] .eq-pro {
+  position: relative;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 75%, transparent), 0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: box-shadow 0.2s;
+}
+.bank[data-knobs="stems"] .stems-row::before,
+.bank[data-knobs="eq"] .eq-pro::before {
+  content: "KNOBS";
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 0 5px;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 13px;
+  border-radius: 3px;
+  color: #06060a;
+  background: var(--accent);
+  pointer-events: none;
+}
+/* The EQ panel clips its overflow, so its tag sits just INSIDE the top edge, in the empty middle of
+   the MID·BELL / OUT label row. */
+.bank[data-knobs="eq"] .eq-pro::before { top: 3px; }

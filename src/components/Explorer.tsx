@@ -95,6 +95,7 @@ export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, on
       onSubmitSearch={run}
       // The same field as every other view: Cached / Stemmed narrow search results too.
       cacheFilter
+      stateKey="search"
       searching={searching}
       initialQuery={saved.query}
       searchPlaceholder="Search YouTube, or paste a video / playlist link…"

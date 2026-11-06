@@ -791,6 +791,12 @@ function AppBody() {
   const [eqStemMode, setEqStemMode] = useState(false);
   const eqStemModeRef = useRef(false);
   useEffect(() => { eqStemModeRef.current = eqStemMode; }, [eqStemMode]);
+  // ★ WHAT THE HARDWARE KNOBS DRIVE, ON SCREEN (operator, 2026-11-06: "some kind of indicator in
+  // board mode that shows whether im in eq mode or stem volume mode"). The SMART CFX lamp cannot say
+  // it: lighting it (0x7F on 0x96/0x00) engages Pioneer's own Smart CFX, which remaps the COLOR knob
+  // onto the trim CC — the "midi comms" breakage — so it is forced dark (see the feedback push).
+  // Instead the deck banks ring the row the knobs drive. Only with a controller connected: without
+  // one there are no knobs to describe.
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -2928,6 +2934,7 @@ function AppBody() {
     const iv = setInterval(push, 150);
     return () => clearInterval(iv);
   }, [engine, settings.midiEnabled, midi.status.state, midi.setFeedback, midi.send]);
+  const knobsOn: "eq" | "stems" | undefined = settings.midiEnabled && midi.status.state === "connected" ? (eqStemMode ? "stems" : "eq") : undefined;
   // A user picking a track hands it to the audio master via a load intent (the master
   // does the real streaming / decode / playback / stems); we also load locally for our
   // own waveform. Remote-driven loads go through applyIntent and DON'T re-emit.
@@ -4141,6 +4148,7 @@ function AppBody() {
             accent={ACCENT.A}
             otherDeck={engine.deckB}
             otherAccent={ACCENT.B}
+            knobs={knobsOn}
             focused={focused === "A"}
             onFocus={() => setFocused("A")}
             expanded={expandedLane === "A"}
@@ -4171,6 +4179,7 @@ function AppBody() {
             accent={ACCENT.B}
             otherDeck={engine.deckA}
             otherAccent={ACCENT.A}
+            knobs={knobsOn}
             focused={focused === "B"}
             onFocus={() => setFocused("B")}
             expanded={expandedLane === "B"}

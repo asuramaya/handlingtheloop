@@ -129,3 +129,28 @@ describe("MidiEngine — replay a captured fixture", () => {
     ]);
   });
 });
+
+describe("MidiEngine — FLX4 channel level meters", () => {
+  it("setMeter drives CC 0x02 on each deck's channel, clamped, and only on change", async () => {
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    sent.length = 0; // drop the handshake / keep-alive
+    engine.setMeter("A", 64);
+    engine.setMeter("A", 64.2); // same LED step: nothing sent
+    engine.setMeter("B", 300); // clamped
+    engine.setMeter("A", -5); // clamped
+    const meters = sent.filter((b) => (b[0] === 0xb0 || b[0] === 0xb1) && b[1] === 0x02);
+    expect(meters).toEqual([
+      [0xb0, 0x02, 64],
+      [0xb1, 0x02, 127],
+      [0xb0, 0x02, 0],
+    ]);
+  });
+});

@@ -99,6 +99,9 @@ export interface DeviceProfile {
   // Per-deck status bytes for OUTPUT (LED) messages.
   noteStatus?: Record<DeckId, number>; // button LEDs (e.g. {A:0x90, B:0x91})
   padStatus?: Record<DeckId, number>; // hot-cue pad LEDs (e.g. {A:0x97, B:0x99})
+  /** The channel LEVEL METER (VU) LEDs: a CC per deck, value 0–127 = how much of the column is lit.
+   *  Output-only: no button, no firmware toggle state to desync (unlike the SMART CFX lamp). */
+  meter?: { status: Record<DeckId, number>; data: number };
   feedback?: MidiFeedbackMap;
   // SysEx sent once on connect AND repeated on `keepAliveMs` to keep some Pioneer
   // gear awake / streaming (the "rekordbox handshake"). Needs sysex permission.

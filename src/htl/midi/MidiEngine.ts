@@ -230,6 +230,7 @@ export class MidiEngine {
     // port would loop our LED messages straight back in as fake button presses.
     this.outputs = Array.from(this.access.outputs.values()).filter((o) => !isVirtualPort(o.name));
     this.profile = profile;
+    this.lastMeter = { A: -1, B: -1 }; // a (re)connected board starts dark — resend whatever is current
     this.buildIndex();
     this.startKeepAlive();
     this.opts.onStatus({ state: "connected", device: chosen?.name ?? null, profile: profile?.name ?? null });
@@ -602,6 +603,21 @@ export class MidiEngine {
         // sysex permission was denied — keep-alive unavailable (degraded, non-fatal).
       }
     }
+  }
+
+  // --- Level meters ---
+  private lastMeter: Record<DeckId, number> = { A: -1, B: -1 };
+  /** Drive a deck's channel level meter (0–127). Diffed, so a steady level costs nothing on the wire. */
+  setMeter(deck: DeckId, value: number): void {
+    const m = this.profile?.meter;
+    if (!m || !this.outputs.length) return;
+    const v = Math.max(0, Math.min(127, Math.round(value)));
+    if (v === this.lastMeter[deck]) return;
+    this.lastMeter[deck] = v;
+    this.send([m.status[deck], m.data, v]);
+  }
+  hasMeter(): boolean {
+    return !!this.profile?.meter;
   }
 
   // --- LED feedback ---

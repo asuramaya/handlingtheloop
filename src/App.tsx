@@ -2934,6 +2934,32 @@ function AppBody() {
     const iv = setInterval(push, 150);
     return () => clearInterval(iv);
   }, [engine, settings.midiEnabled, midi.status.state, midi.setFeedback, midi.send]);
+  // ★ THE BOARD'S VU METERS (operator, 2026-11-06: "i also want to use the vu meters for each
+  // channel"). Each deck's post-fader peak (Deck.meterStereo, the louder side) drives its channel's
+  // level-meter LEDs at ~25 Hz with meter ballistics: instant attack, a steady fall, so the column
+  // reads like a real meter instead of flickering with every sample frame. −48 dBFS lights nothing,
+  // 0 dBFS lights the whole column. MidiEngine.setMeter diffs, so silence costs no traffic.
+  useEffect(() => {
+    if (!settings.midiEnabled || midi.status.state !== "connected") return;
+    const held: Record<DeckId, number> = { A: 0, B: 0 };
+    const FLOOR = -48;
+    const tick = () => {
+      for (const id of ["A", "B"] as const) {
+        const d = engine.deck(id);
+        const m = d.playing ? d.meterStereo() : { l: -100, r: -100 };
+        const db = Math.max(m.l, m.r);
+        const target = db <= FLOOR ? 0 : Math.min(1, (db - FLOOR) / -FLOOR);
+        held[id] = target >= held[id] ? target : Math.max(target, held[id] - 0.06); // fall ~1.5 col/s
+        midi.setMeter(id, held[id] * 127);
+      }
+    };
+    const iv = setInterval(tick, 40);
+    return () => {
+      clearInterval(iv);
+      midi.setMeter("A", 0);
+      midi.setMeter("B", 0);
+    };
+  }, [engine, settings.midiEnabled, midi.status.state, midi.setMeter]);
   const knobsOn: "eq" | "stems" | undefined = settings.midiEnabled && midi.status.state === "connected" ? (eqStemMode ? "stems" : "eq") : undefined;
   // A user picking a track hands it to the audio master via a load intent (the master
   // does the real streaming / decode / playback / stems); we also load locally for our

@@ -696,7 +696,7 @@ export class MidiEngine {
     const v = Math.max(0, Math.min(127, Math.round(value)));
     if (v === this.lastMeter[deck]) return;
     this.lastMeter[deck] = v;
-    this.send([m.status[deck], m.data, v]);
+    this.send([m.status[deck], m.data, v], false); // ~50 msg/s: kept out of the Debug log, which holds 32
   }
   hasMeter(): boolean {
     return !!this.profile?.meter;
@@ -741,9 +741,11 @@ export class MidiEngine {
     this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues] };
   }
 
-  private send(bytes: number[]): void {
-    this.outMon.push({ bytes: bytes.slice(0, 16), seq: ++this.outSeq });
-    if (this.outMon.length > MON_MAX) this.outMon.shift();
+  private send(bytes: number[], log = true): void {
+    if (log) {
+      this.outMon.push({ bytes: bytes.slice(0, 16), seq: ++this.outSeq });
+      if (this.outMon.length > MON_MAX) this.outMon.shift();
+    }
     for (const out of this.outputs) {
       try {
         out.send(bytes);

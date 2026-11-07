@@ -1026,7 +1026,8 @@ function AppBody() {
       if (kind) fxCtlFor(id)?.selectKind(kind); // press IS reveal
     };
     const fxKeyUp = (deck: DeckRef, id: DeckId, i: number) => {
-      if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
+      const rel = fxPadRelease(deck, id, i);
+      if (rel) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i, rel === "alt") });
     };
     const padModeKey = (deck: DeckRef, id: DeckId, m: PadMode) => {
       if (PAD_MODE_RESERVED.has(m)) return; // KEY isn't built yet — match the on-screen disabled state

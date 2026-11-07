@@ -254,7 +254,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
   const fxPadUp = (slot: number, el?: HTMLElement) => {
     if (locked) return; // watch-only: see the lock note above changePadMode
-    if (fxPadRelease(deck, id, slot)) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
+    const rel = fxPadRelease(deck, id, slot);
+    if (rel) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot, rel === "alt") });
     // ★ Drop the focus a click leaves behind. Chrome shows :focus-visible on the last-clicked
     // element the moment you touch the KEYBOARD — so clicking a pad and then playing the bank
     // from 1-8 painted a focus ring on whichever pad you happened to click last, which reads as

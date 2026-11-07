@@ -1,3 +1,4 @@
+import type { ScratchKind } from "./scratchPatterns";
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
 import { perfWork } from "../debug/perfCapture";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
@@ -250,7 +251,7 @@ export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
 export const PAD_MODE_RESERVED = new Set<PadMode>();
 
 /** The FX2 deck moves that run on the move stack (see Deck.moveDown). */
-export type MoveKind = "censor" | "brake" | "spin" | "freeze";
+export type MoveKind = "censor" | "brake" | "spin" | "freeze" | ScratchKind;
 
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
@@ -1867,7 +1868,11 @@ export class Deck {
       this._freezeAt = from;
       this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
     } else {
-      this.jog.moveEnter(k, from);
+      // Scratch patterns lock to the grid: the track-seconds of a beat and where in the beat `from` is.
+      const g = this.beatgrid;
+      const interval = g?.interval || 0.5;
+      const phase0 = g ? (((from - g.firstBeat) / interval) % 1 + 1) % 1 : 0;
+      this.jog.moveEnter(k, from, { interval, phase0 });
     }
   }
   /** Stop the sounding move WITHOUT landing; returns where its audio got to. */

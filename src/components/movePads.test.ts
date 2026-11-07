@@ -3,7 +3,7 @@ import { MOVE_PADS } from "./movePads";
 import { fireFxPadArg, fxPadPress, fxPadRelease, padsForDeck } from "./fxPads";
 import type { Deck } from "@htl/audio";
 
-// FX2 = deck moves (operator, 2026-11-07): SPIN · CENSOR · BRAKE · CUT / — · FREEZE · — · —.
+// FX2 = deck moves (operator, 2026-11-07): FREEZE · CENSOR · BRAKE · CUT / SPIN · BABY · SCRIBBLE · TEAR.
 // Every move but CUT runs on the deck's move stack (moveDown / moveUp — see moveStack.test.ts).
 function fakeDeck(padMode = "fx2") {
   const held = new Set<string>();
@@ -22,8 +22,24 @@ function fakeDeck(padMode = "fx2") {
 const D = (d: ReturnType<typeof fakeDeck>) => d as unknown as Deck;
 
 describe("FX2 moves", () => {
-  it("the bank: SPIN · CENSOR · BRAKE · CUT / — · FREEZE · — · —", () => {
-    expect(padsForDeck(D(fakeDeck())).map((p) => p?.label ?? null)).toEqual(["SPIN", "CENSOR", "BRAKE", "CUT", null, "FREEZE", null, null]);
+  it("the bank: FREEZE · CENSOR · BRAKE · CUT / SPIN · BABY · SCRIBBLE · TEAR", () => {
+    expect(padsForDeck(D(fakeDeck())).map((p) => p?.label ?? null)).toEqual(["FREEZE", "CENSOR", "BRAKE", "CUT", "SPIN", "BABY", "SCRIBBLE", "TEAR"]);
+  });
+
+  it("a scratch pad: the plain pattern while held, its pair under SHIFT (also held)", () => {
+    const d = fakeDeck();
+    fxPadPress(D(d), "Y", 5); // BABY
+    fxPadRelease(D(d), "Y", 5);
+    expect(fxPadPress(D(d), "Y", 5, true)).toMatchObject({ fired: true, alt: true }); // SHIFT → DRAG
+    expect(fxPadRelease(D(d), "Y", 5)).toBe("alt");
+    expect(d.calls).toEqual(["down baby", "up baby", "down drag", "up drag"]);
+  });
+
+  it("the SHIFT pair crosses the wire as the pad's alt layer, down AND up", () => {
+    const d = fakeDeck("cue");
+    fireFxPadArg(D(d), "@moves:7!", true);
+    fireFxPadArg(D(d), "@moves:7!", false);
+    expect(d.calls).toEqual(["down stab", "up stab"]);
   });
 
   it("a move pad is a held stack move: down on press, up on release", () => {
@@ -47,31 +63,25 @@ describe("FX2 moves", () => {
 
   it("a received move fires on the receiver even when it sits in another bank", () => {
     const d = fakeDeck("cue");
-    fireFxPadArg(D(d), "@moves:5", true);
-    fireFxPadArg(D(d), "@moves:5", false);
+    fireFxPadArg(D(d), "@moves:0", true);
+    fireFxPadArg(D(d), "@moves:0", false);
     expect(d.calls).toEqual(["down freeze", "up freeze"]);
-  });
-
-  it("an empty slot on the wire does nothing", () => {
-    const d = fakeDeck("cue");
-    fireFxPadArg(D(d), "@moves:4", true);
-    expect(d.calls).toEqual([]);
   });
 });
 
 describe("FX2 SHIFT + SPIN", () => {
   it("is a real backspin (playhead goes back), fired on the press, inert on release", () => {
     const d = fakeDeck();
-    const r = fxPadPress(D(d), "Z", 0, true);
+    const r = fxPadPress(D(d), "Z", 4, true);
     expect(r).toMatchObject({ fired: true, alt: true });
-    expect(fxPadRelease(D(d), "Z", 0)).toBe(false);
+    expect(fxPadRelease(D(d), "Z", 4)).toBe(false);
     expect(d.calls).toEqual(["spinback"]);
   });
 
   it("crosses the wire as its own gesture, so a co-DJ hears the real backspin too", () => {
     const d = fakeDeck("cue");
-    fireFxPadArg(D(d), "@moves:0!", true);
-    fireFxPadArg(D(d), "@moves:0!", false);
+    fireFxPadArg(D(d), "@moves:4!", true);
+    fireFxPadArg(D(d), "@moves:4!", false);
     expect(d.calls).toEqual(["spinback"]);
   });
 });

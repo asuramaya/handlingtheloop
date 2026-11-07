@@ -1,3 +1,4 @@
+import { scratchOffset, type ScratchKind } from "./scratchPatterns";
 import { lerp } from "../../util/math";
 
 // The transport surface the jog physics drives. Deck implements this with bound
@@ -165,7 +166,7 @@ export class JogEngine {
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
 
-  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
+  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" | "pattern" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
@@ -517,7 +518,10 @@ export class JogEngine {
   //   censor = reverse at the play rate · brake = a friction ramp to rest · spin = a backspin
   //   winding down to rest (the old spinback rewound and PLAYED ON from there, landing early).
   private _moveDriven = false;
-  moveEnter(kind: "censor" | "brake" | "spin", pos: number) {
+  /** A scratch pattern in flight: offsets come from scratchOffset(kind, beats since the press, plus
+   *  the beat phase it was pressed on), in track-seconds of `interval` per beat. */
+  private pattern: { kind: ScratchKind; anchor: number; t0: number; beatReal: number; interval: number; phase0: number; base: number } | null = null;
+  moveEnter(kind: "censor" | "brake" | "spin" | ScratchKind, pos: number, beat?: { interval: number; phase0: number }) {
     if (!this.host.loaded()) return;
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.host.clearBend();
@@ -538,13 +542,27 @@ export class JogEngine {
       this.startJogLoop();
     } else if (kind === "brake") {
       this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
-    } else {
+    } else if (kind === "spin") {
       this.enterMotorCoast(-this.backSpinStrength(), false, this.backSpinTau(), "spinback");
+    } else {
+      // A scratch pattern: phase-locked to the grid (it starts where the beat is, not at a fresh 0),
+      // continuous at the press (the curve is taken relative to its value at that phase).
+      const interval = beat?.interval ?? 0.5;
+      const phase0 = beat?.phase0 ?? 0;
+      this.pattern = { kind, anchor: pos, t0: this.ctx.currentTime, beatReal: interval / Math.max(0.05, this.host.rate()), interval, phase0, base: scratchOffset(kind, phase0) };
+      this.jogVel = 0;
+      this.handVel = 0;
+      this.jogInputAt = this.ctx.currentTime;
+      this.jogLast = this.ctx.currentTime;
+      this.jogPhase = "pattern";
+      this.scratchStart();
+      this.startJogLoop();
     }
   }
   /** Stop a move's platter motion where it is, without landing. Returns where the audio got to. */
   moveExit(): number {
     this._moveDriven = false;
+    this.pattern = null;
     if (this.jogRaf) {
       if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.jogRaf);
       this.jogRaf = 0;
@@ -633,6 +651,13 @@ export class JogEngine {
         dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
         if (phase === "grab") {
           this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
+        } else if (phase === "pattern" && this.pattern) {
+          const pt = this.pattern;
+          const beats = (now - pt.t0) / pt.beatReal + pt.phase0;
+          this.jogPos = this.wrapLoop(pt.anchor + (scratchOffset(pt.kind, beats) - pt.base) * pt.interval);
+          this.clampJog();
+          this.host.setStartOffset(this.jogPos);
+          this.scratchMove();
         } else if (phase === "reverse") {
           // Drive the platter backward at the set tempo; voice it on the resampler.
           // Reverse only ever runs on a playing deck (reverseStart requires it), so an
@@ -659,6 +684,7 @@ export class JogEngine {
   // action (play/pause/seek/cue) simply takes over from where it is.
   cancelJog() {
     this._moveDriven = false; // a transport action ends any held FX2 move
+    this.pattern = null;
     if (this.jogPhase === "off") return;
     this.jogPhase = "off";
     if (this.jogRaf) {

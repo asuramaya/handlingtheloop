@@ -1280,7 +1280,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fillRect(x0, 0, Math.max(x1 - x0, dpr), h);
       ctx.fillStyle = rgba(p.selectorColor, 0.55);
       for (let y = 0; y < h; y += 6 * dpr) ctx.fillRect(gx - dpr, y, 2 * dpr, 3 * dpr); // dashed ghost
-      const label = move.toUpperCase();
+      const label = move === "hydro" ? "HYDROPLANE" : move.toUpperCase();
       ctx.font = `700 ${Math.round(10 * dpr)}px system-ui, sans-serif`;
       ctx.textBaseline = "top";
       const tw = ctx.measureText(label).width;

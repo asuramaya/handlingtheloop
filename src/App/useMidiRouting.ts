@@ -259,7 +259,8 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
                 // key use — quick release latches, held release lets go — instead of fx2 being the
                 // only surface that could hold. The press half already shares it: MIDI routes
                 // hotcueN through the same HANDLERS entry the keyboard does.
-                if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
+                const rel = fxPadRelease(deck, id, i);
+                if (rel) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i, rel === "alt") });
                 refresh();
               }
             }

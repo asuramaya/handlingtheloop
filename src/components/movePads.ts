@@ -7,10 +7,10 @@ import type { FxPadDef } from "./fxPads";
 // chain's effects; FX2 is eight DECK MOVES:
 //   SPIN · CENSOR · BRAKE, the rest still to be decided.
 // Same gesture as every FX pad (fxPads): a plain press is live while held, SHIFT+press latches.
-// A one-shot (SPIN) simply fires on the press.
+// All three are SLIP overlays: the track keeps going underneath and the release lands on it.
 
 export const MOVE_PADS: (FxPadDef | null)[] = [
-  { label: "SPIN", hold: false, on: (d) => d.spinback(), hint: "Backspin — the record spun back, then playback carries on" },
+  { label: "SPIN", hold: true, on: (d) => d.spinBegin(), off: (d) => d.spinEnd(), active: (d) => d.spinning, hint: "Backspin while held; on release it lands where the track would be, on the beat" },
   { label: "CENSOR", hold: true, on: (d) => d.censorBegin(), off: (d) => d.censorEnd(), active: (d) => d.reversing, hint: "Reverse while held; on release it lands where the track would be" },
   { label: "BRAKE", hold: true, on: (d) => d.brakeBegin(), off: (d) => d.brakeEnd(), active: (d) => d.braking, hint: "Power down while held; on release it lands where the track would be and keeps playing" },
   // 3–7: to be decided (operator, 2026-11-07: "the rest are tbd but tying them to fx doesnt really

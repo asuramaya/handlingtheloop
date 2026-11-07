@@ -12,8 +12,21 @@ function fakeDeck(padMode = "fx2") {
     brakeBegin() { this.calls.push("brakeBegin"); this.braking = true; },
     brakeEnd() { this.calls.push("brakeEnd"); this.braking = false; },
     pause() { this.calls.push("pause"); },
+    spinBegin() { this.calls.push("spinBegin"); },
+    spinEnd() { this.calls.push("spinEnd"); },
   };
 }
+
+describe("FX2 SPIN", () => {
+  it("is a held slip move too: backspin on press, land on the beat on release", () => {
+    const d = fakeDeck();
+    const spin = MOVE_PADS[0]!;
+    expect(spin.hold).toBe(true);
+    spin.on(d as unknown as Deck);
+    spin.off!(d as unknown as Deck);
+    expect(d.calls).toEqual(["spinBegin", "spinEnd"]);
+  });
+});
 
 describe("FX2 moves", () => {
   it("FX2 holds SPIN, CENSOR and BRAKE; the other five slots are empty", () => {

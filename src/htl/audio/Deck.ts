@@ -1802,13 +1802,36 @@ export class Deck {
   /** SLIP BRAKE (the FX2 pad): power down while held, then land where the track would be and
    *  keep playing — a momentary overlay like CENSOR, never a stop. */
   brakeBegin() {
-    this.jog.brakeHoldStart();
+    this.jog.motorHoldStart("brake");
   }
   brakeEnd() {
-    this.jog.brakeHoldEnd();
+    this.jog.motorHoldEnd();
   }
   get braking() {
-    return this.jog.brakeHolding;
+    return this.jog.holdKind === "brake";
+  }
+  /** SLIP SPIN (the FX2 pad): a backspin that winds down while held, then lands on the beat. */
+  spinBegin() {
+    this.jog.motorHoldStart("spin");
+  }
+  spinEnd() {
+    this.jog.motorHoldEnd();
+  }
+  get spinning() {
+    return this.jog.holdKind === "spin";
+  }
+  /** The slip overlay in flight — a held CENSOR, BRAKE or SPIN whose shadow is armed — or null.
+   *  While it runs the track is still going underneath; the waveform follows that, not the audio. */
+  get slipMove(): "censor" | "brake" | "spin" | null {
+    if (!this.slipAnchor) return null;
+    if (this.jog.reversing) return "censor";
+    const k = this.jog.holdKind;
+    return k === "brake" ? "brake" : k === "spin" ? "spin" : null;
+  }
+  /** Where the track would be now under a slip overlay (the shadow), WITHOUT consuming it. */
+  slipShadow(): number | null {
+    const a = this.slipAnchor;
+    return a ? this.shadowOf(a.pos, a.t) : null;
   }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.

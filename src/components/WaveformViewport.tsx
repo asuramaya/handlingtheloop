@@ -883,7 +883,16 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // deep-zoom overlay is separately, null-safely guarded below.
     if (!p.pyramid && !deck.stemPyramids) return;
 
-    const pos = deck.visualPosition();
+    // ★ A SLIP MOVE DOES NOT STOP THE PLAYHEAD (operator, 2026-11-07: "fix the playhead so it
+    // continues and does not stop, visible instead of silent … maybe add some kind of visual layer
+    // on top that marks the effect"). During a held CENSOR / BRAKE / SPIN the track keeps going
+    // underneath and the release lands there, so THAT is the playhead: the view follows the slip
+    // shadow, and the audio's own position (reversing, braking, spinning back) is drawn as a ghost
+    // with the move's band between the two (below).
+    const audible = deck.visualPosition();
+    const move = deck.slipMove;
+    const shadow = move ? deck.slipShadow() : null;
+    const pos = shadow ?? audible;
     const r = Math.max(deck.rate, 0.01);
     const trackWindow = (localWin.current ?? p.windowSec) * r;
     const left = pos - trackWindow / 2;
@@ -1258,6 +1267,26 @@ export function WaveformViewport(props: WaveformViewportProps) {
       if (t != null) flag(t, CUE_COLORS[i % CUE_COLORS.length], String(i + 1));
     });
 
+    // The slip move's layer: a tinted band from where the audio IS to where the track IS, the
+    // audio's ghost line, and the move's name, so the effect reads at a glance.
+    if (move && shadow != null) {
+      const gx = Math.max(-2 * dpr, Math.min(w + 2 * dpr, toX(audible)));
+      const x0 = Math.min(gx, w / 2), x1 = Math.max(gx, w / 2);
+      ctx.fillStyle = rgba(p.accent, 0.16);
+      ctx.fillRect(0, 0, w, h); // the whole lane carries the move, lightly
+      ctx.fillStyle = rgba(p.accent, 0.3);
+      ctx.fillRect(x0, 0, Math.max(x1 - x0, dpr), h);
+      ctx.fillStyle = rgba(p.selectorColor, 0.55);
+      for (let y = 0; y < h; y += 6 * dpr) ctx.fillRect(gx - dpr, y, 2 * dpr, 3 * dpr); // dashed ghost
+      const label = move === "censor" ? "CENSOR" : move === "brake" ? "BRAKE" : "SPIN";
+      ctx.font = `700 ${Math.round(10 * dpr)}px system-ui, sans-serif`;
+      ctx.textBaseline = "top";
+      const tw = ctx.measureText(label).width;
+      const lx = Math.min(w - tw - 4 * dpr, w / 2 + 5 * dpr);
+      ctx.fillStyle = rgba(p.accent, 0.95);
+      ctx.fillText(label, lx, 4 * dpr);
+    }
+
     // Centre playhead.
     ctx.fillStyle = p.selectorColor;
     ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
@@ -1276,7 +1305,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       dirty.current = true;
     };
     const loop = () => {
-      if (deck.visualPlaying || deck.jogging || deck.adjusting || dirty.current) {
+      if (deck.visualPlaying || deck.jogging || deck.slipMove || deck.adjusting || dirty.current) {
         dirty.current = false;
         const t = performance.now();
         draw();

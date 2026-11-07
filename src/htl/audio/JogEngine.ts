@@ -509,19 +509,25 @@ export class JogEngine {
   // down; released, playback snaps to where the track would be had it never braked (the slip
   // shadow, armed regardless of the slip toggle) and carries on. The board's RELEASE FX brake
   // (brakeNow) still stops the deck — that one is a stop.
-  private _brakeHold = false;
-  get brakeHolding() {
-    return this._brakeHold;
+  // ★ AND SPIN IS THE SAME OVERLAY (operator, 2026-11-07: "the spin needs work … spin normal and
+  // shifted sound weird"). The old spinback rewound and then the motor caught the platter and PLAYED
+  // ON FROM WHERE THE REWIND LEFT IT, so every spin landed a beat or so early, off the grid. Held now,
+  // it is a backspin that winds down to rest; released, it lands on the slip shadow, on the beat.
+  private _hold: "brake" | "spin" | null = null;
+  /** The held slip move in flight (FX2 BRAKE / SPIN), or null. */
+  get holdKind() {
+    return this._hold;
   }
-  brakeHoldStart() {
-    if (this._brakeHold || !this.host.playing() || this.jogPhase === "reverse") return;
+  motorHoldStart(kind: "brake" | "spin") {
+    if (this._hold || !this.host.playing() || this.jogPhase === "reverse") return;
     this.host.slipArmForce(); // anchor the shadow while the deck is still playing
-    this._brakeHold = true;
-    this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+    this._hold = kind;
+    if (kind === "brake") this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+    else this.enterMotorCoast(-this.backSpinStrength(), false, this.backSpinTau(), "spinback"); // backward, winding down to rest
   }
-  brakeHoldEnd() {
-    if (!this._brakeHold) return;
-    this._brakeHold = false;
+  motorHoldEnd() {
+    if (!this._hold) return;
+    this._hold = null;
     const pos = this.host.slipReleasePos();
     // Mid-ramp or already settled at rest: either way the resampler lets go of the audio.
     this.jogPhase = "off";

@@ -77,6 +77,7 @@ class Stretch extends AudioWorkletProcessor {
     this.grainStart = 0;     // last grain read position (source samples)
     this.naturalNext = 0;    // source idx the next grain should continue from
     this.loopActive = false; this.loopStart = 0; this.loopEnd = 0;
+    this.loopWrap = false; this.loopStartI = 0; this.loopLenI = 0;
     // intermediate FIFO (stretched, pre-resample)
     this.ringL = new Float32Array(RING); this.ringR = new Float32Array(RING);
     this.wHead = 0; this.rHead = 0; // FIFO write (int) / read (frac) cursors
@@ -237,6 +238,10 @@ class Stretch extends AudioWorkletProcessor {
       this.playing = false; this.gainTarget = 0;
     } else if (d.type === 'loop') {
       this.loopActive = !!d.active; this.loopStart = (d.start || 0) * this.sr; this.loopEnd = (d.end || 0) * this.sr;
+      // Integer loop window for the grain READS (see wrapIdx): only a real, non-degenerate loop wraps.
+      this.loopStartI = Math.round(this.loopStart);
+      this.loopLenI = Math.max(0, Math.round(this.loopEnd) - this.loopStartI);
+      this.loopWrap = this.loopActive && this.loopLenI > 0;
     } else if (d.type === 'taps') {
       this.setTaps(!!d.on);
     } else if (d.type === 'stemGain') {
@@ -296,7 +301,19 @@ class Stretch extends AudioWorkletProcessor {
     this.refreshTarget();
   }
   // mono(idx): gain-weighted L+R sum across groups, bounds-clamped to silence.
+  // ★ A LOOP'S GRAINS READ ONLY THE LOOP (operator, 2026-11-06: "super short loops bug out … at
+  // 1/16 or shorter it kind of breaks"). The clock wrapped at loopEnd, but every grain (WSOLA: FS +
+  // its search; PV: the FFT frame) read the track LINEARLY from where it started, so a grain near the
+  // seam played the audio AFTER the loop. On Balanced that is up to ~25 ms of it: a little smear on a
+  // long loop, most of the sound on a 1/16 (~29 ms at 128 bpm). Every source read in a loop now folds
+  // back into [loopStart, loopEnd), so the signal a grain sees is the loop repeated, the true source.
+  wrapIdx(si) {
+    const ls = this.loopStartI, L = this.loopLenI;
+    if (si >= ls && si < ls + L) return si;
+    return ls + ((((si - ls) % L) + L) % L);
+  }
   mono(idx) {
+    if (this.loopWrap) idx = this.wrapIdx(idx);
     if (idx < 0 || idx >= this.length) return 0;
     let s = 0;
     for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) s += ga * (this.gL[g][idx] + this.gR[g][idx]); }
@@ -383,8 +400,9 @@ class Stretch extends AudioWorkletProcessor {
     const olaL = this.olaL, olaR = this.olaR, len = this.length, scale = this.pcmScale;
     if (!this.taps) {
       // The hot path, byte-for-byte what it always was: one gain-weighted sum per sample.
+      const wrap = this.loopWrap;
       for (let i = 0; i < FS; i++) {
-        const si = gs + i; const w = win[i];
+        const si = wrap ? this.wrapIdx(gs + i) : gs + i; const w = win[i];
         if (si >= 0 && si < len) {
           let l = 0, r = 0;
           for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) { l += ga * this.gL[g][si]; r += ga * this.gR[g][si]; } }
@@ -394,9 +412,9 @@ class Stretch extends AudioWorkletProcessor {
     } else {
       // Tapped: the same window over the same grain, kept SEPARATE per group. The main
       // accumulator still gets the sum, in the same order, so the main output is unchanged.
-      const tL = this.tapOlaL, tR = this.tapOlaR, nG = this.nG;
+      const tL = this.tapOlaL, tR = this.tapOlaR, nG = this.nG, wrap = this.loopWrap;
       for (let i = 0; i < FS; i++) {
-        const si = gs + i; const w = win[i];
+        const si = wrap ? this.wrapIdx(gs + i) : gs + i; const w = win[i];
         if (si >= 0 && si < len) {
           const ws = w * scale;
           let l = 0, r = 0;
@@ -495,8 +513,9 @@ class Stretch extends AudioWorkletProcessor {
   pvSpectrum(ch, base) {
     const N = this.pvN, win = this.pvWin, re = this.fre, im = this.fim, scale = this.pcmScale;
     const src = ch === 0 ? this.gL : this.gR, len = this.length, nG = this.nG;
+    const wrap = this.loopWrap;
     for (let i = 0; i < N; i++) {
-      const si = base + i; let acc = 0;
+      const si = wrap ? this.wrapIdx(base + i) : base + i; let acc = 0;
       if (si >= 0 && si < len) { for (let g = 0; g < nG; g++) { const ga = this.gain_[g]; if (ga) acc += ga * src[g][si]; } }
       re[i] = win[i] * acc * scale; im[i] = 0;
     }

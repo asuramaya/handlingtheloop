@@ -1799,6 +1799,17 @@ export class Deck {
   releaseBrake() {
     this.jog.brakeNow();
   }
+  /** SLIP BRAKE (the FX2 pad): power down while held, then land where the track would be and
+   *  keep playing — a momentary overlay like CENSOR, never a stop. */
+  brakeBegin() {
+    this.jog.brakeHoldStart();
+  }
+  brakeEnd() {
+    this.jog.brakeHoldEnd();
+  }
+  get braking() {
+    return this.jog.brakeHolding;
+  }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.
   // (The viewport only grabs the platter once the finger actually moves, so a tap

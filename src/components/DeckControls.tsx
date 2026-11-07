@@ -675,10 +675,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             not follow it — the one place the two can disagree, and an unlabelled disagreement is
             how this bank accumulated three contradictory comments in the first place (9ee26ff4).
             Until 2026-09-10 this was an exact duplicate of the bank above. */}
-        {/* FX2 = THE MOVES BANK (movePads.ts): eight deck moves, not effects. SPIN · CENSOR · BRAKE ·
-            ECHO OUT over FILTER OUT · BASS CUT · STUTTER · WASH. Same gesture as the FX bank. */}
+        {/* FX2 = deck moves, not effects (movePads.ts): SPIN · CENSOR · BRAKE, the rest to be decided.
+            Same gesture as the FX bank. */}
         {deck.padMode === "fx2" && (
-        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef} data-bank="MOVES">
+        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `e${i}`}

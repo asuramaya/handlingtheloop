@@ -504,6 +504,37 @@ export class JogEngine {
     this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
   }
 
+  // ★ SLIP BRAKE (operator, 2026-11-07: "brake has to work like censor where it doesnt actually
+  // pause the track"). The pad brake is a momentary OVERLAY, like CENSOR: held, the platter powers
+  // down; released, playback snaps to where the track would be had it never braked (the slip
+  // shadow, armed regardless of the slip toggle) and carries on. The board's RELEASE FX brake
+  // (brakeNow) still stops the deck — that one is a stop.
+  private _brakeHold = false;
+  get brakeHolding() {
+    return this._brakeHold;
+  }
+  brakeHoldStart() {
+    if (this._brakeHold || !this.host.playing() || this.jogPhase === "reverse") return;
+    this.host.slipArmForce(); // anchor the shadow while the deck is still playing
+    this._brakeHold = true;
+    this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+  }
+  brakeHoldEnd() {
+    if (!this._brakeHold) return;
+    this._brakeHold = false;
+    const pos = this.host.slipReleasePos();
+    // Mid-ramp or already settled at rest: either way the resampler lets go of the audio.
+    this.jogPhase = "off";
+    this._ramping = null;
+    this._coastTau = 0;
+    this.jogVel = 0;
+    this.scratchStop();
+    if (pos == null) return;
+    this.host.setStartOffset(pos);
+    this.host.spawnSource(pos);
+    this.host.setPlaying(true);
+  }
+
   /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
    *  time, then hand to normal playback. Falls back to instant play() when off. */
   softStart() {

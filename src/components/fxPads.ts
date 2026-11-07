@@ -76,7 +76,7 @@ function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
  *  focused chain in FX, the master chain in FX2. A null slot is an empty slot — it is not a broken
  *  pad, it is a chain with room in it. */
 export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
-  if (deck.padMode === "fx2") return MOVE_PADS; // FX2 = the moves bank (movePads.ts), not a chain
+  if (deck.padMode === "fx2") return MOVE_PADS; // FX2 = the deck-moves bank (movePads.ts), not a chain
   const chain = deck.fxChain(deck.padChain) ?? deck.fxChain("master");
   const pads: (FxPadDef | null)[] = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? genericPad(deck, d.kind, d.kind.toUpperCase()));
   while (pads.length < 8) pads.push(null);

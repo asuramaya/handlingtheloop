@@ -249,6 +249,9 @@ export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
 // for the next reserved mode (was KEY, now retired).
 export const PAD_MODE_RESERVED = new Set<PadMode>();
 
+/** The FX2 deck moves that run on the move stack (see Deck.moveDown). */
+export type MoveKind = "censor" | "brake" | "spin" | "freeze";
+
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
@@ -1650,6 +1653,7 @@ export class Deck {
   }
 
   play() {
+    this.moveCancel();
     this.jog.cancelJog(); // a transport action wins over an in-flight platter coast
     this.clearBend();
     if (!this._loaded || this._playing) return;
@@ -1665,10 +1669,7 @@ export class Deck {
   pause() {
     this.jog.cancelJog();
     this.clearBend();
-    if (this._freezeAt != null) {
-      this._freezeAt = null;
-      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
-    }
+    this.moveCancel();
     if (!this._playing) return;
     this.startOffset = this.position();
     this.stopSource();
@@ -1690,6 +1691,7 @@ export class Deck {
   }
 
   seek(seconds: number) {
+    this.moveCancel(); // a jump ends any held FX2 move (no-op on the move stack's own landing)
     this.jog.cancelJog();
     this.clearBend();
     let target = Math.max(0, Math.min(this.duration, seconds));
@@ -1809,79 +1811,109 @@ export class Deck {
   releaseBrake() {
     this.jog.brakeNow();
   }
-  /** SLIP BRAKE (the FX2 pad): power down while held, then land where the track would be and
-   *  keep playing — a momentary overlay like CENSOR, never a stop. */
-  brakeBegin() {
-    this.jog.motorHoldStart("brake");
-  }
-  brakeEnd() {
-    this.jog.motorHoldEnd();
-  }
-  get braking() {
-    return this.jog.holdKind === "brake";
-  }
-  /** SLIP SPIN (the FX2 pad): a backspin that winds down while held, then lands on the beat. */
-  spinBegin() {
-    this.jog.motorHoldStart("spin");
-  }
-  spinEnd() {
-    this.jog.motorHoldEnd();
-  }
-  get spinning() {
-    return this.jog.holdKind === "spin";
-  }
-  /** WARP (the FX2 pad): the record wobbles in speed and pitch while held — ±WARP_DEPTH, one
-   *  swing every two beats — then lands where the track would be, on the beat. */
-  warpBegin() {
-    const beat = (this.beatgrid?.interval ?? 0.5) / Math.max(0.25, this._rate);
-    this.jog.warpStart(2 * beat, Deck.WARP_DEPTH);
-  }
-  warpEnd() {
-    this.jog.warpStop();
-  }
-  get warping() {
-    return this.jog.warping;
-  }
-  private static readonly WARP_DEPTH = 0.06;
-
-  /** FREEZE (the FX2 pad): the sound holds on this instant as a drone while held; the track keeps
-   *  going underneath (the deck clock never stops) and the release drops back in where it is. */
-  private _freezeAt: number | null = null;
-  freezeBegin() {
-    if (!this._playing || this._freezeAt != null || this.jogging) return;
-    this._freezeAt = this.position();
-    this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
-  }
-  freezeEnd() {
-    if (this._freezeAt == null) return;
-    this._freezeAt = null;
-    this.stretchNode?.port.postMessage({ type: "freeze", on: false });
-    if (this._playing) this.seek(this.position()); // declicked re-seat onto the running clock
-  }
-  get freezing() {
-    return this._freezeAt != null;
-  }
+  // ★ FX2 MOVES ARE A STACK — LAST PRESSED WINS (operator, 2026-11-07: "gotta solve the interaction
+  // when one is held and another is triggered"). Before, a second move was ignored (they all needed
+  // a normally-playing deck, which mid-move it is not) or fought the first (FREEZE + CENSOR left a
+  // stuck layer). Now, like a monophonic synth's note priority:
+  //   • pressing a move while another is held HANDS OVER at once, starting from where the audio is
+  //     (continuous), and the earlier one waits underneath;
+  //   • releasing the sounding move falls back to the most recent one still held;
+  //   • releasing the last lands on the beat.
+  // There is ONE slip shadow for the whole run, armed on the first press, so however many moves
+  // were chained the landing is where the track would be. (CUT is not a move here: it only mutes, so
+  // it layers over anything.)
+  private moveStack: MoveKind[] = [];
+  private moveActive: MoveKind | null = null;
+  private _freezeAt: number | null = null; // FREEZE's frozen instant while it sounds
   private static readonly FREEZE_SPRAY = 0.03; // s each grain may wander around the frozen instant
 
-  /** The slip overlay in flight — a held CENSOR, BRAKE, SPIN, WARP or FREEZE — or null. While it
-   *  runs the track is still going underneath; the waveform follows that, not the audio. */
-  get slipMove(): "censor" | "brake" | "spin" | "warp" | "freeze" | null {
-    if (this._freezeAt != null) return "freeze";
-    if (!this.slipAnchor) return null;
-    if (this.jog.reversing) return "censor";
-    if (this.jog.warping) return "warp";
-    const k = this.jog.holdKind;
-    return k === "brake" ? "brake" : k === "spin" ? "spin" : null;
+  /** A move pad went down. */
+  moveDown(k: MoveKind) {
+    if (this.moveStack.includes(k)) return;
+    let from: number;
+    if (this.moveActive) from = this.moveStop(this.moveActive);
+    else {
+      if (!this._loaded || !this._playing || this.jogging) return;
+      this.slipArmForce(); // the one shadow for the whole run
+      from = this.position();
+    }
+    this.moveStack.push(k);
+    this.moveGo(k, from);
   }
-  /** Where the track would be now under a slip overlay (the shadow), WITHOUT consuming it. A
-   *  FREEZE has no anchor: the deck clock never stopped, so the playhead itself is the track. */
+  /** A move pad came up. */
+  moveUp(k: MoveKind) {
+    const i = this.moveStack.indexOf(k);
+    if (i < 0) return;
+    this.moveStack.splice(i, 1);
+    if (this.moveActive !== k) return; // it was waiting underneath: just forget it
+    const from = this.moveStop(k);
+    const back = this.moveStack[this.moveStack.length - 1];
+    if (back) this.moveGo(back, from);
+    else this.moveLand(from);
+  }
+  /** Is this move held (sounding or waiting)? */
+  moveHeld(k: MoveKind): boolean {
+    return this.moveActive === k;
+  }
+  private moveGo(k: MoveKind, from: number) {
+    this.moveActive = k;
+    if (k === "freeze") {
+      if (!this._playing) {
+        // Coming from a platter move: the engine voice restarts on the audio's point, frozen.
+        this.startOffset = from;
+        this.spawnSource(from);
+        this._playing = true;
+      }
+      this._freezeAt = from;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
+    } else {
+      this.jog.moveEnter(k, from);
+    }
+  }
+  /** Stop the sounding move WITHOUT landing; returns where its audio got to. */
+  private moveStop(k: MoveKind): number {
+    this.moveActive = null;
+    if (k === "freeze") {
+      const at = this._freezeAt ?? this.position();
+      this._freezeAt = null;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+      return at;
+    }
+    return this.jog.moveExit();
+  }
+  /** The run is over: land where the track would be, and play on. */
+  private moveLand(from: number) {
+    const pos = this.slipReleasePos() ?? from;
+    if (this._playing) this.seek(pos); // FREEZE: the voice is running — a declicked re-seat
+    else {
+      this.startOffset = pos;
+      this.spawnSource(pos);
+      this._playing = true;
+    }
+  }
+  /** Drop every held move at once (a transport action took over): no landing. */
+  private moveCancel() {
+    this.moveStack = [];
+    this.moveActive = null;
+    if (this._freezeAt != null) {
+      this._freezeAt = null;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+    }
+  }
+
+  /** The slip move in flight — a held FX2 move, or the keyboard / board CENSOR — or null. While it
+   *  runs the track is still going underneath; the waveform follows that, not the audio. */
+  get slipMove(): MoveKind | null {
+    if (this.moveActive) return this.moveActive;
+    return this.slipAnchor && this.jog.reversing ? "censor" : null;
+  }
+  /** Where the track would be now under a slip move (the shadow), WITHOUT consuming it. */
   slipShadow(): number | null {
-    if (this._freezeAt != null) return this.position();
     const a = this.slipAnchor;
     return a ? this.shadowOf(a.pos, a.t) : null;
   }
-  /** Where the AUDIO is during a slip move (the waveform's ghost): the frozen instant for FREEZE,
-   *  else the platter's own position. */
+  /** Where the AUDIO is during a slip move (the waveform's ghost): FREEZE's frozen instant, else
+   *  the platter's own position. */
   slipGhost(): number {
     return this._freezeAt ?? this.visualPosition();
   }

@@ -165,7 +165,7 @@ export class JogEngine {
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
 
-  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" | "warp" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
+  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
@@ -509,36 +509,52 @@ export class JogEngine {
   // down; released, playback snaps to where the track would be had it never braked (the slip
   // shadow, armed regardless of the slip toggle) and carries on. The board's RELEASE FX brake
   // (brakeNow) still stops the deck — that one is a stop.
-  // ★ AND SPIN IS THE SAME OVERLAY (operator, 2026-11-07: "the spin needs work … spin normal and
-  // shifted sound weird"). The old spinback rewound and then the motor caught the platter and PLAYED
-  // ON FROM WHERE THE REWIND LEFT IT, so every spin landed a beat or so early, off the grid. Held now,
-  // it is a backspin that winds down to rest; released, it lands on the slip shadow, on the beat.
-  private _hold: "brake" | "spin" | null = null;
-  /** The held slip move in flight (FX2 BRAKE / SPIN), or null. */
-  get holdKind() {
-    return this._hold;
+  // ★ FX2 MOVES RUN ON THESE TWO PRIMITIVES; the Deck's move stack owns the rest (operator,
+  // 2026-11-07: "gotta solve the interaction when one is held and another is triggered"). Start a
+  // move's platter motion from `pos` — where the AUDIO is, which after a hand-off is wherever the
+  // previous move left it, so the sound is continuous — and stop it again WITHOUT landing. Arming the
+  // slip shadow, handing over between moves and landing on the beat are the Deck's (moveDown/moveUp).
+  //   censor = reverse at the play rate · brake = a friction ramp to rest · spin = a backspin
+  //   winding down to rest (the old spinback rewound and PLAYED ON from there, landing early).
+  private _moveDriven = false;
+  moveEnter(kind: "censor" | "brake" | "spin", pos: number) {
+    if (!this.host.loaded()) return;
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.host.clearBend();
+    this.jogPos = pos;
+    this.host.setStartOffset(pos);
+    if (this.host.playing()) {
+      this.host.stopSource(); // hand the audio to the scratch resampler
+      this.host.setPlaying(false);
+    }
+    this._moveDriven = true;
+    if (kind === "censor") {
+      this.jogVel = 0;
+      this.handVel = 0;
+      this.jogInputAt = this.ctx.currentTime;
+      this.jogLast = this.ctx.currentTime;
+      this.jogPhase = "reverse";
+      this.scratchStart();
+      this.startJogLoop();
+    } else if (kind === "brake") {
+      this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+    } else {
+      this.enterMotorCoast(-this.backSpinStrength(), false, this.backSpinTau(), "spinback");
+    }
   }
-  motorHoldStart(kind: "brake" | "spin") {
-    if (this._hold || !this.host.playing() || this.jogPhase === "reverse") return;
-    this.host.slipArmForce(); // anchor the shadow while the deck is still playing
-    this._hold = kind;
-    if (kind === "brake") this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
-    else this.enterMotorCoast(-this.backSpinStrength(), false, this.backSpinTau(), "spinback"); // backward, winding down to rest
-  }
-  motorHoldEnd() {
-    if (!this._hold) return;
-    this._hold = null;
-    const pos = this.host.slipReleasePos();
-    // Mid-ramp or already settled at rest: either way the resampler lets go of the audio.
+  /** Stop a move's platter motion where it is, without landing. Returns where the audio got to. */
+  moveExit(): number {
+    this._moveDriven = false;
+    if (this.jogRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.jogRaf);
+      this.jogRaf = 0;
+    }
     this.jogPhase = "off";
     this._ramping = null;
     this._coastTau = 0;
     this.jogVel = 0;
     this.scratchStop();
-    if (pos == null) return;
-    this.host.setStartOffset(pos);
-    this.host.spawnSource(pos);
-    this.host.setPlaying(true);
+    return this.jogPos;
   }
 
   /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
@@ -558,45 +574,6 @@ export class JogEngine {
     if (!this.host.loaded()) return;
     const s = strength != null ? Math.abs(strength) : this.backSpinStrength();
     this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback");
-  }
-
-  // --- WARP (FX2): the record wobbles while held ---
-  // ★ (operator, 2026-11-07: "warp and freeze can be interesting … lets try it"). The platter runs
-  // at the play rate times (1 + depth·sin(2πt/period)), voiced by the scratch resampler, so speed
-  // and pitch swing together the way a warped record's do. Its average speed IS the play rate, so
-  // it never drifts far; the slip shadow is armed anyway and the release lands on it, on the beat.
-  private warp: { t0: number; period: number; depth: number } | null = null;
-  get warping() {
-    return this.jogPhase === "warp";
-  }
-  warpStart(periodSec: number, depth: number) {
-    if (!this.host.loaded() || !this.host.playing() || this.jogPhase !== "off") return;
-    if (this.ctx.state === "suspended") void this.ctx.resume();
-    this.host.clearBend();
-    this.host.slipArmForce();
-    this.jogPos = this.host.position();
-    this.host.setStartOffset(this.jogPos);
-    this.host.stopSource(); // hand the audio to the scratch resampler
-    this.host.setPlaying(false);
-    this.jogVel = 0;
-    this.handVel = 0;
-    this.jogInputAt = this.ctx.currentTime;
-    this.jogLast = this.ctx.currentTime;
-    this.warp = { t0: this.ctx.currentTime, period: Math.max(0.1, periodSec), depth };
-    this.jogPhase = "warp";
-    this.scratchStart();
-    this.startJogLoop();
-  }
-  warpStop() {
-    if (this.jogPhase !== "warp") return;
-    this.jogPhase = "off";
-    this.warp = null;
-    this.scratchStop();
-    const slip = this.host.slipReleasePos();
-    const pos = slip != null ? slip : this.jogPos;
-    this.host.setStartOffset(pos);
-    this.host.spawnSource(pos);
-    this.host.setPlaying(true);
   }
 
   // --- sustained reverse / censor ---
@@ -656,13 +633,6 @@ export class JogEngine {
         dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
         if (phase === "grab") {
           this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
-        } else if (phase === "warp" && this.warp) {
-          const w = this.warp;
-          const speed = this.host.rate() * (1 + w.depth * Math.sin((2 * Math.PI * (now - w.t0)) / w.period));
-          this.jogPos = this.wrapLoop(this.jogPos + speed * dt);
-          this.clampJog();
-          this.host.setStartOffset(this.jogPos);
-          this.scratchMove();
         } else if (phase === "reverse") {
           // Drive the platter backward at the set tempo; voice it on the resampler.
           // Reverse only ever runs on a playing deck (reverseStart requires it), so an
@@ -672,7 +642,7 @@ export class JogEngine {
           this.clampJog();
           this.host.setStartOffset(this.jogPos);
           this.scratchMove();
-          if (this.jogPos <= 0) this.reverseStop(); // hit the start → catch back to forward
+          if (this.jogPos <= 0 && !this._moveDriven) this.reverseStop(); // hit the start → catch back to forward
         } else if (phase === "coast") {
           this.stepCoast(dt); // may settle the platter to "off"
           this.host.setStartOffset(this.jogPos);
@@ -688,8 +658,7 @@ export class JogEngine {
   // platter position is already mirrored into startOffset each tick, so a transport
   // action (play/pause/seek/cue) simply takes over from where it is.
   cancelJog() {
-    this._hold = null; // a transport action ends any held slip move (its layer must not linger)
-    this.warp = null;
+    this._moveDriven = false; // a transport action ends any held FX2 move
     if (this.jogPhase === "off") return;
     this.jogPhase = "off";
     if (this.jogRaf) {

@@ -121,7 +121,7 @@ export interface DeviceProfile {
 
 // A decoded, normalized event handed to the app dispatcher.
 export type MidiEvent =
-  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number; padBank?: PadBank } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play); padBank = the hardware pad bank (switch the deck's pad mode to match)
+  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number; padBank?: PadBank; shiftFixed?: boolean } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play); padBank = the hardware pad bank (switch the deck's pad mode to match)
   | { type: "shift"; deck?: DeckId; down: boolean } // the SHIFT button → drives HTL's shift mode (deck omitted = focused)
   | { type: "focus"; deck: DeckId } // a focus button → make this deck the one the controller drives
   | { type: "beatjump"; deck: DeckId; beats: number; shift: boolean }

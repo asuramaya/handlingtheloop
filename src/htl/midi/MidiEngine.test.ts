@@ -71,23 +71,28 @@ describe("MidiEngine — FLX4 jog layers decode through the real profile", () =>
     expect(events).toEqual([{ type: "jogTurn", deck: "A", delta: 2, scratch: false }]);
   });
 
-  it("OUTER RING (CC 0x21) → jogBend: a slow ±1 run passes, lone or reversing ±1 jitter does not", async () => {
+  it("OUTER RING (CC 0x21) → jogBend: every tick at once, including a micro back-and-forth of single ±1s", async () => {
     const { events, send } = await flx();
-    send(CC_A, 0x21, 0x41); // +1 → held (could be rest jitter)
-    send(CC_A, 0x21, 0x41); // +1 again, same direction → a slow turn: both go out
-    send(CC_A, 0x21, 0x41); // the run continues → at once
-    send(CC_A, 0x21, 0x3d); // −3 → unmistakably a turn
-    send(CC_B, 0x21, 0x41); // deck B jitter: +1 …
-    send(CC_B, 0x21, 0x3f); // … −1 … (reverses: never a turn)
-    send(CC_B, 0x21, 0x41); // … +1
+    send(CC_A, 0x21, 0x41); // +1
+    send(CC_A, 0x21, 0x3f); // −1 (reverses: a micro back-and-forth, not jitter to drop)
+    send(CC_A, 0x21, 0x41); // +1
+    send(CC_A, 0x21, 0x3d); // −3
     expect(events).toEqual([
-      { type: "jogBend", deck: "A", delta: 2 },
+      { type: "jogBend", deck: "A", delta: 1 },
+      { type: "jogBend", deck: "A", delta: -1 },
       { type: "jogBend", deck: "A", delta: 1 },
       { type: "jogBend", deck: "A", delta: -3 },
     ]);
   });
 
-  it("OUTER RING on the real 2026-11-02 capture: ≥ 99% of the ring's travel survives (the old deadzone kept ~40%)", async () => {
+  it("SHIFT+SYNC (0x60, shift fixed OFF) → keyMatch with shift:false and shiftFixed, though SHIFT is held", async () => {
+    const { events, send } = await flx();
+    send(NOTE_B, 0x3f, 0x7f); // SHIFT B down
+    send(NOTE_B, 0x60, 0x7f); // SHIFT+SYNC
+    expect(events).toContainEqual(expect.objectContaining({ type: "button", action: "keyMatch", deck: "B", pressed: true, shift: false, shiftFixed: true }));
+  });
+
+  it("OUTER RING on the real 2026-11-02 capture: all of the ring's travel survives (the old deadzone kept ~40%)", async () => {
     const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-jog-real-2026-11-02.json", import.meta.url), "utf8")) as MidiCapture;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
     try {

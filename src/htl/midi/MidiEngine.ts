@@ -444,7 +444,7 @@ export class MidiEngine {
       // can be MOMENTARY — ROLL snaps back and FX2 throws off on key-up. Latching actions
       // (every other button) just ignore the release downstream, so this is safe for all.
       // (deck omitted → App drives the focused deck, e.g. Starrypad pads.)
-      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank });
+      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank, ...(entry.shiftOverride != null ? { shiftFixed: true } : {}) });
       return;
     }
     // ★ THE BROWSE ENCODER'S PRESS HAS A HOLD (operator, 2026-11-03: board-only library navigation
@@ -528,32 +528,15 @@ export class MidiEngine {
       }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
-      // ★ NO FLAT ±1 DEADZONE (operator, 2026-11-06: the ring "feels a bit unprecise and small micro
-      // movements and adjustments on it have some lag"). The ring can jitter ±1 at rest, so every ±1
-      // used to be dropped, but a SLOW turn is nothing but ±1s: in the 2026-11-02 capture 1563 of
-      // 2321 ring messages were ±1, and 1560 of those sat in same-direction runs. The deadzone ate
-      // two thirds of every careful nudge, and all of a slow one. Now a ±1 is held until a second
-      // tick in the SAME direction follows within RING_RUN_MS, then both go out; a lone tick, or one
-      // that reverses, is the jitter and is dropped. A |delta| ≥ 2 is unmistakably a turn: at once.
+      // ★ EVERY RING TICK, AT ONCE (operator, 2026-11-06). There used to be a flat ±1 deadzone
+      // against rest jitter. A slow turn is nothing but ±1s (2026-11-02 capture: 1563 of 2321 ring
+      // messages), so it ate two thirds of every careful nudge. A run filter replaced it, holding
+      // a ±1 until a same-direction tick followed. But a micro back-and-forth is single REVERSING
+      // ±1s (41 3F 41 on the monitor), so that filter left "dead spots … like it gets stuck". No
+      // filter now: rest jitter alternates ±1 and nets to zero travel, and the bend's own inertia
+      // (bendPhysics RING_TAU) averages it away.
       const delta = centeredDelta(val);
-      if (delta === 0) return;
-      const st = this.ringRun[b.deck];
-      const t = nowMs();
-      const sgn = Math.sign(delta);
-      if (st.sign !== sgn || t - st.t > MidiEngine.RING_RUN_MS) {
-        st.sign = sgn;
-        st.count = 0;
-        st.held = 0;
-      }
-      st.t = t;
-      st.count++;
-      if (Math.abs(delta) >= 2 || st.count >= 2) {
-        const d = delta + st.held;
-        st.held = 0;
-        this.opts.onEvent({ type: "jogBend", deck: b.deck, delta: d });
-      } else {
-        st.held += delta;
-      }
+      if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
       const delta = centeredDelta(val);
@@ -639,13 +622,6 @@ export class MidiEngine {
       }
     }
   }
-
-  // Outer-ring run detector (see dispatchCC's jogBend): direction, run length, last tick, held ±1.
-  private ringRun: Record<DeckId, { sign: number; count: number; t: number; held: number }> = {
-    A: { sign: 0, count: 0, t: -Infinity, held: 0 },
-    B: { sign: 0, count: 0, t: -Infinity, held: 0 },
-  };
-  static readonly RING_RUN_MS = 150;
 
   // --- Echo lamp (FLX4 SMART CFX) ---
   // Lit, the hardware feature makes the COLOR knob ALSO send TRIM. Every echo lands within a few ms

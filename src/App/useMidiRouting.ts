@@ -275,7 +275,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // shift. Otherwise a latched/held shift would silently turn the FOCUSED deck's ▶ into
           // move-loop, so "jog forward" died intermittently on whichever deck had focus (deck B).
           // The focus-model shift (focusShift/latch/keyboard) only applies to a DECKLESS board.
-          const sh = ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
+          // ★ A BINDING THAT FIXES ITS SHIFT KEEPS IT (operator, 2026-11-06: SHIFT+SYNC "key sync … the
+          // button map does not work"). The FLX4 sends SHIFT+SYNC as its own note, bound to keyMatch
+          // with shift forced OFF, but the deck's held SHIFT (midiShift) still turned it into
+          // keyMatch's SHIFTED action, reset-pitch, so key sync never engaged.
+          const sh = ev.shiftFixed ? ev.shift : ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
           // Hardware pad bank → HTL pad mode. The FLX emits a distinct note block per base bank, so a
           // pad press tells us which bank the player is physically in; switch the deck to match BEFORE
           // routing — otherwise every bank stays stuck on whatever software mode was set (all CUE). We

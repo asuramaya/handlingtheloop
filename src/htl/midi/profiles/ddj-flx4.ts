@@ -75,6 +75,11 @@ function padBanks(): MidiBinding[] {
     for (let i = 0; i < 8; i++) {
       out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "A", status: PAD_A, data: base + i, type: "note" });
       out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "B", status: PAD_B, data: base + i, type: "note" });
+      // SHIFT + pad: Pioneer's DDJ family sends the shifted pads on the NEXT status (deck A 0x98,
+      // deck B 0x9A), same notes. Bound with shift forced ON, so SHIFT+pad reaches the pad's
+      // shifted gesture (FX: toggle the latch; CUE: clear) even though no other binding sees it.
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "A", status: PAD_A + 1, data: base + i, type: "note", shift: true });
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "B", status: PAD_B + 1, data: base + i, type: "note", shift: true });
     }
   return out;
 }

@@ -226,8 +226,8 @@ export type SyncRole = "off" | "master" | "slave";
 // ★ fx2 IS THE SECOND BANK: same 8 pads, aimed at the MASTER chain instead of the focused one —
 // see `padChain` below for why, and for the hardware it mirrors. It WAS an exact duplicate until
 // 2026-09-10, while three comments (this one included) described a latch-vs-throw split per bank
-// that the code never implemented. The latch/throw split is real but per-GESTURE (FX_HOLD_MS) and
-// per-PAD (FxPadDef.hold), so it applies identically in both banks and always did. Thread 9ee26ff4.
+// that the code never implemented. The latch/momentary split is per-GESTURE (plain press = hot while
+// held, SHIFT+press = toggle latch; fxPads.ts), so it applies identically in both banks.
 // ★ cue2 IS THE SECOND HOT-CUE BANK (operator, 2026-11-06: "a second layer to cue so shift cue / u
 // gives me cue 2 and 8 more cue points/pads 9-16"). The same 8 pads, aimed at hot cues 9–16
 // (HOT_CUE_BANK offset). SHIFT + HOT CUE on the board, SHIFT + U on the keyboard.

@@ -1018,10 +1018,11 @@ function AppBody() {
     // resulting phase over the board bus so it syncs + records like the on-screen pad.
     // The keyboard transport for the shared pad gesture (fxPads). It used to toggle, on the
     // grounds that "the keyboard has no key-up" — it does; nothing was listening.
-    const fxKeyDown = (deck: DeckRef, id: DeckId, i: number) => {
-      const { fired, repeat, kind } = fxPadPress(deck, id, i);
+    const fxKeyDown = (deck: DeckRef, id: DeckId, i: number, s = false) => {
+      const { fired, off, repeat, kind } = fxPadPress(deck, id, i, s); // s = SHIFT → toggle the latch
       if (repeat) return; // auto-repeat: the throw, the reveal and the render all stay put
       if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i) });
+      if (off) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
       if (kind) fxCtlFor(id)?.selectKind(kind); // press IS reveal
     };
     const fxKeyUp = (deck: DeckRef, id: DeckId, i: number) => {
@@ -1325,7 +1326,7 @@ function AppBody() {
             : deck.padMode === "global"
               ? samplerCtl.current?.trigger(i) // global pads are flat index 0-7
               : deck.padMode === "fx" || deck.padMode === "fx2"
-                ? fxKeyDown(deck, id, i)
+                ? fxKeyDown(deck, id, i, s)
                 : hotcue(deck, id, s, cueBankBase(deck.padMode) + i); // CUE → 1–8, CUE 2 → 9–16
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));

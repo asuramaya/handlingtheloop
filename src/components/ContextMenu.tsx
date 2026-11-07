@@ -139,7 +139,7 @@ export function MenuFly({
   children,
 }: {
   /** The row that opened it, in viewport coordinates. */
-  anchor: { left: number; right: number; top: number };
+  anchor: { left: number; right: number; top: number; dir?: "left" | "right" };
 
   head: React.ReactNode;
   onEnter?: () => void;
@@ -160,25 +160,29 @@ export function MenuFly({
   children: React.ReactNode;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; leftward: boolean } | null>(null);
   // Same flip-then-clamp as Menu, for the same reason: a deck column is ~450 px and there are two
-  // of them, so the side with room is frequently the LEFT one.
+  // of them, so the side with room is frequently the LEFT one. ★ The PREFERRED side is the one the
+  // parent window went (anchor.dir): a cascade that has turned left keeps fanning left, away from
+  // the menu it came out of, instead of doubling back over it. The other side is the fallback.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
     const M = 6, GAP = 4;
-    let left = anchor.right + GAP;
-    if (left + r.width > vw - M) left = anchor.left - r.width - GAP;
+    const rightAt = anchor.right + GAP, leftAt = anchor.left - r.width - GAP;
+    const rightFits = rightAt + r.width <= vw - M, leftFits = leftAt >= M;
+    const leftward = anchor.dir === "left" ? leftFits || !rightFits : !rightFits && leftFits;
+    let left = leftward ? leftAt : rightAt;
     left = Math.max(M, Math.min(left, vw - r.width - M));
     const top = Math.max(M, Math.min(anchor.top - 6, vh - r.height - M));
-    setPos({ left, top });
-  }, [anchor.left, anchor.right, anchor.top, children]);
+    setPos({ left, top, leftward });
+  }, [anchor.left, anchor.right, anchor.top, anchor.dir, children]);
   return (
     <div
       ref={box}
-      className={`fx-palette fx-preset-menu fx-menu-fly ${layer ? `layer-${layer}` : ""} ${inert ? "inert" : ""}`}
+      className={`fx-palette fx-preset-menu fx-menu-fly ${layer ? `layer-${layer}` : ""} ${inert ? "inert" : ""} ${pos?.leftward ? "fly-left" : ""}`}
       role="menu"
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}

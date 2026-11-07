@@ -2,6 +2,10 @@
 // file instead of contending on App.tsx. PURE RELOCATION: the two function bodies below are
 // verbatim from App; the App spine arrives via `deps` (destructured to the original names so the
 // closures are unchanged). The type-only `../App` import is erased at build (no runtime cycle).
+import { whenGpuClear } from "@htl/stems/gpuQueue";
+// ★ APPLY_WAITS (operator, 2026-11-05: "a bit of a lag spike during a transition again").
+// Applying a set packs four stems for the engine on the main thread (~0.3 s, Deck.setStems), so it
+// waits out AUTO's quiet window (a transition and its landing) rather than freezing the blend.
 // See htl-refactor-monoliths.
 import { useCallback, useRef } from "react";
 import type { MutableRefObject } from "react";
@@ -30,6 +34,7 @@ import {
 } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { StemStatus, StemPhase } from "../App";
+import { onModelLoading } from "../htl/stems/separate";
 import { whenIdle } from "../util/idle";
 import { useSpine } from "./spine";
 
@@ -99,6 +104,8 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         const local = await loadStemsLocal(engine.ctx, videoId, mid);
         if (stale?.()) return false;
         if (local) {
+          await whenGpuClear(); // see APPLY_WAITS below
+          if (stale?.()) return false;
           engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           // Stamp the dedup key with the PROMOTED model so selecting that model later
           // sees "already separated" (deriveStems' hasStems guard) instead of re-running
@@ -136,6 +143,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             });
           }
           const neural = await job;
+          await whenGpuClear();
           if (stale?.()) return false;
           // loadStems throws (not a DSP fallback) when the set can't be produced → the catch below
           // returns false, nothing to promote. Reaching here means a real neural set downloaded.
@@ -323,6 +331,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
             // this armed, which is the one signal that cannot be observed from inside the tab.
             disarmStemLoad();
           }
+          if (res?.kind === "neural") await whenGpuClear();
           if (stale?.() || res?.kind === "stale") return;
           if (res?.kind === "neural") {
             // loadStems throws on any failure (no DSP fallback), and the try above breaks to the
@@ -387,6 +396,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       {
         const local = await loadStemsLocal(engine.ctx, videoId, model.id);
         if (local) {
+          await whenGpuClear();
           if (stale?.()) return;
           engine.deck(id).setStems(local, true, videoId); // neural → per-stem lanes
           stemLoadedKey.current[id] = guardKey;
@@ -458,13 +468,38 @@ export function useStemPipeline(deps: StemPipelineDeps) {
       // everywhere else deviceSupportsModel already said no and we never get here.)
       const gpuSeparate = !cached && model.tier === "gpu";
       if (gpuSeparate) armGpu(model.id);
-      setStatusFor(id, { phase, pct: 0, detail: `${verb} ${model.label}…` });
+      // ★ A FRESH SEPARATION STARTS IN "prep", NOT AT "0%". Before the first inference window
+      // reports there may be a one-time model download and always a GPU session setup; neither
+      // moves the window percentage, so a literal 0% read as "stuck" for the whole of both
+      // (decision 7b5a5bfd). The worker DOES report the download (onModelLoading) — it was only
+      // ever wired to the host-answers-a-remote path — so subscribe here for the life of the job.
+      // The listener set is per worker session, so a second deck queued behind this one sees the
+      // same shared download, which is true: it needs those weights too.
+      let windowsReporting = false;
+      const unsubModel = cached
+        ? () => {}
+        : onModelLoading((p) => {
+            if (windowsReporting || stale?.()) return;
+            setStatusFor(
+              id,
+              p < 100
+                ? { phase, step: "model", pct: p, detail: `Downloading the ${model.label} model (one-time)… ${p}%` }
+                : { phase, step: "prep", detail: `Preparing ${model.label} on the GPU…` },
+            );
+          });
+      setStatusFor(
+        id,
+        cached
+          ? { phase, pct: 0, detail: `${verb} ${model.label}…` }
+          : { phase, step: "prep", detail: `Starting ${model.label}…` },
+      );
       try {
         // Share one job per (track, model): a model toggle, a StrictMode re-fire,
         // or both decks on the same track reuse it instead of stacking heavy work.
         let job = stemJobs.current.get(key);
         if (!job) {
           job = loadStems(engine.ctx, videoId, mix, model, (pct) => {
+            windowsReporting = true;
             const p = Math.round(pct * 100);
             setStatusFor(id, { phase, pct: p, detail: `${verb} ${model.label}… ${p}%` });
           });
@@ -474,6 +509,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
           });
         }
         const neural = await job;
+        await whenGpuClear();
         if (stale?.()) return;
         // loadStems throws on a separation failure (no DSP fallback) → the catch below plays the
         // plain mix. Reaching here means a real neural set separated/downloaded.
@@ -489,6 +525,7 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         setStatusFor(id, { phase: "failed", detail: `${model.label} failed — playing the mix. See console for details.` });
         setTimeout(() => !stale?.() && setStatusFor(id, null), 6000);
       } finally {
+        unsubModel();
         if (gpuSeparate) disarmGpu();
       }
     },
@@ -543,8 +580,14 @@ export function useStemPipeline(deps: StemPipelineDeps) {
         }
         const stored = await getAudio(videoId);
         const data = stored ? stored.bytes : await fetchYouTubeAudio(videoId, () => {});
+        // ★ A WARM IS SPECULATION; A TRANSITION IS NOW. The copy into IndexedDB, the decode and the
+        // stem install below are whole-track main-thread work, and a warm started while armed used to
+        // land them in the middle of the next blend (profiled: a 400 ms frame 1 s into an AUTO mix).
+        // Wait out AUTO's quiet window first, like separation already does.
+        await whenGpuClear();
         if (!stored) void putAudio(videoId, data.slice(0));
         const mix = await decodeAudio(engine.ctx, data);
+        await whenGpuClear();
         // Re-check: the decode took time, and a deck may have claimed this track meanwhile.
         if (stemJobs.current.has(key)) return;
         const job = loadStems(engine.ctx, videoId, mix, model, () => {});

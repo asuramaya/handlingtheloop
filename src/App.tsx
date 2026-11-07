@@ -1,5 +1,6 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
 import { canArmAutoMix } from "./htl/automix/autoMixAuthority";
+import { setBeatlockMax, BEATLOCK_ANY } from "./htl/analysis";
 import { canDriveDeck as canDriveDeckFor, canDriveBoard as canDriveBoardFor } from "./App/drivePermission";
 import type { StemAckState } from "./htl/room/protocol";
 // The requester's stall limit and the host's heartbeat are one invariant with two owners, so both
@@ -16,6 +17,10 @@ import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
+import { autoLine } from "./components/automixStatus";
+import { pickLiveDeck } from "./App/liveDeck";
+import { whenGpuClear } from "@htl/stems/gpuQueue";
+import { displayTrack } from "./util/format";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useChinHeight } from "./components/lib/useChinHeight";
 import { RoomBar } from "./components/RoomBar";
@@ -23,6 +28,9 @@ import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileS
 import { initialDock } from "./App/initialDock";
 import { mayContributeAnalysis, mayReuseGrid } from "./App/gridReuse";
 import { event } from "@htl/debug/trace";
+import { setPerfAudioProbe } from "@htl/debug/perfCapture";
+import { escapeAction, trackOpenOrder } from "./App/escapeKey";
+import { libraryKeyAction } from "./App/libraryKeys";
 import { SocialScreen } from "./components/SocialScreen";
 import { PeopleScreen } from "./components/PeopleScreen";
 import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, type PeoplePane } from "@htl/account";
@@ -100,11 +108,15 @@ import {
   isIOSDevice,
   isChromium,
   initGpuCrashGuard,
+  isGpuBlocked,
+  unblockGpu,
+  gpuCrashModel,
+  resetStemGuard,
+  STEM_MODELS,
   armGpu,
   disarmGpu,
   initStemCrashGuard,
   stemTrace,
-  DEFAULT_STEM_MODEL,
   type Stems,
   type StemModel,
   useMixQueue,
@@ -113,11 +125,13 @@ import {
   AutoMixer,
   SmartFader,
   PAD_MODE_RESERVED,
+  cueBankBase,
   type PadMode,
   type AutoMixStatus,
   type AutoMixMirror,
   seedMicChain,
 } from "@htl";
+import { platterDrag } from "@htl/audio/JogEngine";
 import { resolveLyrics, getLyricsDiag, formatLyricsDiag, type LyricsSource, type LyricsLine } from "@htl/lyrics";
 import { whenIdle } from "./util/idle";
 import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline";
@@ -126,6 +140,9 @@ import { useStemPipeline, stemSrcLabel, STEM_KEYS } from "./App/useStemPipeline"
 import { deckSnapshot, applyDeckStems, applyDeckRack, applyDeckControls } from "./App/deckApply";
 import { useSessionSync } from "./App/useSessionSync";
 import { isStemWork } from "./App/stemWork";
+import { crashPrompts, type CrashPrompt } from "./App/crashPrompt";
+import { CrashGuardPrompt } from "./components/CrashGuardPrompt";
+import { PerfRecChip } from "./components/PerfCaptureControl";
 import { shouldReleaseClaim } from "./App/loadClaim";
 import { deckNamePatch } from "./App/deckNameBackfill";
 import { publishedDeckId } from "./App/publishedDeckId";
@@ -177,6 +194,11 @@ export interface StemStatus {
   detail: string;
   src?: string; // short engine label for the persistent chip ("Demucs" / "Open-Unmix")
   of?: "track"; // a TRACK-load write sharing this slot, never stem work (see App/stemWork.ts)
+  /** WHICH part of a fresh on-device separation is running, before the first inference window
+   *  reports. Without it the header read "Separating 0%" through a one-time ~170 MB model download
+   *  AND the GPU session setup — several seconds, or forever if setup hangs — so "downloading",
+   *  "warming up" and "stuck" all looked identical (decision 7b5a5bfd). Absent once windows report. */
+  step?: "model" | "prep";
 }
 
 // One labelled group of live diagnostics for the Settings → Debug tab (audio engine,
@@ -333,7 +355,14 @@ function AppBody() {
   // grids on screen, not just in the audio.
   const doSync = useCallback(
     (id: DeckId) => {
-      engine.toggleSync(id);
+      // ★ PRESSING THE BUTTON THAT READS "MASTER" RELEASES SYNC (operator, 2026-11-03: "sync
+      // problems when using sync/master"). The engine's toggle FLIPS a master into the follower,
+      // which the auto-mixer and Smart Fader rely on, but from the button it meant: press the deck
+      // you are playing out, labelled MASTER, and ITS tempo jumps to follow the other deck. Now the
+      // lit button on either deck lets go, and nothing's tempo moves. To swap who leads, press SYNC
+      // on the deck that should follow.
+      if (engine.syncRole(id) === "master") engine.releaseSync();
+      else engine.toggleSync(id);
       if (engine.syncRole(id) === "slave") {
         const other: DeckId = id === "A" ? "B" : "A";
         setZoom((z) => ({ ...z, [id]: z[other] }));
@@ -355,6 +384,28 @@ function AppBody() {
   const [lyricStatus, setLyricStatus] = useState<Record<DeckId, string | null>>({ A: null, B: null });
 
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  // Settings ▸ Debug ▸ Performance capture reads audio health + the engine-shaping settings
+  // through these (the recorder is module-level so it keeps running with Settings closed).
+  const settingsForPerf = useRef(settings);
+  settingsForPerf.current = settings;
+  useEffect(() => {
+    setPerfAudioProbe(() => {
+      const ah = engine.audioHealth();
+      const s = settingsForPerf.current;
+      return {
+        underruns: ah.underruns,
+        outputLatencyMs: ah.outputLatencyMs,
+        baseLatencyMs: Math.round((engine.ctx.baseLatency ?? 0) * 1000),
+        state: ah.state,
+        playing: ah.playing,
+        reserveMs: ah.reserveMs,
+        stems: `${engine.deck("A").hasStems ? "A" : ""}${engine.deck("B").hasStems ? "B" : ""}`,
+        stemModel: s.stemModel,
+        stretch: `${s.stretchEngine}/${s.stretchQuality}`,
+      };
+    });
+    return () => setPerfAudioProbe(null);
+  }, [engine]);
   // ★ THE PRESET BANKS' SYNC BRIDGE, both legs. OUTBOUND: every bank write announces itself and is
   // mirrored into settings.fxBanks, which is what syncs to the account. Installed once.
   useEffect(() => {
@@ -474,29 +525,33 @@ function AppBody() {
       .then((m) => setMe((prev) => (JSON.stringify(prev) === JSON.stringify(m) ? prev : m)))
       .catch(() => {});
   }, [profileOpen]);
-  // WebGPU crash-loop guard: if the last GPU separation took the tab down, disable
-  // GPU separation and bounce the selected model back to a safe one so a reload
-  // doesn't immediately crash again. `gpuCrashed` drives a one-time notice.
-  // The value isn't read here (the Settings ▸ Stems banner gates on isGpuBlocked());
-  // we keep the setter so the guard + re-enable flow stay wired.
-  const [, setGpuCrashed] = useState(false);
+  // CRASH GUARDS ASK, THEY DO NOT DECIDE. If the last GPU separation (desktop) or stem download
+  // (phone) took the tab down, the guard blocks that job at boot so a reload cannot crash straight
+  // back into it, and then a prompt ASKS on every load while the block stands (App/crashPrompt.ts).
+  // ★ THIS USED TO BE SILENT: the GPU guard also bounced the selected stem model to "off" and said
+  // nothing outside a Settings banner, so stems were later just off with nobody having turned them
+  // off. The model is no longer touched; the block alone breaks the loop.
+  const [crashAsks, setCrashAsks] = useState<CrashPrompt[]>([]);
   useEffect(() => {
     // ★ DID THE TAB DIE MID-DECODE LAST TIME? The only failure in a track load that leaves no
     // exception, no rejection and no onerror — the process is simply gone, and the next boot looks
     // normal. Witness-only on purpose: a decode is not optional, so unlike the GPU guard below this
     // one never blocks anything. It reports once and clears.
     initDecodeCrashGuard();
-    if (initGpuCrashGuard()) {
-      setGpuCrashed(true);
-      setSettings((s) => (getStemModel(s.stemModel).tier === "gpu" ? { ...s, stemModel: DEFAULT_STEM_MODEL } : s));
-    }
-    // Mobile stem-load crash guard. ★ CURRENTLY INERT — see the note at initStemCrashGuard:
-    // nothing has ARMED it since 3a5d512 (2026-07-15) removed its only two call sites, so it can
-    // never observe a crash, and nothing branches on the level it reports anyway. Kept as the
-    // reading half of a mechanism awaiting a decision to rewire or retire. The old wording here
-    // ("the next loads stay on the safe DSP split") was doubly wrong: no split since f2004f2,
-    // and no downgrade behaviour was ever implemented.
-    initStemCrashGuard();
+    const gpuCrashedNow = initGpuCrashGuard();
+    // Mobile stem-download crash guard. LIVE: useStemPipeline arms it around a phone's cached-set
+    // download+decode (the 2026-09-10 redesign). The note that used to sit here called it inert;
+    // that stopped being true when the redesign re-wired the arming, and the note was left behind.
+    const stemFailLevelNow = initStemCrashGuard();
+    const crashedModel = gpuCrashModel();
+    setCrashAsks(
+      crashPrompts({
+        gpuBlocked: isGpuBlocked(),
+        gpuCrashedNow,
+        gpuModelLabel: crashedModel ? getStemModel(crashedModel).label : null,
+        stemFailLevel: stemFailLevelNow,
+      }),
+    );
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -504,6 +559,8 @@ function AppBody() {
   // there, so it's a layout preference). On mobile they're full-screen modals, so we
   // always start closed regardless of what was stored.
   const [libOpen, setLibOpen] = useState(() => window.innerWidth >= 769 && localStorage.getItem("htl:libOpen") === "1");
+  const libOpenRef = useRef(libOpen); // read by the keyboard handler (library keys, App/libraryKeys.ts)
+  libOpenRef.current = libOpen;
   // Imperative handle into the library so a hardware browse encoder (FLX4 wheel) can step
   // a row cursor and the LOAD A/B buttons load it — see the browse/load cases in onMidiEvent.
   const libRef = useRef<LibraryHandle>(null);
@@ -599,6 +656,44 @@ function AppBody() {
       return next;
     });
   };
+  // ★ ESCAPE (App/escapeKey.ts): close the most recently opened panel, or open Settings when
+  // nothing is open. Its own listener, deferred one task so every other handler of this keydown
+  // has run: anything that consumed Escape (dialog, menu, ⓘ bubble, key rebind, text field)
+  // marks it with preventDefault, and the board then leaves it alone.
+  const openOrder = useRef<PanelKey[]>([]);
+  useEffect(() => {
+    openOrder.current = trackOpenOrder(openOrder.current, { library: libOpen, settings: settingsOpen, people: profileOpen, session: socialOpen });
+  }, [libOpen, settingsOpen, profileOpen, socialOpen]);
+  // ★ A CLICKED CONTROL DOES NOT KEEP THE KEYBOARD. Measured headless: click the Settings gear,
+  // press Enter, and Settings closed again — the button kept focus and Enter re-pressed it; click
+  // the crossfader, press ↑, and the deck jumped while the fader ignored it. On an instrument the
+  // keys belong to the board, so once a POINTER click lands, the control lets go of focus.
+  // Keyboard activation (Tab + Enter/Space: detail === 0) keeps focus, so tabbing still works,
+  // and a text field is never blurred (it is not in the selector, and focus sits on it, not on
+  // an ancestor).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (e.detail === 0) return;
+      const el = (e.target as Element | null)?.closest?.('button, [role="button"], [role="switch"], a[href], input[type="range"], input[type="checkbox"], input[type="radio"], select, [tabindex]');
+      if (el instanceof HTMLElement && document.activeElement === el && el.tagName !== "SELECT") el.blur();
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
+  const escapeActsRef = useRef({ close: (_p: PanelKey) => {}, openSettings: () => {} });
+  escapeActsRef.current = { close: (p) => PANEL_CLOSERS[p](), openSettings: toggleSettings };
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+      setTimeout(() => {
+        const a = escapeAction(e.defaultPrevented, openOrder.current);
+        if (a.kind === "close") escapeActsRef.current.close(a.panel);
+        else if (a.kind === "openSettings") escapeActsRef.current.openSettings();
+      }, 0);
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, []);
   const [shiftLatched, setShiftLatched] = useState(false);
   const [shiftHeld, setShiftHeld] = useState(false);
   // A controller SHIFT button is held, per deck (the FLX4 has one SHIFT per side).
@@ -687,16 +782,16 @@ function AppBody() {
   const fxCtlFor = (d: DeckId) => (d === "A" ? fxCtlA : fxCtlB).current;
   // FLX4 SMART FADER lamp (0x96/0x01) — app-driven, diffed.
   const xfaderLedRef = useRef<boolean | null>(null);
-  // Tracks our last eqStemMode edge so we can FORCE the FLX hardware Smart-CFX off (0x96/0x00 0x00)
-  // on connect + every toggle — see the feedback push. We NEVER send 0x7F (that latches the hardware
-  // feature ON, which remaps the COLOR knob onto the trim CC and fights trim).
-  const cfxLedRef = useRef<boolean | null>(null);
   const beatFxLedRef = useRef<boolean | null>(null); // last FX-bypass (RELEASE FX) lamp state sent (diff)
   // SMART CFX toggles the channel knob column between EQ/filter and STEM VOLUME, top-to-bottom:
   // HI→drums, MID→bass, LOW→vocals, CFX/filter→other. Ref drives the fader handler.
   const [eqStemMode, setEqStemMode] = useState(false);
   const eqStemModeRef = useRef(false);
   useEffect(() => { eqStemModeRef.current = eqStemMode; }, [eqStemMode]);
+  // ★ WHAT THE HARDWARE KNOBS DRIVE, ON SCREEN (operator, 2026-11-06: "some kind of indicator in
+  // board mode that shows whether im in eq mode or stem volume mode"). On the board the SMART CFX
+  // lamp says it (lit = stems; see the feedback push). On screen each deck bank tags the row the
+  // knobs drive. Only with a controller connected: without one there are no knobs to describe.
   // snapFollowRef: apply inbound full-board SNAPSHOTS only when we're a participant AND
   // NOT driving. A controller holds the live board, so a republished snapshot (e.g. when
   // a peer toggles its mute) must never stomp its in-progress edits — intents/ticks still
@@ -923,14 +1018,16 @@ function AppBody() {
     // resulting phase over the board bus so it syncs + records like the on-screen pad.
     // The keyboard transport for the shared pad gesture (fxPads). It used to toggle, on the
     // grounds that "the keyboard has no key-up" — it does; nothing was listening.
-    const fxKeyDown = (deck: DeckRef, id: DeckId, i: number) => {
-      const { fired, repeat, kind } = fxPadPress(deck, id, i);
+    const fxKeyDown = (deck: DeckRef, id: DeckId, i: number, s = false) => {
+      const { fired, off, repeat, kind, alt } = fxPadPress(deck, id, i, s); // s = SHIFT → toggle the latch
       if (repeat) return; // auto-repeat: the throw, the reveal and the render all stay put
-      if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i) });
+      if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i, alt) });
+      if (off) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
       if (kind) fxCtlFor(id)?.selectKind(kind); // press IS reveal
     };
     const fxKeyUp = (deck: DeckRef, id: DeckId, i: number) => {
-      if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
+      const rel = fxPadRelease(deck, id, i);
+      if (rel) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i, rel === "alt") });
     };
     const padModeKey = (deck: DeckRef, id: DeckId, m: PadMode) => {
       if (PAD_MODE_RESERVED.has(m)) return; // KEY isn't built yet — match the on-screen disabled state
@@ -1060,9 +1157,8 @@ function AppBody() {
         fxCtlFor(id)?.cyclePreset(s ? -1 : 1);
       },
       // SMART CFX → flip the HI/MID/LOW/CFX knob column between EQ/filter and stem volumes.
-      // Flip eq/stem mode, and IMMEDIATELY force the FLX hardware Smart-CFX off (the press-down
-      // engaged it; close the COLOR-knob remap window now instead of waiting for the 150ms tick).
-      eqStemToggle: () => { setEqStemMode((v) => !v); midiSendRef.current?.([0x96, 0x00, 0x00]); },
+      // Flip eq/stem mode; the SMART CFX lamp follows it on the next feedback push (lit = stems).
+      eqStemToggle: () => setEqStemMode((v) => !v),
       // Own key (Z), not ⇧F — see keybinds.ts. Same flag the on-screen lock button drives.
       keylock: (deck, id) => {
         const on = !deck.keylock;
@@ -1213,7 +1309,7 @@ function AppBody() {
       // loop→roll, sampler→global, fx→fx2 (the FX latch layer). CUE has no shift peer (KEY retired).
       chainPrev: (_deck, id) => fxCtlFor(id)?.stepChain(-1),
       chainNext: (_deck, id) => fxCtlFor(id)?.stepChain(1),
-      padModeCue: (deck, id) => padModeKey(deck, id, "cue"),
+      padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "cue2" : "cue"), // SHIFT → hot cues 9–16
       padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),
       padModeSampler: (deck, id, s) => padModeKey(deck, id, s ? "global" : "sampler"),
       padModeFx: (deck, id, s) => padModeKey(deck, id, s ? "fx2" : "fx"),
@@ -1231,8 +1327,8 @@ function AppBody() {
             : deck.padMode === "global"
               ? samplerCtl.current?.trigger(i) // global pads are flat index 0-7
               : deck.padMode === "fx" || deck.padMode === "fx2"
-                ? fxKeyDown(deck, id, i)
-                : hotcue(deck, id, s, i);
+                ? fxKeyDown(deck, id, i, s)
+                : hotcue(deck, id, s, cueBankBase(deck.padMode) + i); // CUE → 1–8, CUE 2 → 9–16
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 
@@ -1271,6 +1367,27 @@ function AppBody() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // A watch-only participant (control revoked) can't drive the decks.
       if (lockedRef.current) return;
+
+      // ★ THE LIBRARY, FROM THE KEYBOARD. Operator, 2026-11-02: "problems with basic interaction
+      // and navigation using the shortcuts and the playlist". The FLX4's browse knob and LOAD
+      // buttons drove the library through libRef; the keyboard reached none of it, so a track could
+      // only be loaded with the mouse. While the Library is OPEN the arrows and Enter browse it
+      // (libraryKeys.ts): ↑/↓ move the cursor, ← / → put it on the playlists / the tracks, Enter
+      // loads onto the focused deck and Shift+Enter onto the other one. Closed, they are the board's
+      // again. Loading is a deck action, so it respects canDriveDeck like any other.
+      const libAct = libraryKeyAction(e.code, e.shiftKey, libOpenRef.current);
+      if (libAct) {
+        e.preventDefault();
+        const lib = libRef.current;
+        if (!lib) return;
+        if (libAct.kind === "browse") lib.browse(libAct.delta);
+        else if (libAct.kind === "sources") lib.setSourceNav(libAct.on);
+        else {
+          const target: DeckId = libAct.toOther ? (focused === "A" ? "B" : "A") : focused;
+          if (canDriveDeckRef.current(target)) lib.load(target);
+        }
+        return;
+      }
 
       const actionId = keyIndex.get(e.code);
       if (!actionId) return;
@@ -1334,12 +1451,12 @@ function AppBody() {
     document.documentElement.style.setProperty("--neon-cyan", ACCENT.A);
     document.documentElement.style.setProperty("--neon-pink", ACCENT.B);
     saveSettings(settings);
-    engine.deckA.setJogPhysics(settings.jogWeight, settings.jogDrag);
-    engine.deckB.setJogPhysics(settings.jogWeight, settings.jogDrag);
+    engine.deckA.setJogPhysics(settings.jogWeight, platterDrag(settings.jogWeight));
+    engine.deckB.setJogPhysics(settings.jogWeight, platterDrag(settings.jogWeight));
     engine.deckA.setBendStrength(settings.jogBendStrength);
     engine.deckB.setBendStrength(settings.jogBendStrength);
     for (const d of [engine.deckA, engine.deckB]) {
-      d.setVinylSpeed(settings.vinylSpeed, settings.vinylBrakeTime, settings.vinylStartTime);
+      d.setVinylSpeed(true, settings.vinylBrakeTime, settings.vinylStartTime); // a time of 0 = instant
       d.setBackSpinLength(settings.backSpinLength);
       d.setSlip(settings.slip); // Slip is a scrub behaviour now, driven from Controls (not a per-deck button)
     }
@@ -1353,6 +1470,8 @@ function AppBody() {
     engine.setMasterHeadroomDb(settings.masterHeadroomDb); // trim BEFORE the limiter — see masterHeadroom.ts
     engine.setPerDeckLimiter(settings.perDeckLimiter); // idempotent: re-applying the same state rewires nothing
     engine.setSyncPhaseGain(settings.syncPhaseGain); // how hard SYNC pulls back onto the beat — see settings.ts
+    // Which pairs AUTO / Smart Fader beat-match. The slider's top (41) is "Any pair": exactly √2.
+    setBeatlockMax(settings.beatlockRangePct >= 41 ? BEATLOCK_ANY : settings.beatlockRangePct / 100);
     setDemucsQuality(stemConfig(settings.stemQuality)); // desktop demucs-GPU quality knobs
     // ACCENT is in the deps so a track change (new cover art) repaints the chrome too, not just
     // the waveform that happens to take it as a prop.
@@ -2103,6 +2222,7 @@ function AppBody() {
         // on the host and can wait behind running and preload jobs in the one-at-a-time GPU queue,
         // long enough to outlast a track change on an AUTO host. Checked against the deck itself for
         // BOTH purposes, because re-analyze had the same hole.
+        await whenGpuClear(); // applying packs four stems on this thread — never inside a transition
         if (latest.current.loaded[id] !== videoId) {
           report?.({ kind: "failed", reason: "The host changed the track on that deck before its stems were ready." });
           return;
@@ -2161,6 +2281,38 @@ function AppBody() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.stemModel, settings.autoEnhance]);
 
+  // Re-run stems for whatever is on the decks once a crash guard lifts — the same deliberate
+  // re-derive a model change does, so a "Try again" takes effect on the tracks already loaded.
+  const rederiveLoaded = () => {
+    for (const id of ["A", "B"] as DeckId[]) {
+      const vid = latest.current.loaded[id];
+      const deck = engine.deck(id);
+      if (!vid || !deck.buffer) continue;
+      deriveGuard.current[id] = "";
+      void deriveStems(id, vid, deck.buffer, () => latest.current.loaded[id] !== vid);
+    }
+  };
+  // The answer to a boot-time crash prompt. "Keep off" leaves the block standing for this load, and
+  // the prompt returns on the next one. "Try again" lifts it. For the GPU guard it also restores a
+  // GPU model if the setting is not on one: older builds bounced the setting to "off" when they
+  // blocked, so a lifted block on an "off" setting would otherwise change nothing the user can see.
+  const answerCrash = (id: CrashPrompt["id"], tryAgain: boolean) => {
+    setCrashAsks((asks) => asks.filter((p) => p.id !== id));
+    if (!tryAgain) return;
+    if (id === "stems") {
+      resetStemGuard();
+      rederiveLoaded();
+      return;
+    }
+    unblockGpu();
+    const gpuModel = gpuCrashModel() ?? STEM_MODELS.find((m) => m.tier === "gpu")?.id;
+    if (gpuModel && getStemModel(settings.stemModel).tier !== "gpu") {
+      setSettings((s) => ({ ...s, stemModel: gpuModel })); // the model-change effect above re-derives
+    } else {
+      rederiveLoaded();
+    }
+  };
+
   // Restore the previous session once on startup: mixer + zoom immediately, then
   // re-hydrate each deck's track (IndexedDB-cached → instant) with its controls.
   const didRestore = useRef(false);
@@ -2179,7 +2331,15 @@ function AppBody() {
       // track load below, behind `if (!d.videoId) return` — so an empty deck restored nothing, and
       // the FX chains a DJ had built were silently gone on every refresh. The rack belongs to the
       // DECK, not to whatever is playing through it.
-      applyDeckRack(engine.deck(id), d);
+      // …but not before the FX worklets exist: built now, every reverb/comp in the rack was a
+      // pass-through that the repair then rebuilt (two console warnings and a repair line on every
+      // boot; the operator's console, 2026-11-04). A fraction of a second at startup.
+      if (engine.fxWorkletsReady) applyDeckRack(engine.deck(id), d);
+      else
+        void engine
+          .ensureWorklets()
+          .catch(() => {}) // modules failed: apply anyway — degrade + repair is the fallback
+          .then(() => applyDeckRack(engine.deck(id), d));
       if (!d.videoId) return;
       const track: TrackMeta = {
         videoId: d.videoId,
@@ -2675,6 +2835,7 @@ function AppBody() {
     handlersRef,
     libRef,
     toggleLibrary: toggleLib,
+    closeLibrary: () => setLibOpen(false),
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,
@@ -2726,25 +2887,22 @@ function AppBody() {
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
-          hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
+          hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[cueBankBase(d.padMode) + i] != null), // the live bank's pads
           // The shifted peer modes light their BASE button's lamp (roll→loop, global→sampler, …).
           padMode:
             d.padMode === "roll" ? "loop"
             : d.padMode === "global" ? "sampler"
             : d.padMode === "fx2" ? "fx"
+            : d.padMode === "cue2" ? "cue"
             : d.padMode,
         };
         midi.setFeedback(id, fb);
       });
-      // FORCE the FLX hardware Smart-CFX OFF. That feature (host-controlled, LATCHING, on 0x96/0x00)
-      // remaps the COLOR knob onto the trim CC and fights trim. We do eq/stem entirely in SOFTWARE,
-      // so the hardware feature must stay disengaged — send 0x00 on connect (initial diff) and after
-      // every toggle, NEVER 0x7F. The lamp stays dark; eq/stem mode is shown on-screen.
-      const cfxOn = eqStemModeRef.current;
-      if (cfxOn !== cfxLedRef.current) {
-        cfxLedRef.current = cfxOn;
-        midi.send([0x96, 0x00, 0x00]);
-      }
+      // ★ THE SMART CFX LAMP SAYS STEM MODE (operator, 2026-11-06). Lighting it engages Pioneer's
+      // hardware Smart CFX, which makes the COLOR knob ALSO send TRIM; MidiEngine's echo filter
+      // drops those by timing (the profile's echoLamp, from the 2026-11-06 capture), so the lamp can
+      // finally be lit. Diffed in the engine and resent after a reconnect.
+      midi.setEchoLamp(eqStemModeRef.current);
       // FORCE the FLX hardware SMART FADER OFF too — SAME pathology as Smart-CFX (host-controlled,
       // latching, on 0x96/0x01): driving 0x7F engages the hardware feature and changes crossfader
       // behaviour. We do the crossfader-enable in software, so keep the hardware feature disengaged:
@@ -2769,6 +2927,37 @@ function AppBody() {
     const iv = setInterval(push, 150);
     return () => clearInterval(iv);
   }, [engine, settings.midiEnabled, midi.status.state, midi.setFeedback, midi.send]);
+  // ★ THE BOARD'S VU METERS (operator, 2026-11-06: "i also want to use the vu meters for each
+  // channel"). Each deck's post-fader peak (Deck.meterStereo, the louder side) drives its channel's
+  // level-meter LEDs at ~25 Hz with meter ballistics: instant attack, a steady fall, so the column
+  // reads like a real meter instead of flickering with every sample frame. −48 dBFS lights nothing,
+  // 0 dBFS lights the whole column. MidiEngine.setMeter diffs, so silence costs no traffic.
+  useEffect(() => {
+    if (!settings.midiEnabled || midi.status.state !== "connected") return;
+    const held: Record<DeckId, number> = { A: 0, B: 0 };
+    const FLOOR = -48;
+    // One deck at a time, by name rather than a loop over both: this only READS each deck's meter,
+    // and the both-deck scan (bothDeckActionScan.test.ts) treats any plain Deck method in a loop
+    // over both decks as a write.
+    const level = (id: DeckId, d: Deck) => {
+      const m = d.playing ? d.meterStereo() : { l: -100, r: -100 };
+      const db = Math.max(m.l, m.r);
+      const target = db <= FLOOR ? 0 : Math.min(1, (db - FLOOR) / -FLOOR);
+      held[id] = target >= held[id] ? target : Math.max(target, held[id] - 0.06); // fall ~1.5 col/s
+      midi.setMeter(id, held[id] * 127);
+    };
+    const tick = () => {
+      level("A", engine.deckA);
+      level("B", engine.deckB);
+    };
+    const iv = setInterval(tick, 40);
+    return () => {
+      clearInterval(iv);
+      midi.setMeter("A", 0);
+      midi.setMeter("B", 0);
+    };
+  }, [engine, settings.midiEnabled, midi.status.state, midi.setMeter]);
+  const knobsOn: "eq" | "stems" | undefined = settings.midiEnabled && midi.status.state === "connected" ? (eqStemMode ? "stems" : "eq") : undefined;
   // A user picking a track hands it to the audio master via a load intent (the master
   // does the real streaming / decode / playback / stems); we also load locally for our
   // own waveform. Remote-driven loads go through applyIntent and DON'T re-emit.
@@ -2826,10 +3015,18 @@ function AppBody() {
       if (boardLockedRef.current) return;
       const v = x < -1 ? -1 : x > 1 ? 1 : x;
       setCrossfade(v);
+      // ★ THE REF NOW, NOT AT THE NEXT RENDER. AUTO reads the fader back through crossfadeRef to tell
+      // its own moves from a hand on the fader. The ref used to catch up only when React re-rendered;
+      // the old 150 ms tick usually came after a render, but the 16 ms loop around a cut does not —
+      // it read the stale position, saw a 2.0 jump it had just made itself, and handed the
+      // transition to "manual" (seen in a real AUTO run: a spin-out that never settled).
+      crossfadeRef.current = v;
       engine.setCrossfade(v);
+      // Not the smart fader's own move (AUTO, mostly): its next throw re-reads the decks.
+      smartFader.noteExternalCrossfade();
       if (room.controlling) room.sendIntent({ kind: "crossfade", value: v });
     },
-    [engine, room],
+    [engine, room, smartFader],
   );
   // The ON-SCREEN crossfader drag: when Smart Fader is armed it scrubs the auto-transition
   // (same as the hardware fader); otherwise it's a plain crossfade. (applyCrossfade stays pure so
@@ -2984,7 +3181,10 @@ function AppBody() {
   // Tick the state machine on a steady cadence while AUTO is on (host/solo only).
   useEffect(() => {
     if (!autoStatus.enabled || autoIsRemote) return;
-    const iv = setInterval(() => void mixerRef.current?.tick(), 150);
+    // Never `void` the promise: a throw in a tick used to vanish, and AUTO stalled with no trace.
+    const iv = setInterval(() => {
+      mixerRef.current?.tick().catch((err) => console.error("[htl] AUTO tick failed", err));
+    }, 150);
     return () => clearInterval(iv);
   }, [autoStatus.enabled, autoIsRemote]);
 
@@ -3148,27 +3348,63 @@ function AppBody() {
   // Runs during AUTO, and also when the queue panel is open off-AUTO so radio picks
   // show real key/tempo while you're looking at them (the cheap ISRC/global-DB lookup
   // fills known tracks without a decode; only novel ones decode, one at a time).
-  useQueuePrefetch(mixQueue, engine.ctx, (autoStatus.enabled || mixqOpen) && !isMobileDevice());
+  // Always on a desktop (was: AUTO on, or the Queue open): the suggestions run all the time now, and
+  // ten rows of them are only useful with their BPM / key in. Heavy steps wait out AUTO's quiet
+  // window and the fingerprint runs in a worker, so this costs nothing audible.
+  useQueuePrefetch(mixQueue, engine.ctx, !isMobileDevice());
 
-  // Keep the queue aware of what's loaded on the decks even when AUTO is OFF, so the
-  // panel shows the loaded/playing track as "now playing" and Radio can build
-  // suggestions from both decks without the auto-mixer running. When AUTO is on the
-  // mixer owns `current`, so we step aside.
+  // ★ THE SUGGESTIONS FOLLOW THE SET, AUTO OR NOT (operator, 2026-11-04: "i need the suggestions
+  // engine to work all the time as i play songs ... whether or not auto is on"). Off-AUTO this used
+  // to re-centre only when a track was LOADED, so starting the other deck or fading across to it
+  // never moved the list, and nothing topped it up in between. Now a once-a-second look at the
+  // decks (pickLiveDeck: the deck you can hear) re-centres the queue the moment the live track
+  // changes — the track that went live leaves the list (queue.setCurrent) — and the radio is asked
+  // to top up every few seconds (its own cooldown and pool rules keep that cheap). When AUTO is on
+  // the mixer owns `current` and does all of this itself, so this steps aside.
+  const liveDeckRef = useRef<DeckId | null>(null);
+  const liveVidRef = useRef<string | null>(null);
   useEffect(() => {
     if (autoStatus.enabled) return;
     // A queue-remote (any non-anchor device — my own iPad, a co-DJ, a listener) mirrors the
     // authority's queue via remoteAutomix; running a SECOND local radio engine here just burns
     // recommendation fetches on a queue it never uses (audit #4). Only the authority seeds.
     if (autoIsRemote) return;
-    const a = deckTrack("A");
-    const b = deckTrack("B");
-    const live = (engine.deckA.playing && a) || (engine.deckB.playing && b) || a || b || null;
-    mixQueue.setCurrent(live);
-    // AUTO IS OFF, but the Queue tab is still showing suggestions, so the radio still runs — seeded
-    // from whatever the user has on the decks. There is no vibe anchor here: off-AUTO, every track
-    // change IS the user's own choice, so the live deck is both the anchor and the current track,
-    // and `anchorAge` is permanently 0.
-    if (live) void mixQueue.ensureNext({ anchor: live, current: live, anchorAge: 0, played: 0, arc: mixQueue.arc });
+    let lastFill = 0;
+    const look = () => {
+      const a = deckTrack("A");
+      const b = deckTrack("B");
+      const id = pickLiveDeck({
+        aPlay: engine.deckA.playing,
+        bPlay: engine.deckB.playing,
+        crossfade: crossfadeRef.current,
+        prev: liveDeckRef.current,
+        aLoaded: !!a,
+        bLoaded: !!b,
+      });
+      liveDeckRef.current = id;
+      const live = id === "A" ? a : id === "B" ? b : null;
+      const vid = live?.videoId ?? null;
+      const now = performance.now();
+      if (vid !== liveVidRef.current) {
+        const had = liveVidRef.current;
+        liveVidRef.current = vid;
+        const wasQueued = mixQueue.setCurrent(live) === true;
+        // A REAL change of song (not the first look) re-centres the list on it: the suggested rows
+        // are replaced, rows you added stay — exactly what AUTO does on a live-track change. A song
+        // picked FROM the list keeps the list (it just leaves it): the rest still fits.
+        if (had && vid && !wasQueued) mixQueue.reseedRadio();
+        lastFill = 0; // a new song: ask for suggestions from it right away
+      }
+      // Off-AUTO every track change IS the user's own choice, so the live track is both the
+      // anchor and the current track, and `anchorAge` is permanently 0.
+      if (live && now - lastFill > 4000) {
+        lastFill = now;
+        void mixQueue.ensureNext({ anchor: live, current: live, anchorAge: 0, played: 0, arc: mixQueue.arc });
+      }
+    };
+    look();
+    const t = setInterval(look, 1000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.A.videoId, meta.B.videoId, autoStatus.enabled, autoIsRemote, mixQueue.mode]);
 
@@ -3673,6 +3909,32 @@ function AppBody() {
           Settings/Profile/Session) picks its own edge independently now instead of one
           global left↔right flip; Library's is in Settings ▸ Controls ▸ Library placement. */}
       <nav className="chin" ref={setChinEl}>
+        {/* ★ AUTO LIVES ON THE MAIN SCREEN, AT THE LEFT END (operator, 2026-11-04: "move the button
+            outside the library section into the main screen", then "move auto button to the left side,
+            the visual of it feels off"). A chin button like its neighbours — a status dot, the word,
+            the countdown — not a filled block of accent colour sitting in a row of flat ones. It
+            changes what the DECKS do, so it cannot hide inside a panel you have to open first; the
+            chip says what it is doing (the same words as the Queue's status, automixStatus.ts). */}
+        {(() => {
+          const st = autoIsRemote && remoteAutomix ? remoteAutomix.status : autoStatus;
+          const nx = (autoIsRemote && remoteAutomix ? remoteAutomix.upcoming : mixQueue.upcoming)[0];
+          const l = autoLine(st, nx ? displayTrack(nx.title, nx.artist).title || nx.videoId : null);
+          const canAuto = canArmAutoMix(room);
+          return (
+            <button
+              className={`chin-btn chin-auto ${st.enabled ? "on" : ""}`}
+              onClick={toggleAuto}
+              aria-pressed={st.enabled}
+              disabled={!canAuto}
+              aria-label={st.enabled ? `AUTO on — ${l.headline}` : "AUTO off"}
+              title={canAuto ? l.headline : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
+            >
+              <span className="chin-auto-dot" aria-hidden="true" />
+              <span className="chin-auto-word">AUTO</span>
+              {l.chip && <span className={`chin-auto-chip tone-${l.tone}`}>{l.chip}</span>}
+            </button>
+          );
+        })()}
         <button className={`chin-btn chin-library ${libOpen ? "active" : ""}`} onClick={toggleLib} aria-label="Library">
           <span className="chin-label">Library</span>
         </button>
@@ -3909,6 +4171,7 @@ function AppBody() {
             accent={ACCENT.A}
             otherDeck={engine.deckB}
             otherAccent={ACCENT.B}
+            knobs={knobsOn}
             focused={focused === "A"}
             onFocus={() => setFocused("A")}
             expanded={expandedLane === "A"}
@@ -3939,6 +4202,7 @@ function AppBody() {
             accent={ACCENT.B}
             otherDeck={engine.deckA}
             otherAccent={ACCENT.A}
+            knobs={knobsOn}
             focused={focused === "B"}
             onFocus={() => setFocused("B")}
             expanded={expandedLane === "B"}
@@ -4030,7 +4294,7 @@ function AppBody() {
             }))}
           onRetranscribe={(deck) => reprocessLyrics(deck)}
           onGpuReenable={() => {
-            setGpuCrashed(false);
+            setCrashAsks((asks) => asks.filter((p) => p.id !== "gpu")); // answered in Settings instead
             refresh();
           }}
           outputSupported={engine.canSetSink}
@@ -4124,6 +4388,8 @@ function AppBody() {
         </div>
       )}
 
+      <CrashGuardPrompt prompts={crashAsks} onAnswer={answerCrash} />
+      <PerfRecChip />
     </div>
   );
 }

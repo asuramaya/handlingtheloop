@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
-import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
+import { HOT_CUE_BANK, cueBankBase, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
@@ -48,6 +48,9 @@ interface DeckControlsProps {
   onSync: () => void;
   onKey: () => void;
   cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
+  /** What the controller's HI/MID/LOW/CFX knobs drive right now (App eqStemMode), or undefined with
+   *  no controller. The bank tags that row; on the board the SMART CFX lamp mirrors it. */
+  knobs?: "eq" | "stems";
   locked?: boolean; // a watch-only / off-seat deck: the whole bank is non-interactive (control blocked)
   emitControls: (id: "A" | "B") => void; // re-broadcast a deck's whole control state (after SYNC / RESET)
   sampler?: SamplerApi; // shared sampler — this deck's 8 region pads fill the SAMPLER pad-mode
@@ -72,7 +75,7 @@ const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
 // SMP = the deck's LOCAL sample pads (slices of this track); its shift peer GLBL = the account's
 // GLOBAL sample bank (uploaded one-shots).
 const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: string }[] = [
-  { base: "cue", label: "CUE", shiftLabel: "", kbd: "U" }, // no shift peer (KEY retired)
+  { base: "cue", label: "CUE", shiftLabel: "CUE2", kbd: "U" }, // CUE2 = hot cues 9–16
   { base: "fx", label: "FX", shiftLabel: "FX2", kbd: "I" },
   { base: "loop", label: "LOOP", shiftLabel: "ROLL", kbd: "O" },
   { base: "sampler", label: "SMP", shiftLabel: "GLBL", kbd: "P" },
@@ -85,7 +88,7 @@ const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: st
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, knobs, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
@@ -145,7 +148,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   if (!padRestored.current) {
     padRestored.current = true;
     const saved = localStorage.getItem(PAD_MODE_KEY);
-    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "global") deck.setPadMode(saved);
+    if (saved === "loop" || saved === "cue" || saved === "cue2" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "global") deck.setPadMode(saved);
   }
   // True when the deck is parked in a SHIFTED-layer mode (ROLL/GLOBAL/…) — used to persistently tint
   // the bank so it's obvious you're on the second layer even after releasing shift.
@@ -240,9 +243,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     if (locked) return; // watch-only: see the lock note above changePadMode
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    const { fired, repeat, kind } = fxPadPress(deck, id, slot);
+    const { fired, off, repeat, kind, alt } = fxPadPress(deck, id, slot, shift || e.shiftKey); // SHIFT → toggle the latch
     if (repeat) return;
-    if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
+    if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot, alt) });
+    if (off) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
     // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which closes the hole
     // chains opened, where a pad could engage something that was not on screen.
     if (kind) fxCtlRef?.current?.selectKind(kind);
@@ -250,7 +254,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
   const fxPadUp = (slot: number, el?: HTMLElement) => {
     if (locked) return; // watch-only: see the lock note above changePadMode
-    if (fxPadRelease(deck, id, slot)) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
+    const rel = fxPadRelease(deck, id, slot);
+    if (rel) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot, rel === "alt") });
     // ★ Drop the focus a click leaves behind. Chrome shows :focus-visible on the last-clicked
     // element the moment you touch the KEYBOARD — so clicking a pad and then playing the bank
     // from 1-8 painted a focus ring on whichever pad you happened to click last, which reads as
@@ -353,7 +358,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   };
 
   return (
-    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
+    <div className={`bank ${mirror ? "mirror" : ""} ${shift ? "shifted" : ""} ${inShiftedMode ? "in-shifted-mode" : ""} ${deck.adjusting ? "adjusting" : ""} ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${locked ? "locked" : ""} page-${page}`} data-deck={id} data-knobs={knobs} style={{ ["--accent" as string]: accent }} onPointerDownCapture={onFocus}>
       <div className="bank-main" ref={setStackEl}>
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
@@ -528,16 +533,18 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {deck.padMode === "cue" && (
-        <div className="hotcues">
-          {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
+        {(deck.padMode === "cue" || deck.padMode === "cue2") && (
+        <div className={`hotcues ${deck.padMode === "cue2" ? "cue-bank2" : ""}`}>
+          {Array.from({ length: HOT_CUE_BANK }, (_, p) => {
+            // CUE pads are hot cues 1–8, CUE 2 pads 9–16: `i` is the hot-cue SLOT, `p` the pad.
+            const i = cueBankBase(deck.padMode) + p;
             const set = deck.slotIsSet(i);
             const isLoop = deck.hotLoops[i] != null;
             return (
               <button
                 key={i}
                 className={`pad ${set ? "set" : ""} ${isLoop ? "loop" : ""}`}
-                data-cue={i + 1}
+                data-cue={p + 1}
                 title={shift ? "Clear cue" : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to preview"}
                 onPointerDown={(e) => {
                   if (locked) return; // watch-only
@@ -647,7 +654,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               className={`pad fx ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing latched" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
-              title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
+              title={pad ? `${pad.label} — hold = live, SHIFT = latch · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
               onPointerDown={(e) => fxPadDown(e, i)}
               onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
               onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
@@ -669,19 +676,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             not follow it — the one place the two can disagree, and an unlabelled disagreement is
             how this bank accumulated three contradictory comments in the first place (9ee26ff4).
             Until 2026-09-10 this was an exact duplicate of the bank above. */}
+        {/* FX2 = deck moves, not effects (movePads.ts): SPIN · CENSOR · BRAKE, the rest to be decided.
+            Same gesture as the FX bank. */}
         {deck.padMode === "fx2" && (
-        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef} data-bank="MASTER">
+        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef}>
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `e${i}`}
               className={`pad fx fx2 ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
-              title={pad ? `${pad.label} — MASTER chain · tap to latch, hold for momentary · ${pad.hint}` : "Empty slot on the MASTER chain — add an effect to it in the rack below"}
+              title={pad ? `${pad.label} — ${pad.hint} · hold = live, SHIFT = latch` : ""}
               onPointerDown={(e) => fxPadDown(e, i)}
               onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
               onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
-              onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad?.label ?? "—"}
               <span className="kbd">{i + 1}</span>

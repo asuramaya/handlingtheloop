@@ -121,8 +121,15 @@ export function LyricsSettings({
               </div>
             ))}
 
+          {/* With Auto-enhance on, a track whose stems are in the shared cache still gets its vocal
+              stem (and so word timing) even with separation off, so "stems are off" was only true
+              for the tracks nobody had separated yet. */}
           {!isYt && !wordLevel && !mobile && (
-            <p className="settings-hint warn">Stems are off — right words, line-by-line timing.</p>
+            <p className="settings-hint warn">
+              {settings.autoEnhance
+                ? "Separation is off: word timing only for tracks with cached stems, line-by-line otherwise."
+                : "Stems are off — right words, line-by-line timing."}
+            </p>
           )}
         </>
       )}

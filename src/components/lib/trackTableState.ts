@@ -26,6 +26,9 @@ export interface TrackTableState {
   cacheOnly: boolean;
   stemOnly: boolean;
   scrollTop: number;
+  /** The browse cursor's track (trackKey), so coming back to a list puts the cursor where it was —
+   *  by identity, not index, so a re-sort or a moved queue row cannot strand it on another track. */
+  cursorKey?: string | null;
 }
 
 const PREFIX = "htl:tt:";
@@ -45,6 +48,7 @@ export function loadTableState(key: string | undefined): Partial<TrackTableState
       cacheOnly: typeof v.cacheOnly === "boolean" ? v.cacheOnly : undefined,
       stemOnly: typeof v.stemOnly === "boolean" ? v.stemOnly : undefined,
       scrollTop: typeof v.scrollTop === "number" && v.scrollTop >= 0 ? v.scrollTop : undefined,
+      cursorKey: typeof v.cursorKey === "string" ? v.cursorKey : undefined,
     };
   } catch {
     return {};

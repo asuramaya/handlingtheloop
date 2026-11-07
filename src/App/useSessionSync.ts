@@ -7,7 +7,8 @@ import type { StemAckState } from "../htl/room/protocol";
 // their useCallback dep arrays are byte-identical. The 4 auto-mix bridge refs are declared in App
 // (assigned by the far-below mixer) and passed in. The type-only `../App` import is erased at build
 // (no runtime cycle). See htl-refactor-monoliths.
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { padSlots } from "./deckApply";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
@@ -124,6 +125,8 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   // on join. Safe because applyRoomSnapshot only runs for non-driving followers, which have no
   // live drag of their own to fight; ongoing host changes still cross as intents. Playhead is
   // left to ticks/transport (no seek here — that would skip).
+  // Per-deck token for the FX restore deferred until the worklets exist (see reconcileDeckState).
+  const fxApplySeq = useRef<Partial<Record<DeckId, number>>>({});
   const reconcileDeckState = useCallback(
     (id: DeckId, d: DeckSnapshot) => {
       const deck = engine.deck(id);
@@ -158,8 +161,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       deck.setPitch(d.pitchSemis ?? 0);
       // Discrete state — absolute, so exact regardless of our own playhead.
       deck.cuePoint = d.cuePoint;
-      deck.hotCues = [...d.hotCues];
-      deck.hotLoops = (d.hotLoops ?? []).map((l) => (l ? { ...l } : null));
+      const slots = deck.hotCues.length;
+      deck.hotCues = padSlots([...d.hotCues], slots);
+      deck.hotLoops = padSlots((d.hotLoops ?? []).map((l) => (l ? { ...l } : null)), slots);
       deck.loop = d.loop ? { ...d.loop } : null;
       deck.loopInPoint = d.loopInPoint;
       applyDeckStems(deck, d);
@@ -185,7 +189,20 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // Per-videoId dedupe (reconciledTarget) means this runs once per load, not over live edits.
       // BOTH halves — the master rack and the stem chains. See App/deckFxSnapshot.ts for why
       // applying only `fx` here left a late-joining listener without the host's stem chains.
-      applyDeckFxSnapshot(deck, d);
+      // ★ NOT BEFORE THE FX WORKLETS EXIST. At boot the stored snapshot lands before addModule()
+      // has finished, so every reverb/comp in it was built as a pass-through and then rebuilt by the
+      // repair — two warnings and a repair line per boot, and effects that were briefly not there.
+      // Wait for the modules when they are not in yet; a per-deck token makes sure a NEWER snapshot
+      // applied meanwhile is never overwritten by this older, delayed one.
+      const tok = (fxApplySeq.current[id] = (fxApplySeq.current[id] ?? 0) + 1);
+      if (engine.fxWorkletsReady) applyDeckFxSnapshot(deck, d);
+      else
+        void engine
+          .ensureWorklets()
+          .catch(() => {}) // modules failed: apply anyway — the degrade + repair path is the fallback
+          .then(() => {
+            if (fxApplySeq.current[id] === tok) applyDeckFxSnapshot(engine.deck(id), d);
+          });
     },
     [engine, setStatusFor, nameDeckFromSnapshot],
   );

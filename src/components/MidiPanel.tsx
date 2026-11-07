@@ -29,6 +29,11 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
   const matched = matchProfile(device);
 
   const visible = LEARN_CONTROLS.filter((c) => (deckTab === "global" ? !c.deck : c.deck === deckTab));
+  // ★ A TESTED CONTROLLER NEEDS NO LEARNING, so the forty-row learn grid starts folded behind one
+  // button when one is connected (an FLX4 is mapped the moment it is plugged in). It stays open
+  // when nothing matched, or when you have already learned controls of your own.
+  const learnedCount = Object.keys(settings.midiBindings ?? {}).length;
+  const [learnOpen, setLearnOpen] = useState(() => !matched || learnedCount > 0);
 
   return (
     <>
@@ -103,8 +108,18 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
 
       {/* The "MIDI maps" card was here. Same control, panel header, every tab. */}
 
-      {/* Learn grid, split by deck */}
-      {settings.midiEnabled && (
+      {/* Learn grid, split by deck — folded for a tested controller (see learnOpen) */}
+      {settings.midiEnabled && !learnOpen && (
+        <div className="settings-section">
+          <div className="settings-row">
+            <span className="settings-label">MIDI Learn</span>
+            <button className="hw-btn small" onClick={() => setLearnOpen(true)}>
+              Customise mapping{learnedCount ? ` (${learnedCount} learned)` : ""}
+            </button>
+          </div>
+        </div>
+      )}
+      {settings.midiEnabled && learnOpen && (
         <div className="settings-section">
           <div className="settings-section-head">
             <span className="settings-label">MIDI Learn</span>

@@ -1,7 +1,10 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { ToolbarHostContext } from "./lib/toolbarHost";
+import { RowsStepper } from "./lib/RowsStepper";
 import { trackKey, type TrackMeta } from "@htl/library";
 import { analysisState, cacheState } from "@htl/media";
-import { fmtTime } from "../util/format";
+import { displayTrack, fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
 import { useAnalysisStatus } from "./useAnalysisStatus";
 import { TrackContextMenu } from "./lib/TrackContextMenu";
@@ -11,10 +14,6 @@ import { loadTableState, saveTableState } from "./lib/trackTableState";
 import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
-  RESIZABLE,
-  SCALE_MIN,
-  SCALE_MAX,
-  SCALE_STEP,
   VIRT_THRESHOLD,
   ROW_OVERSCAN,
   ROW_H_EST,
@@ -116,19 +115,49 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   // again. Read once, on mount: `stateKey` changing means a different list, and a different list
   // gets its own remount via React's key, not a mutation of this one.
   const saved = useMemo(() => loadTableState(stateKey), [stateKey]);
+  // ★ THE CURSOR COMES BACK WITH THE LIST (operator, 2026-11-06: "when navigating in and out of the
+  // lists make it remember the position of the selector so i dont have to scroll all the way down to
+  // the last position"). Held by track identity; saved with the rest of the table's state.
+  const cursorKeyRef = useRef<string | null>(saved.cursorKey ?? null);
   const [sortKey, setSortKey] = useState<SortKey>(saved.sortKey ?? "index");
   const [sortDir, setSortDir] = useState<1 | -1>(saved.sortDir ?? 1);
   // `initialQuery` still wins: a SEARCH table's text belongs to whoever ran the search, and this
   // memory must never overwrite it.
   const [query, setQuery] = useState(initialQuery ?? saved.query ?? ""); // filter (library/queue) OR search box text
+  const toolbarHost = useContext(ToolbarHostContext);
+  // SEARCH WITHOUT A BUTTON: a pause in typing runs it (Enter still runs it at once). Three
+  // characters at least, and never the same text twice in a row.
+  const lastSearched = useRef((initialQuery ?? "").trim());
+  useEffect(() => {
+    if (!onSubmitSearch) return;
+    const q = query.trim();
+    if (q.length < 3 || q === lastSearched.current) return;
+    const t = setTimeout(() => {
+      lastSearched.current = q;
+      onSubmitSearch(q);
+    }, 650);
+    return () => clearTimeout(t);
+  }, [query, onSubmitSearch]);
   const [reorderOver, setReorderOver] = useState<number | null>(null); // queue: row being hovered for reorder
   const [cacheOnly, setCacheOnly] = useState(saved.cacheOnly ?? false); // narrow to pooled (instant-load) tracks
   const [stemOnly, setStemOnly] = useState(saved.stemOnly ?? false); // narrow to tracks whose stems are cached
   const cacheVer = useCacheStatus(); // re-render rows (+ recompute the filter) when the manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   // Column sizing (persisted widths, row scale, # / thumb px widths + resize handlers).
-  const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, changeScale, colWidth } =
-    useColumnLayout(tableRef);
+  const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, colWidth } = useColumnLayout(tableRef);
+  // The pinned head's height (toolbar + topSlot) = the column headings' sticky offset.
+  const headRef = useRef<HTMLDivElement>(null);
+  const [headH, setHeadH] = useState(0);
+  useLayoutEffect(() => {
+    const el = headRef.current;
+    if (!el) return;
+    const measure = () => setHeadH(Math.round(el.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const anchor = useRef<number | null>(null);
   const longPress = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false); // a long-press opened the menu → swallow the trailing click
@@ -190,7 +219,15 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       });
     }
     if (onReorder || sortKey === "index") return sortDir === 1 || onReorder ? filtered : [...filtered].reverse();
-    return [...filtered].sort((a, b) => compareBy(a, b, sortKey) * sortDir);
+    // A track with no BPM / key yet sorts LAST in either direction — "—" is not a small number, and
+    // ascending put every unanalysed track on top of the list (operator, 2026-11-05).
+    const unknown = (t: TrackMeta) => (sortKey === "bpm" ? t.bpm == null : sortKey === "key" ? !t.key : false);
+    return [...filtered].sort((a, b) => {
+      const ua = unknown(a);
+      const ub = unknown(b);
+      if (ua !== ub) return ua ? 1 : -1;
+      return compareBy(a, b, sortKey) * sortDir;
+    });
   }, [rows, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
 
   // ----- Row windowing (only render the visible slice of a large list) -----
@@ -253,7 +290,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // to the tracked value, which is the only thing available once the node is gone.
     const sc = scrollerRef.current;
     if (sc?.isConnected) savedScroll.current = sc.scrollTop;
-    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current });
+    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current, cursorKey: cursorKeyRef.current });
   }, [stateKey, sortKey, sortDir, query, cacheOnly, stemOnly]);
   // Save when a control moves, AND on unmount — the cleanup is the one that catches closing the
   // panel or loading a track, where nothing changed but the component is about to be destroyed.
@@ -336,29 +373,54 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       const row0 = table.getBoundingClientRect().top + theadH;
       const rowTop = row0 + idx * rowH;
       const rowBot = rowTop + rowH;
-      const viewTop = scRect.top + theadH; // keep clear of the sticky header
+      // Keep clear of EVERYTHING pinned above the rows: the column headings AND the pinned head over
+      // them (the Queue's Now/Next stage — TrackTable .tt-head, measured as headH). Counting only the
+      // headings left a stepped-up cursor row hidden under the stage (operator, 2026-11-06).
+      const viewTop = scRect.top + headH + theadH;
       if (rowTop < viewTop) sc.scrollTop -= viewTop - rowTop + rowH;
       else if (rowBot > scRect.bottom) sc.scrollTop += rowBot - scRect.bottom + rowH;
     },
-    [rowH],
+    [rowH, headH],
   );
+  // One cursor step, shared by the hardware browse knob, the keyboard (via the handle) and the
+  // filter box's ↓ / ↑ below.
+  const stepCursor = (delta: number) => {
+    if (view.length === 0) return;
+    const cur = cursorRef.current;
+    const next = cur < 0 ? (delta > 0 ? 0 : view.length - 1) : Math.max(0, Math.min(view.length - 1, cur + delta));
+    cursorRef.current = next;
+    setCursor(next);
+    scrollCursorIntoView(next);
+    cursorKeyRef.current = view[next] ? trackKey(view[next]) : null;
+    persistCursor();
+  };
+  // Save the cursor's track as it moves (cheap: one small localStorage write per step).
+  const persistCursor = () => persist();
+  // Put the cursor back on its track once the list has rows, after the scroll position is restored.
+  const cursorRestored = useRef(false);
+  useLayoutEffect(() => {
+    if (cursorRestored.current || !stateKey || view.length === 0) return;
+    cursorRestored.current = true;
+    const k = cursorKeyRef.current;
+    if (!k) return;
+    const idx = view.findIndex((t) => trackKey(t) === k);
+    if (idx < 0) return;
+    cursorRef.current = idx;
+    setCursor(idx);
+    requestAnimationFrame(() => scrollCursorIntoView(idx));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey, view.length]);
   useImperativeHandle(
     ref,
     () => ({
-      moveCursor: (delta: number) => {
-        if (view.length === 0) return;
-        const cur = cursorRef.current;
-        const next = cur < 0 ? (delta > 0 ? 0 : view.length - 1) : Math.max(0, Math.min(view.length - 1, cur + delta));
-        cursorRef.current = next;
-        setCursor(next);
-        scrollCursorIntoView(next);
-      },
+      moveCursor: (delta: number) => stepCursor(delta),
       loadCursor: (deck: "A" | "B") => {
         const t = view[cursorRef.current];
         if (t) onLoad(deck, t);
       },
       hasRows: () => view.length > 0,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [view, onLoad, scrollCursorIntoView],
   );
 
@@ -366,7 +428,11 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+      setMenu(null);
+    };
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     window.addEventListener("keydown", onKey);
@@ -434,7 +500,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // resizable data column. Title isn't in RESIZABLE — it's the flex absorber — so it's
     // called out explicitly. A `pxResize` handler (the # column) drags a px width instead
     // of trading fractions.
-    const hasHandle = !!pxResize || id === "title" || RESIZABLE.some((c) => c.id === id);
+    // Handles on the columns that share the width: Title|Artist (and the px-sized # column).
+    const hasHandle = !!pxResize || id === "title";
     return (
       <th
         className={`${cls} tt-sortable ${sortKey === id ? "sorted" : ""}`}
@@ -452,12 +519,16 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     );
   };
 
-  return (
+  // The queue (onReorder) has nothing left for a toolbar — no filter, no chips, no "Up next" label.
+  const hasToolbar = !onReorder || !!cacheFilter || !!searchMode;
+  const toolbarBody = (
     <>
-      <div className="tt-toolbar">
         {!onReorder && (
           <div className="tt-filter">
-            <span className="tt-filter-ico" aria-hidden="true">{searchMode ? "🔍" : "🔎"}</span>
+            <svg className="tt-filter-ico" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.4 10.4L14 14" />
+            </svg>
             <input
               className="tt-filter-input"
               type="search"
@@ -467,56 +538,83 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  if (searchMode) onSubmitSearch!(query.trim());
+                  if (searchMode) {
+                    lastSearched.current = query.trim();
+                    onSubmitSearch!(query.trim());
+                  }
                   e.currentTarget.blur(); // hand the keyboard back to the decks after committing
+                }
+                // ★ ↓ / ↑ LEAVE THE FILTER FOR THE RESULTS. Type to filter, ↓ to the first match, Enter
+                // to load: without this the filter box kept the arrows (they only moved its text
+                // cursor) and the results could only be reached with the mouse.
+                if (!searchMode && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                  stepCursor(e.key === "ArrowDown" ? 1 : -1);
                 }
               }}
             />
             {query && !searchMode && (
               <button className="tt-filter-clear" onClick={() => setQuery("")} aria-label="Clear filter">
-                ✕
+                <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" /></svg>
               </button>
             )}
+            {/* ★ ONE FIELD, EVERY VIEW (operator, 2026-11-05: the filter row's pieces jumped and
+                gapped between views). What narrows this list lives INSIDE the field at its right end:
+                the Cached / Stemmed toggles (their dots are also the legend for the row pips), or in
+                Search the status of the search. The field is the same box, same width, same place
+                in Collection, Community, a playlist and Search. */}
+            <span className="tt-filter-trail">
+              {!searchMode && (query.trim() || cacheOnly || stemOnly) && (
+                <span className="tt-filter-count" aria-live="polite">
+                  {view.length} of {rows.length}
+                </span>
+              )}
+              {searchMode && (
+                <span className="tt-filter-count" aria-live="polite">
+                  {searching ? "Searching…" : query.trim() && tracks.length ? `${tracks.length} results` : ""}
+                </span>
+              )}
+              {cacheFilter && !onReorder && (
+                <span className="tt-cache-chips" role="group" aria-label="Show only">
+                  <button
+                    className={`tt-chip ${cacheOnly ? "on" : ""}`}
+                    aria-pressed={cacheOnly}
+                    title="Show only tracks whose audio is cached"
+                    onClick={() => setCacheOnly((v) => !v)}
+                  >
+                    <span className="pip pip-song" />
+                    <span className="tt-chip-label">Cached</span>
+                  </button>
+                  <button
+                    className={`tt-chip ${stemOnly ? "on" : ""}`}
+                    aria-pressed={stemOnly}
+                    title="Show only tracks with separated stems"
+                    onClick={() => setStemOnly((v) => !v)}
+                  >
+                    <span className="pip pip-stems" />
+                    <span className="tt-chip-label">Stemmed</span>
+                  </button>
+                </span>
+              )}
+              {toolbarHost && <RowsStepper inField />}
+            </span>
           </div>
         )}
-        {onReorder && <span className="tt-queue-label">Up next</span>}
-        {cacheFilter && !onReorder && (
-          <div className="tt-cache-chips" role="group" aria-label="Filter by cache state">
-            <button
-              className={`tt-chip ${cacheOnly ? "on" : ""}`}
-              aria-pressed={cacheOnly}
-              onClick={() => setCacheOnly((v) => !v)}
-            >
-              <span className="pip pip-song" /> Cached
-            </button>
-            <button
-              className={`tt-chip ${stemOnly ? "on" : ""}`}
-              aria-pressed={stemOnly}
-              onClick={() => setStemOnly((v) => !v)}
-            >
-              <span className="pip pip-stems" /> Stemmed
-            </button>
-          </div>
-        )}
-        {searchMode && (
-          <button className="tt-search-btn btn" onClick={() => onSubmitSearch!(query.trim())} disabled={searching || !query.trim()}>
-            {searching ? "…" : "Search"}
-          </button>
-        )}
-        {/* Rows-size stepper as ONE right-pinned unit — keeping − and ＋ together (they were
-            loose toolbar children, so space-between flung them to opposite ends). */}
-        <div className="tt-rows">
-          <span className="tt-rows-label">Rows</span>
-          <button className="tt-step" onClick={() => changeScale(-SCALE_STEP)} disabled={scale <= SCALE_MIN}>
-            −
-          </button>
-          <button className="tt-step" onClick={() => changeScale(SCALE_STEP)} disabled={scale >= SCALE_MAX}>
-            ＋
-          </button>
-        </div>
-      </div>
-
+    </>
+  );
+  return (
+    <>
+      {hasToolbar && toolbarHost && createPortal(toolbarBody, toolbarHost)}
+      {/* ★ THE TOP IS ANCHORED, the list scrolls under it (operator, 2026-11-04: "anchor the top
+          part and make the scroll happen internally on the track list"). Toolbar + topSlot are one
+          sticky block; its measured height is the column headings' sticky offset, so the headings
+          ride directly under it and only the rows move. Sticky, not a nested scroller: the row
+          windowing measures the existing scroll container, which stays as it is. */}
+      <div className="tt-head" ref={headRef}>
+      {hasToolbar && !toolbarHost && <div className="tt-toolbar">{toolbarBody}</div>}
       {topSlot}
+      </div>
 
       {tracks.length === 0 ? (
         <div className="lib-empty">{emptyHint}</div>
@@ -524,7 +622,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
         <table
           ref={tableRef}
           className="track-table"
-          style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px` }}
+          style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px`, ["--tt-head-h" as string]: `${headH}px` }}
         >
           {/* Column widths live here (one place) so table-layout:fixed resizing is
               stable — the resizable columns carry the dragged width, Title (auto)
@@ -535,9 +633,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             <col className="col-thumb" style={{ width: `${thumbW}px` }} />
             <col className="col-title" />
             <col className="col-artist" style={{ width: colWidth("artist") }} />
-            <col className="col-bpm" style={{ width: colWidth("bpm") }} />
-            <col className="col-key" style={{ width: colWidth("key") }} />
-            <col className="col-time" style={{ width: colWidth("time") }} />
+            {/* BPM / Key / Time are sized to what they hold ("128.0", "12A", "12:34") and do not grow
+                with the table: as fractions they took ~200 px each on a wide library while Title cut
+                off. Title and Artist share everything else. */}
+            <col className="col-bpm" style={{ width: "4.6em" }} />
+            <col className="col-key" style={{ width: "3.6em" }} />
+            <col className="col-time" style={{ width: "4em" }} />
             {extraCol && <col className="col-extra" />}
           </colgroup>
           <thead>
@@ -564,10 +665,13 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {view.slice(vStart, vEnd).map((t, k) => {
               const i = vStart + k; // true index into `view` (selection/menus/reorder use it)
               const rowKey = trackKey(t); // identity for selection/menus; NOT for deck/cache state
+              const onDeck = deckLoaded?.A === t.videoId ? "A" : deckLoaded?.B === t.videoId ? "B" : null;
               return (
               <tr
                 ref={k === 0 ? firstRowRef : undefined}
                 key={`${rowKey}:${i}`}
+                // A loaded row reads in ITS DECK's colour (it was a fixed green whatever the deck was).
+                style={onDeck && deckColors?.[onDeck] ? ({ ["--row-deck" as string]: deckColors[onDeck] } as CSSProperties) : undefined}
                 className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(rowKey) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
                 draggable
                 onClick={(e) => {
@@ -675,22 +779,36 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   if (Number.isInteger(from) && from !== i) onReorder(from, i);
                 }}
               >
-                <td className="col-num">{i + 1}</td>
+                {/* ★ THE DECK BADGE TAKES THE ROW NUMBER'S PLACE. It used to sit inside the title cell
+                    ahead of the cache dots, so a loaded row's title started ~2em right of every other
+                    row's and the Title column read as ragged. The # is the least useful thing on a
+                    loaded row; "on deck A" is the most. */}
+                <td className="col-num">
+                  {onDeck ? (
+                    <span className="tt-deck" style={{ background: deckColors?.[onDeck] }} title={`Loaded on Deck ${onDeck}`}>
+                      {onDeck}
+                    </span>
+                  ) : (
+                    i + 1
+                  )}
+                </td>
                 <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
-                <td className="col-title" title={t.title}>
-                  {(() => {
-                    const d = deckLoaded?.A === t.videoId ? "A" : deckLoaded?.B === t.videoId ? "B" : null;
-                    return d ? (
-                      <span className="tt-deck" style={{ background: deckColors?.[d] }} title={`Loaded on Deck ${d}`}>
-                        {d}
-                      </span>
-                    ) : null;
-                  })()}
-                  <CachePips videoId={t.videoId} />
-                  {t.title}
+                <td className="col-title" title={t.title /* the upload's own title, in full */}>
+                  {/* Fixed-width slot, so a title starts in the same place with or without dots. */}
+                  {/* The # column (and the deck badge in it) is dropped in the narrow view, so the
+                      badge is repeated here, shown only there (library.css, the 440px container). */}
+                  {onDeck && (
+                    <span className="tt-deck tt-deck-inline" style={{ background: deckColors?.[onDeck] }} aria-hidden="true">
+                      {onDeck}
+                    </span>
+                  )}
+                  <span className="tt-marks">
+                    <CachePips videoId={t.videoId} />
+                  </span>
+                  {displayTrack(t.title, t.artist).title}
                 </td>
                 <td className="col-artist" title={t.artist}>
-                  {t.artist}
+                  {displayTrack(t.title, t.artist).artist}
                 </td>
                 <td className="col-bpm">{t.bpm != null ? t.bpm.toFixed(1) : "—"}</td>
                 <td className="col-key">{t.key || "—"}</td>

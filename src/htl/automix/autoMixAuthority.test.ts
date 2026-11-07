@@ -39,7 +39,8 @@ describe("who may arm auto-mix", () => {
 describe("the refusal is visible on every control that arms it", () => {
   const read = (p: string) => readFileSync(fileURLToPath(new URL(`../../components/${p}`, import.meta.url)), "utf8");
 
-  for (const file of ["MixQueuePanel.tsx", "LibraryPanel.tsx"]) {
+  // The main AUTO button moved from the Library header to the chin (App.tsx), 2026-11-04.
+  for (const file of ["MixQueuePanel.tsx", "../App.tsx"]) {
     test(`${file}'s AUTO button is disabled when the seat may not arm`, () => {
       const src = read(file);
       expect(src, `${file} no longer threads canAuto`).toMatch(/canAuto/);

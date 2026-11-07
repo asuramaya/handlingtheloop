@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { RowsStepper } from "./lib/RowsStepper";
+import { ToolbarHostContext } from "./lib/toolbarHost";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
 import {
@@ -72,6 +74,7 @@ export interface LibraryHandle {
   browse: (delta: number) => void; // rotate: step the track cursor, OR the source if nav-mode
   load: (deck: "A" | "B") => void; // load the cursor row onto a deck
   toggleSourceNav: () => void; // encoder PRESS: jump the cursor between track list and sources
+  setSourceNav: (on: boolean) => void; // keyboard ← / →: put the cursor on the sources / the tracks
 }
 
 export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(function LibraryPanel({
@@ -105,6 +108,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   // single ref because they're mutually exclusive, so only the mounted one holds it. The
   // Explorer/Queue views don't forward a cursor yet, so the wheel no-ops there.
   const activeTableRef = useRef<TrackTableHandle>(null);
+  // The slot in the title row that the visible table's toolbar portals into (lib/toolbarHost.ts).
+  const [toolsHost, setToolsHost] = useState<HTMLElement | null>(null);
   // Browse cursor target: the track list, or the source list (Collection / Community /
   // playlists) in the sidebar. The encoder PRESS flips between them (rekordbox tree/list).
   const [sourceNav, setSourceNav] = useState(false);
@@ -173,6 +178,19 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       /* ignore */
     }
   }, [navOpen]);
+  // ★ THE ENCODER'S SOURCE MODE SHOWS THE SOURCES. Pressing the browse encoder moves the cursor to
+  // the sidebar, but a collapsed sidebar (a phone's default, or one the user hid) left that mode
+  // invisible: the encoder now changed sources nobody could see. Entering source mode opens the
+  // sidebar; leaving it on a narrow library (where the sidebar covers the tracks) closes it again,
+  // the same rule as a tap on a source (see the aside's onClick). Transitions only, never on mount.
+  const prevSourceNav = useRef(sourceNav);
+  const libDivRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (prevSourceNav.current === sourceNav) return;
+    prevSourceNav.current = sourceNav;
+    if (sourceNav) setNavOpen(true);
+    else if ((libDivRef.current?.clientWidth ?? 9999) < 640) setNavOpen(false);
+  }, [sourceNav]);
   // Collapsible sidebar sections (PLAYLISTS / MY YOUTUBE / MY SPOTIFY / MY TIDAL) — the
   // header row toggles; persisted so a tidied sidebar stays tidied across reloads.
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
@@ -284,7 +302,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   const loadTidal = tidalSrc.refresh;
 
   // The shared community pool (tracks already cached — load instantly, no resolve).
-  const community = useCommunityPool();
+  const community = useCommunityPool(`${deckLoaded?.A ?? ""}|${deckLoaded?.B ?? ""}`);
 
   useEffect(() => {
     const load = () => void fetchMe().then(setMe);
@@ -386,13 +404,29 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
       browse: (delta: number) => {
         onOpenChange(true); // a spin on a closed library opens it so the cursor is visible
         if (sourceNav) {
-          // Cycle the source list and apply it live; the main table re-mounts under the cursor.
-          const i = browseSources.findIndex((s) => sameView(s, view));
-          const next = Math.max(0, Math.min(browseSources.length - 1, (i < 0 ? 0 : i) + (delta > 0 ? 1 : -1)));
-          setSearchView(false);
+          // Cycle the sources IN SIDEBAR ORDER and apply each live; the main table re-mounts under
+          // the cursor.
+          // ★ QUEUE AND SEARCH ARE IN THE CYCLE (operator, 2026-11-03: "collection wont scrol
+          // backwards"). The cycle used to start AT Collection, so turning back from it clamped and
+          // did nothing, though the sidebar shows Queue and Search above it; and from either of
+          // those the first turn jumped to Collection whichever way it went.
+          type Src = "queue" | "search" | View;
+          const order: Src[] = [...(auto ? (["queue"] as Src[]) : []), "search", ...browseSources];
+          const cur: Src = auto?.queueOpen ? "queue" : searchView ? "search" : view;
+          const i = order.findIndex((s) => (s === "queue" || s === "search" || cur === "queue" || cur === "search" ? s === cur : sameView(s as View, cur as View)));
+          const next = order[Math.max(0, Math.min(order.length - 1, (i < 0 ? 0 : i) + (delta > 0 ? 1 : -1)))];
           setSyncOpen(false);
-          if (auto?.queueOpen) auto.onToggleQueue();
-          setView(browseSources[next]);
+          if (next === "queue") {
+            setSearchView(false);
+            if (!auto?.queueOpen) auto?.onToggleQueue();
+          } else if (next === "search") {
+            if (auto?.queueOpen) auto.onToggleQueue();
+            setSearchView(true);
+          } else {
+            if (auto?.queueOpen) auto.onToggleQueue();
+            setSearchView(false);
+            setView(next);
+          }
         } else {
           activeTableRef.current?.moveCursor(delta);
         }
@@ -402,8 +436,12 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
         onOpenChange(true);
         setSourceNav((v) => !v);
       },
+      setSourceNav: (on: boolean) => {
+        onOpenChange(true);
+        setSourceNav(on);
+      },
     }),
-    [onOpenChange, sourceNav, browseSources, view, auto],
+    [onOpenChange, sourceNav, browseSources, view, auto, searchView],
   );
 
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -462,7 +500,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   useEffect(() => {
     if (!plMenu) return;
     const close = () => setPlMenu(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPlMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+      setPlMenu(null);
+    };
     window.addEventListener("scroll", close, true);
     window.addEventListener("keydown", onKey);
     return () => {
@@ -603,6 +645,11 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
 
   // Header label for the current view: name + where it's "from".
   const headInfo: { name: string; from: string | null } = (() => {
+    // The exclusive views come first: the header read "Collection" while the Queue, Search or Sync
+    // filled the content area, because it only ever looked at the table view underneath them.
+    if (auto?.queueOpen) return { name: "Queue", from: null };
+    if (searchView) return { name: "Search", from: "YouTube" };
+    if (syncOpen) return { name: "Sync", from: null };
     if (view === "collection") return { name: "Collection", from: null };
     if (view === "community") return { name: "Community", from: "shared pool" };
     const p = library.playlists.find((pl) => pl.id === activePlaylistId);
@@ -619,7 +666,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   })();
 
   return (
-    <>
+    <ToolbarHostContext.Provider value={toolsHost}>
       {open && (
         <div
           className={`modal-backdrop dock-${dockMode} ${passthrough ? "drag-passthrough" : ""}`}
@@ -629,7 +676,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           <DockPlacementResizer mode={dockMode} />
           <div ref={panelRef} className="panel lib-panel" onPointerDown={(e) => e.stopPropagation()}>
             {dockMode === "center" && <CenterResizeHandles panelKey="library" />}
-            <div className="settings-head">
+            <div className={`settings-head lib-head-row ${navOpen ? "nav-open" : ""}`}>
+              {/* (AUTO moved to the chin, beside the Library button — App.tsx `chin-auto`.) */}
               {/* The title text IS the sidebar toggle (no separate ☰): tap it to open/close
                   the sections menu. A caret marks it as a disclosure. */}
               <button
@@ -643,38 +691,34 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
                 </span>
-                {headInfo.from && <span className="lib-head-from">from {headInfo.from}</span>}
               </button>
-              {auto && (
-                <div className="automix-bar">
-                  {/* ★ THE SECOND AUTO BUTTON. The floating panel has one and this header has
-                      another, so gating only the panel's would have left this one live — the
-                      caller-versus-mutator shape that cost us a crossfade guard tonight. tsc
-                      named this site the moment `canAuto` became required, which is the argument
-                      for threading a real prop rather than reading room state in two places. */}
-                  <button
-                    className={`automix-toggle ${auto.status.enabled ? "on" : ""}`}
-                    onClick={auto.onToggle}
-                    aria-pressed={auto.status.enabled}
-                    disabled={!auto.canAuto}
-                    title={auto.canAuto ? undefined : "Auto-mix runs on the host's rig — it drives both decks and the crossfader, which this seat cannot move."}
-                  >
-                    AUTO
-                    {auto.status.enabled && auto.status.countdownSec != null && auto.status.phase !== "idle" && (
-                      <span className="automix-count">
-                        {auto.status.phase === "mixing" ? "mixing" : `${Math.ceil(auto.status.countdownSec)}s`}
-                      </span>
-                    )}
-                  </button>
-                </div>
-              )}
+              {/* The visible table's filter / search field and chips land here (ToolbarHostContext). */}
+              <div className="lib-head-tools" ref={setToolsHost} />
+              {/* ROWS −/＋ up here, on the title line (operator, 2026-11-04): one row size for every
+                  table in the Library, so it belongs to the Library, not to each table's toolbar. */}
+              <RowsStepper />
               {/* No ✕: the Library is a dock you close with its chin button (this matches
                   Settings/Profile/Session + the embedded tabs — exit by opening another). */}
             </div>
-            <div className={`library ${navOpen ? "" : "nav-collapsed"}`}>
+            <div ref={libDivRef} className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
             <>
-            <aside className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}>
+            <aside
+              className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}
+              // ★ ON A NARROW LIBRARY, PICKING A SOURCE CLOSES THE SIDEBAR. Open beside the table on a
+              // phone it left the tracks ~160px wide, titles cut to "I Wan…" and the toolbar and Time
+              // column off the right edge, and nothing closed it again but the caret. Same rule as
+              // the Settings menu: below the width where both fit, a pick is a navigation. Measured
+              // on the library itself, so a narrow desktop dock behaves the same as a phone.
+              // BUBBLE phase, not capture: closing in capture unmounted the button before its own
+              // onClick ran (React flushes the discrete update between the two), so the pick was lost.
+              onClick={(e) => {
+                const item = (e.target as HTMLElement).closest(".lib-nav");
+                if (!item || (e.target as HTMLElement).closest("button.lib-add, .lib-section-toggle")) return;
+                const lib = e.currentTarget.closest(".library") as HTMLElement | null;
+                if (lib && lib.clientWidth < 640) setNavOpen(false);
+              }}
+            >
         {auto && (
           <button
             className={`lib-nav lib-queue-nav ${auto.queueOpen ? "active" : ""}`}
@@ -873,6 +917,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           // The auto-mix queue takes over the song-list area (embedded, not floating).
           <MixQueuePanel
             embedded
+            tableRef={activeTableRef}
             queue={auto.queue}
             status={auto.status}
             mirror={auto.mirror}
@@ -888,11 +933,17 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onSkip={auto.onSkip}
             onHold={auto.onHold}
             onClose={auto.onToggleQueue}
+            playlists={playlistRefs}
+            onAddToPlaylist={library.addToPlaylist}
+            onCreatePlaylistWith={createPlaylistWith}
+            onAddToCollection={library.addTrack}
+            inCollection={inCollection}
           />
         ) : searchView ? (
           // Search baked into the library: the Explorer (its own search bar + results)
           // takes over the content area — no separate dock anymore.
           <Explorer
+            tableRef={activeTableRef}
             onLoad={onLoad}
             onQueue={queueAdd}
             onQueueNext={queueNext}
@@ -924,7 +975,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onQueueNext={queueNext}
             onRemove={library.removeTrack}
             removeTitle="Remove from collection"
-            emptyHint="Your collection is empty. Tap “Search YouTube” to find tracks and add them with +."
+            emptyHint="Your collection is empty. Open Search to find tracks, then add them with +."
             loadedIds={loadedIds}
             deckLoaded={deckLoaded}
             deckColors={deckColors}
@@ -932,6 +983,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
             cacheFilter
+            searchPlaceholder="Filter collection…"
             stateKey="collection"
           />
         )}
@@ -952,6 +1004,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onAddToCollection={library.addTrack}
             inCollection={inCollection}
             cacheFilter
+            searchPlaceholder="Filter community…"
             stateKey="community"
           />
         )}
@@ -983,6 +1036,10 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 playlists={playlistRefs.filter((p) => p.id !== pl.id)}
                 onAddToPlaylist={library.addToPlaylist}
                 onCreatePlaylistWith={createPlaylistWith}
+                // The same toolbar as Collection and Community (operator, 2026-11-05: "inconsistent
+                // presentation across menus, from collection/community to playlist").
+                cacheFilter
+                searchPlaceholder={`Filter ${pl.name}…`}
                 // Per PLAYLIST, not one shared "playlist" key: two playlists are different lists of
                 // different lengths, so one's scroll position restored into the other lands
                 // somewhere arbitrary. A deleted playlist leaves a dead key, which costs a few
@@ -1052,6 +1109,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
           onClose={() => setDialog(null)}
         />
       )}
-    </>
+    </ToolbarHostContext.Provider>
   );
 });
+

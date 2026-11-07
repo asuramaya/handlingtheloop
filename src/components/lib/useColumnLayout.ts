@@ -1,4 +1,4 @@
-import { useState, type RefObject } from "react";
+import { useState, useSyncExternalStore, type RefObject } from "react";
 import {
   RESIZABLE,
   TITLE_MIN,
@@ -6,16 +6,15 @@ import {
   NUM_MIN,
   NUM_MAX,
   WIDTHS_KEY,
-  SCALE_KEY,
-  SCALE_MIN,
-  SCALE_MAX,
   THUMB_W_KEY,
   THUMB_MIN,
   THUMB_MAX,
   loadNumW,
   loadThumbW,
   loadWidths,
-  loadScale,
+  getRowScale,
+  setRowScale,
+  subscribeRowScale,
   type SortKey,
 } from "./trackTable";
 
@@ -24,7 +23,7 @@ import {
 // hook so TrackTable stays focused on rows/selection; the math is unchanged.
 export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
   const [widths, setWidths] = useState<Record<string, number>>(() => loadWidths());
-  const [scale, setScale] = useState<number>(() => loadScale());
+  const scale = useSyncExternalStore(subscribeRowScale, getRowScale, getRowScale);
   const [thumbW, setThumbW] = useState<number>(() => loadThumbW());
   const [numW, setNumW] = useState<number>(() => loadNumW());
 
@@ -140,15 +139,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
   }
 
   function changeScale(delta: number) {
-    setScale((s) => {
-      const next = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, s + delta)) * 10) / 10;
-      try {
-        localStorage.setItem(SCALE_KEY, String(next));
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+    setRowScale(getRowScale() + delta);
   }
 
   const colWidth = (id: SortKey) => {

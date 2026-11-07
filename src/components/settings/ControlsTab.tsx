@@ -1,5 +1,6 @@
-// Settings ▸ Controls — jog feel, hardware jog wheel, Vinyl Speed Adjust motor, keyboard
-// profiles + the key map. Pure render of (settings, set); no local state.
+// Settings ▸ Controls — waveform wheel, Auto-DJ flourish and the key map (the jog lives in
+// Settings ▸ Turntable; panel placement in Settings ▸ Interface, exported from here as
+// PanelPlacementSection). Pure render of (settings, set); no local state.
 //
 // ★ Written in the shared settings grammar (see the block comment atop settings.css): a CARD
 // per group, a ROW per control (`label ⓘ ......... [value] [control]`), and every explanation
@@ -10,6 +11,8 @@ import type { DockMode, PanelKey, Settings } from "@htl";
 import { KeyMap } from "../KeyHelp";
 import { Slider } from "./Slider";
 import { InfoDot } from "./InfoDot";
+import { useState } from "react";
+import { useFinePointer } from "../../htl/state/usePhone";
 
 const DOCK_MODES: DockMode[] = ["left", "right", "center", "bottom"];
 
@@ -23,7 +26,7 @@ const PANEL_DOCK_FIELD: Record<PanelKey, "libraryDock" | "settingsDock" | "peopl
 
 // A switch row in the shared grammar. Every toggle on this tab was the same nine lines of JSX
 // with three words changed; the repetition is what let their labels and titles drift apart.
-function ToggleRow({
+export function ToggleRow({
   label,
   info,
   on,
@@ -95,54 +98,38 @@ function PlacementRow({
 export function ControlsTab({
   settings,
   set,
-  onePanel = false,
+  searching = false,
 }: {
   settings: Settings;
   set: (patch: Partial<Settings>) => void;
-  /** This viewport has ONE panel slot (see htl/state/usePhone ▸ ONE_PANEL_QUERY). The panel
-   *  placement controls are hidden rather than shown-and-inert — see the block below. */
-  onePanel?: boolean;
+  /** Settings search is filtering this render: show everything so the filter can find it. */
+  searching?: boolean;
 }) {
+  // ★ ON A TOUCH-ONLY DEVICE the wheel and keyboard settings can do nothing, so they do not take
+  // the top of the screen. Wheel scrub is hidden (there is no wheel). The key map is folded, not
+  // hidden: a phone can pair a Bluetooth keyboard and the map is how you would find out what it
+  // does. Same reasoning as Panel placement's onePanel: a control present but inert teaches people
+  // to stop trusting the panel it is in.
+  const fine = useFinePointer();
+  const [keysOpen, setKeysOpen] = useState(false);
+  const showKeys = fine || keysOpen || searching;
   return (
     <>
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Jog feel</span>
-          <InfoDot
-            text="How the platter responds when you grab it and let go, by mouse or touch. Play, Pause and Spinback have their own timing under Vinyl Speed Adjust."
-            label="Jog feel"
+      {/* The jog's own controls moved to Settings ▸ Platter (one card, drawn). This one is NOT a
+          jog setting — it is what the scroll wheel does over a waveform — so it stays here. */}
+      {fine && (
+        <div className="settings-section">
+          <div className="settings-section-head">
+            <span className="settings-label">Waveform</span>
+          </div>
+          <ToggleRow
+            label="Mouse-wheel scrub"
+            info="What the scroll wheel does over a waveform. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
+            on={settings.wheelSeeks}
+            onToggle={() => set({ wheelSeeks: !settings.wheelSeeks })}
           />
-          <button className="link-btn" onClick={() => set({ jogWeight: 0.4, jogDrag: 0.4 })}>
-            reset
-          </button>
         </div>
-        <Slider
-          label="Weight"
-          hint={settings.jogWeight < 0.2 ? "feather" : settings.jogWeight > 0.7 ? "heavy" : "balanced"}
-          value={settings.jogWeight}
-          onChange={(v) => set({ jogWeight: v })}
-          info="A released platter's inertia. Heavier takes longer both to settle to a stop and to catch back up to play."
-        />
-        <Slider
-          label="Drag"
-          hint={settings.jogDrag < 0.2 ? "long glide" : settings.jogDrag > 0.7 ? "quick stop" : "balanced"}
-          value={settings.jogDrag}
-          onChange={(v) => set({ jogDrag: v })}
-          info="How quickly a platter grips still. Only matters when a release settles to a stop, which means the deck is paused, or the release was too gentle to catch back up to play."
-        />
-        <ToggleRow
-          label="Slip mode"
-          info="Scratch, hold or loop over the track without losing your place. On release, playback snaps to where it would have been, on the beat, skipping the coast that Weight and Drag would otherwise give it. Toggle key: Z."
-          on={settings.slip}
-          onToggle={() => set({ slip: !settings.slip })}
-        />
-        <ToggleRow
-          label="Mouse-wheel scrub"
-          info="What the scroll wheel does over a waveform, not the jog wheel above. On, it scrubs the playhead and Ctrl or ⌘ plus wheel zooms. Off, the wheel zooms."
-          on={settings.wheelSeeks}
-          onToggle={() => set({ wheelSeeks: !settings.wheelSeeks })}
-        />
-      </div>
+      )}
 
       {/* AUTO's taste, not its competence. The structural half of a transition — beatmatch, bass
           swap, gain staging, where the mix starts and ends — is not on this dial and never will
@@ -174,6 +161,17 @@ export function ControlsTab({
           </span>
         </div>
 
+        <Slider
+          label="Beat-match range"
+          hint={settings.beatlockRangePct >= 41 ? "Any pair" : `±${Math.round(settings.beatlockRangePct)}%`}
+          value={settings.beatlockRangePct}
+          min={4}
+          max={41}
+          step={1}
+          onChange={(v) => set({ beatlockRangePct: v })}
+          info="How far AUTO and the Smart Fader will bend a track's tempo to beat-match the next one (after half- and double-time). Pairs further apart than this are crossfaded with both tempos left alone, and AUTO picks a transition that does not need a beat-match. 10% is about a DJ's pitch fader. At the top, Any pair, every pair is beat-matched — the genre-bridging morph, which can slow or speed a track by up to 40%."
+        />
+
         {/* The auto-DJ's transition EFFECT is deliberately not here. It lives in a chain named
             AUTO in each deck's own rack, where every other effect in this app is dialled — put a
             reverb in it, or a delay, or three things, and set them however you like. AUTO only
@@ -181,87 +179,78 @@ export function ControlsTab({
             tab meant leaving the instrument to adjust the instrument. */}
       </div>
 
-      {/* Its own card, not a paragraph in the middle of the one above. These two sliders apply
-          to hardware only, and a mid-card sentence saying so both broke the row grammar and was
-          easy to read as applying to whatever you happened to be looking at. A card boundary
-          states the same scope structurally, which is harder to misread and impossible to skip. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Hardware jog wheel</span>
-          <InfoDot
-            text="MIDI jog wheels only. Scratching with a mouse or a finger ignores both of these and uses Jog feel above."
-            label="Hardware jog wheel"
-          />
-          <button className="link-btn" onClick={() => set({ jogSensitivity: 1, jogBendStrength: 1 })}>
-            reset
-          </button>
-        </div>
-        <Slider
-          label="Sensitivity"
-          hint={settings.jogSensitivity < 0.95 ? "fine" : settings.jogSensitivity > 1.05 ? "fast" : "vinyl"}
-          value={settings.jogSensitivity}
-          onChange={(v) => set({ jogSensitivity: v })}
-          min={0.25}
-          max={4}
-          step={0.05}
-          info="How far the track moves per encoder tick when you scratch or search on a hardware jog wheel."
-        />
-        <Slider
-          label="Bend strength"
-          hint={settings.jogBendStrength < 0.95 ? "gentle" : settings.jogBendStrength > 1.05 ? "strong" : "default"}
-          value={settings.jogBendStrength}
-          onChange={(v) => set({ jogBendStrength: v })}
-          min={0.25}
-          max={2}
-          step={0.05}
-          info="How hard a turn of the jog wheel's outer edge nudges pitch, without touching the top. The push-to-bend feel."
-        />
-      </div>
-
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Vinyl Speed Adjust</span>
-          <InfoDot
-            text="How Play, Pause and Spinback spin the platter up and down like a real motor. Grabbing the jog wheel is separate, under Jog feel."
-            label="Vinyl Speed Adjust"
-          />
-          <button className="link-btn" onClick={() => set({ vinylSpeed: true, vinylBrakeTime: 0.22, vinylStartTime: 0.18, backSpinLength: 0.5 })}>
-            reset
-          </button>
-        </div>
-        <ToggleRow
-          label="Turntable motor"
-          info="On, Play spins up and Pause brakes to a stop like a turntable. Off, both are instant. Spinback works either way: it is a gesture, not a motor setting."
-          on={settings.vinylSpeed}
-          onToggle={() => set({ vinylSpeed: !settings.vinylSpeed })}
-        />
-        <Slider
-          label="Start"
-          hint={settings.vinylStartTime < 0.1 ? "instant" : settings.vinylStartTime > 0.6 ? "slow spin-up" : "turntable"}
-          value={settings.vinylStartTime}
-          onChange={(v) => set({ vinylStartTime: v })}
-          info="The Play button's spin-up, and only that: a motor catching the platter up to speed. Releasing a grabbed jog wheel back into play uses Weight instead."
-        />
-        <Slider
-          label="Brake / touch"
-          hint={settings.vinylBrakeTime < 0.1 ? "instant" : settings.vinylBrakeTime > 0.6 ? "slow stop" : "turntable"}
-          value={settings.vinylBrakeTime}
-          onChange={(v) => set({ vinylBrakeTime: v })}
-          info="The Pause button's spin-down, and only that: a hand stopping the platter. Letting go of a grabbed jog wheel uses Weight and Drag instead."
-        />
-        <Slider
-          label="Back spin length"
-          hint={settings.backSpinLength < 0.34 ? "short" : settings.backSpinLength > 0.66 ? "long" : "normal"}
-          value={settings.backSpinLength}
-          onChange={(v) => set({ backSpinLength: v })}
-          info="How far back it throws, and how long the motor takes to catch it up to play again. Applies to both the Spinback key or pad and a hard backward flick-release of the jog wheel."
-        />
-      </div>
-
       {/* The "Keyboard profiles" card was here. It is the panel-header control now — the same
           one Color, MIDI and Audio use, which is the point: a keymap and a colour theme are the
           same KIND of thing, and three tabs each drawing their own save bar said they were not. */}
 
+      {/* THE key map, and now the only one. The chin's "?" button opened a modal whose whole
+          content was this same <KeyMap> over these same bindings; it is gone. This card was
+          headless, which was fine while a second door existed and is not now — it is the
+          destination, so it says what it is. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Key map</span>
+          <InfoDot
+            text="Every keyboard action, with its key. Click a key chip and press a new key to rebind it; each action also has a second, empty slot if you want two keys for it. Keys are stored by physical position, so a map made on one keyboard layout still works on another. The keys drive whichever deck has focus."
+            label="Key map"
+          />
+        </div>
+        {!showKeys && (
+          <button className="hw-btn small keymap-unfold" onClick={() => setKeysOpen(true)} aria-expanded={false}>
+            Show keyboard shortcuts
+          </button>
+        )}
+        {fine && (
+          <ToggleRow
+            label="On-button key hints"
+            info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
+            on={settings.keyHints}
+            onToggle={() => set({ keyHints: !settings.keyHints })}
+          />
+        )}
+        {/* Fixed navigation keys (not rebindable, so not rows in the map below). They have to be
+            written down somewhere or they do not exist for anyone who did not build them. */}
+        {showKeys && (<>
+        <div className="keynav">
+          <div className="keynav-title">Navigation</div>
+          {NAV_KEYS.map(([k, what]) => (
+            <div key={k} className="keynav-row">
+              <kbd>{k}</kbd>
+              <span>{what}</span>
+            </div>
+          ))}
+        </div>
+        <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
+        </>)}
+      </div>
+    </>
+  );
+}
+
+const NAV_KEYS: [string, string][] = [
+  ["Esc", "Close the top panel; with nothing open, open Settings"],
+  ["Alt", "Open / close the Library"],
+  ["↑ ↓", "Library open: move the cursor"],
+  ["← →", "Library open: playlists / tracks"],
+  ["Enter", "Library open: load onto the focused deck"],
+  ["Shift + Enter", "Library open: load onto the other deck"],
+];
+
+/** Settings ▸ Interface ▸ Panel placement (moved out of Controls, operator 2026-11-02: placement is
+ *  about the interface, not about how the decks are played). */
+export function PanelPlacementSection({
+  settings,
+  set,
+  onePanel = false,
+}: {
+  settings: Settings;
+  set: (patch: Partial<Settings>) => void;
+  /** This viewport has ONE panel slot (see htl/state/usePhone ▸ ONE_PANEL_QUERY). The placement
+   *  controls are hidden rather than shown-and-inert — see the block below. */
+  onePanel?: boolean;
+}) {
+  return (
+    <>
       {/* Where each floating panel sits. Every option is an overlay — none of them push or
           resize the board, unlike the old single left/right docks (which used to squeeze the
           stage, flipped by a chin ⇄ button that's gone now that each panel picks its own
@@ -332,26 +321,6 @@ export function ControlsTab({
         )}
       </div>
 
-      {/* THE key map, and now the only one. The chin's "?" button opened a modal whose whole
-          content was this same <KeyMap> over these same bindings; it is gone. This card was
-          headless, which was fine while a second door existed and is not now — it is the
-          destination, so it says what it is. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Key map</span>
-          <InfoDot
-            text="Every keyboard action, with its key. Click a key chip and press a new key to rebind it; each action also has a second, empty slot if you want two keys for it. Keys are stored by physical position, so a map made on one keyboard layout still works on another. The keys drive whichever deck has focus."
-            label="Key map"
-          />
-        </div>
-        <ToggleRow
-          label="On-button key hints"
-          info="Print each button's key in its corner, on the board itself. Desktop only, since a touch device has no keyboard to hint at."
-          on={settings.keyHints}
-          onToggle={() => set({ keyHints: !settings.keyHints })}
-        />
-        <KeyMap bindings={settings.keyBindings} onChange={(keyBindings) => set({ keyBindings })} />
-      </div>
     </>
   );
 }

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { ANALYSIS_VERSION } from "../htl/analysis";
 import { GRID_DURATION_TOLERANCE_S, type GridReuseWhy, mayContributeAnalysis, mayReuseGrid, GRID_DURATION_TOLERANCE_PRECISE_S, toleranceFor } from "./gridReuse";
 
 const V = 4;
@@ -89,5 +92,36 @@ describe("the tolerance was an order of magnitude larger than the failure", () =
     expect(GRID_DURATION_TOLERANCE_PRECISE_S).toBeLessThan(0.25);
     expect(toleranceFor(212.34)).toBe(GRID_DURATION_TOLERANCE_PRECISE_S);
     expect(toleranceFor(212)).toBe(GRID_DURATION_TOLERANCE_S);
+  });
+});
+
+describe("a third-party lookup row heals the first time anyone plays the track", () => {
+  // ★ TWO LANES WRITE ROWS AT THIRD_PARTY_ANALYSIS_VERSION, NOT ONE. usePrefetch's early return
+  // after an ISRC hit (thread 9185eef3 named only this one), and queue.ts enrichPoolByIsrc, which
+  // asks /api/features about RADIO POOL candidates with `v` set. The server caches the answer, so
+  // a row gets written for a track that was never queued, let alone played. The claim that makes
+  // the second lane tolerable is that such a row does not survive a play: it has no duration and
+  // sits below every detector version, so the load path refuses it, derives, and contributes a
+  // measured row that wins the `>=` guard. That claim was prose; this pins it.
+  //
+  // The constant is read from the server source rather than imported: src and server are
+  // separate tsc projects, and the test is about the value production writes.
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const m = readFileSync(`${root}server/db/analysis.ts`, "utf8").match(/export const THIRD_PARTY_ANALYSIS_VERSION = (\d+);/);
+  const thirdParty = Number(m?.[1]);
+
+  it("the constant is where this test reads it", () => {
+    expect(m, "THIRD_PARTY_ANALYSIS_VERSION moved or changed shape").not.toBeNull();
+  });
+
+  it("a lookup row (bpm/key only, no duration) is refused, and the refusal contributes", () => {
+    const verdict = mayReuseGrid({ version: thirdParty, duration: null }, 212, ANALYSIS_VERSION);
+    expect(verdict.ok).toBe(false);
+    expect(mayContributeAnalysis(verdict.why)).toBe(true);
+  });
+
+  it("the measured contribution outranks it under the server's `>=` guard", () => {
+    // Strictly greater, so the measured row wins outright rather than by a tie.
+    expect(ANALYSIS_VERSION).toBeGreaterThan(thirdParty);
   });
 });

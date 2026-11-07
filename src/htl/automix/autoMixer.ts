@@ -1,15 +1,70 @@
 import type { AudioEngine, DeckId, FxDevice } from "../audio";
-import { foldTempoOctave, nearestBeat } from "../analysis";
+import { beatTimeOffset, foldTempoOctave, nearestDownbeat, tempoLockable } from "../analysis";
+
+// (BRIDGE_MAX lives in mixability.ts, next to previewPlan, which needs it too.)
+
+/** THE TEMPO BRIDGE, bar by bar (counted in the live track's own time: with a 1-bar loop every
+ *  bar is one pass of the loop). The loop is caught on bar 0's downbeat. */
+export const BRIDGE = {
+  bars: 8,
+  rampEnd: 4, // bars 0-4: the looped bar glides to the incoming's tempo
+  roll: [4, 5, 5.5] as const, // the build: the loop halves on each of these bar lines
+  breath: 5.75, // the last beat before the drop: dry out, echo frozen — the inhale
+  drop: 6, // the incoming lands, on its body section, on the one
+};
+
+/** Where the bridge is at bars-elapsed `b` (0..8): the outgoing's shaping, as plain numbers. Pure,
+ *  so a test can walk the whole gesture. `tempoT` is the 0..1 smoothstep of the ramp. */
+export function bridgeShape(b: number, showy: boolean): {
+  tempoT: number;
+  filter: number; // outgoing one-knob filter (+ = high-pass)
+  eqLow: number; // outgoing low shelf, dB
+  delayMix: number;
+  reverbMix: number;
+  freeze: boolean;
+  rollBeats: number; // 0 = leave the base loop alone
+  dropped: boolean;
+  fader: number; // 0 = outgoing … 1 = incoming
+} {
+  const ss = (x: number) => {
+    const t = clamp(x, 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+  const tempoT = ss(b / BRIDGE.rampEnd);
+  const build = clamp((b - BRIDGE.rampEnd) / (BRIDGE.drop - BRIDGE.rampEnd), 0, 1);
+  const dropped = b >= BRIDGE.drop;
+  const breath = showy && b >= BRIDGE.breath && !dropped;
+  let rollBeats = 0;
+  if (showy) for (const [i, at] of BRIDGE.roll.entries()) if (b >= at) rollBeats = [2, 1, 0.5][i];
+  return {
+    tempoT,
+    // A slow rise across the ramp, then the climb of the build.
+    filter: dropped ? 0.6 : lerp(0, 0.3, tempoT) + lerp(0, showy ? 0.5 : 0.35, build),
+    eqLow: dropped ? EQ_KILL : lerp(0, EQ_KILL, build), // the bass is PULLED before the drop
+    delayMix: dropped || breath ? 1 : lerp(0, 0.3, tempoT) + lerp(0, 0.3, build),
+    reverbMix: lerp(0, 0.2, tempoT) + lerp(0, showy ? 0.35 : 0.2, build),
+    freeze: breath || dropped,
+    rollBeats,
+    dropped,
+    // Nothing of the incoming before the drop; on it, the new track all but full and the old one's
+    // frozen echo under it, gone by the end.
+    fader: dropped ? 0.8 + 0.2 * ss((b - BRIDGE.drop) / (BRIDGE.bars - BRIDGE.drop)) : 0,
+  };
+}
 import type { TrackMeta } from "../library/types";
-import { pickTransition, resolveEntry, resolveStyle, type StyleShape } from "./mixability";
-import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection } from "./mixPoints";
-import type { AutoMixPhase, MixMode, RadioContext, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
+import { BRIDGE_MAX, bandBars, phraseSwapBar, pickTransition, resolveEntry, resolveStyle, transitionLabel, type StyleShape } from "./mixability";
+import { type Sections, blendBarsFor, chooseMixIn, chooseMixOut, firstBodySection, phraseBars } from "./mixPoints";
+import type { AutoMixPhase, AutoMixWaitReason, MixMode, RadioContext, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
 import type { FxKind } from "../audio";
 import type { AutoFxSettings, AutoPerformance } from "../state/settings";
 import type { MixQueue } from "./queue";
 import { clamp, lerp } from "../../util/math";
 import { event } from "../debug/trace";
+import { perfWork } from "../debug/perfCapture";
+import { crossfadeGains } from "../audio/crossfadeCurve";
 import { holdGpu } from "../stems/gpuQueue";
+import { DD, DD_BARS, doubleDropShape, planDoubleDrop } from "./doubleDrop";
+import { chooseEntry, mashupGains, mashupMarks } from "./mashup";
 
 // The AutoMixer is an automated DJ that COOPERATES with a human co-pilot: it drives
 // the same engine/deck controls the UI buttons drive, but the user can jog, scratch,
@@ -26,6 +81,26 @@ const EQ_KILL = -26; // dB — the engine's low-shelf floor (a full bass cut)
 const END_GUARD = 4; // s — never mix out closer than this to the track end
 const BEATS_PER_BAR = 4;
 const XFADE_GRAB = 0.06; // crossfade delta that means "the user took the fader"
+// A live-deck position change this much off what playback explains (s) is the user MOVING the
+// track — SHIFT-search, a seek, a hot cue, a long scratch — and the mix point is re-planned from
+// where they landed. Ordinary playback, pitch bend and a scratch wiggle stay far below it.
+const JUMP_S = 2;
+// How far ahead of the playhead a re-planned exit must be while armed: the next track still has
+// to load and cue before the blend can start.
+const CUE_LEAD_S = 8;
+const PRE_QUIET_S = 75; // s before the mix point that no new separation may start (see tickArmed)
+const LAND_S = 10; // s after a settle before the next track's load may start (see settle)
+
+// PLAYING, COUNTING THE HAND. Gripping a platter stops the transport (JogEngine.scrubBegin — a
+// hand on vinyl stops it dead) and releasing it starts it again. To the mixer that grab used to
+// read as the user STOPPING the deck: touch the incoming deck's jog mid-blend and AUTO handed the
+// whole transition to "manual"; touch the outgoing one near its exit and the mix started under
+// your hand. A deck that will play again the moment the hand lets go is still a playing deck.
+// `jogReturnsToPlay` is false for a paused deck being scrubbed, so cueing a stopped deck by hand
+// is not mistaken for starting it.
+function playingOrHeld(d: Deck): boolean {
+  return d.playing || (!!d.jogging && !!d.jogReturnsToPlay);
+}
 const STEM_WAIT_MAX = 8; // s — at mix-out, hold this long for the incoming deck's stems to
 //                          finish separating before falling back to an EQ blend.
 
@@ -55,10 +130,54 @@ export interface AutoMixStatus {
   enabled: boolean;
   phase: AutoMixPhase;
   liveDeck: DeckId | null;
+  /** The transition: proposed at preload (from metadata), RESOLVED at mix start (the gesture that
+   *  actually plays — see planResolved). null until the next track is cued. */
   plan: TransitionPlan | null;
+  /** Seconds into the LIVE track where the mix starts. Set from the first playing armed tick. */
   mixOutTime: number | null;
+  /** Before the mix: seconds until it starts. During the mix: seconds until it ends. */
   countdownSec: number | null;
+  // ── added for the status UI. Optional ONLY because a session mirror can come from an older host;
+  //    this mixer always fills every one of them. ──
+  /** "Hold on this track": no automatic transition starts until Hold is pressed again or Mix now.
+   *  A natural track end still continues onto the next track. Cleared when the live track changes. */
+  held?: boolean;
+  /** What AUTO is waiting on, if anything (see AutoMixWaitReason). */
+  waitReason?: AutoMixWaitReason;
+  /** 0..1 through the transition while phase === "mixing"; null otherwise. */
+  mixProgress?: number | null;
+  /** Length (s) of the live track, so mixOutTime can be drawn on it. */
+  liveDuration?: number | null;
+  /** The next track once it sits loaded on the idle deck. */
+  nextOnDeck?: { deck: DeckId; videoId: string } | null;
+  /** Short label of `plan` ("Blend 16", "Echo 8"…); null without a plan. */
+  planLabel?: string | null;
+  /** True once the plan is the gesture actually being performed (set at mix start). */
+  planResolved?: boolean;
+  /** The user took the crossfader mid-mix; AUTO stands back until one deck is left. */
+  manual?: boolean;
+  /** Mix now was pressed and the mix will start as soon as the incoming deck is ready. */
+  forced?: boolean;
 }
+
+/** The status of a mixer that has never been enabled — a starting value for UI state. */
+export const IDLE_AUTOMIX_STATUS: AutoMixStatus = {
+  enabled: false,
+  phase: "idle",
+  liveDeck: null,
+  plan: null,
+  mixOutTime: null,
+  countdownSec: null,
+  held: false,
+  waitReason: null,
+  mixProgress: null,
+  liveDuration: null,
+  nextOnDeck: null,
+  planLabel: null,
+  planResolved: false,
+  manual: false,
+  forced: false,
+};
 
 /** Serializable auto-DJ state the audio host streams to a shared session so remotes
  *  mirror the queue + AUTO status (and can drive it). */
@@ -224,6 +343,15 @@ export class AutoMixer {
   private rollBeats = 0; // current loop-roll length during a dropSwap build (0 = not rolling)
   private holdLoop: DeckId | null = null; // deck currently held in a loop-extend, if any
   private stutterFired = false; // the showy one-bar stutter fires once per transition
+  private unlocked = false; // this transition's pair cannot be beat-matched (caps.lock false)
+  private fineTimer: ReturnType<typeof setInterval> | null = null; // the 16 ms loop around a moment
+  private bridge: { baseBeats: number; fromPct: number; toPct: number; keylock: boolean } | null = null;
+  // A double drop planned while armed (the incoming is already decoded on the idle deck): the
+  // videoId it was planned for, and the cue points — taken at preload only if still the next track.
+  private dd: { videoId: string; mixOut: number; mixIn: number } | null = null;
+  private ddChecked = "";
+  private ddDropped = false;
+  private incPending = false; // unmatched pair: the incoming starts at the cut, not at mix start
   private stutterUntil = 0; // mixElapsed (s) the stutter window closes at
   // ★ THE GPU QUIET WINDOW. Held from the moment a transition is CUED until it settles, so no new
   // stem separation starts while two waveforms are scrolling and the crossfader is sweeping — see
@@ -237,6 +365,19 @@ export class AutoMixer {
   // trim we set last track" from "the user reached over and moved it", so AUTO tunes a channel
   // exactly once per track and never fights a hand on the knob. Cleared on disable.
   private trimSet = new Map<DeckId, number>();
+  // ── control state ──
+  private ticking = false; // tick() is NOT re-entrant: the 150 ms interval never overlaps a slow tick
+  private held = false; // Hold toggle — see AutoMixStatus.held
+  private forced = false; // Mix now — preload/cue keep the mix point at "now"
+  private kickoffPlay = false; // set by enable(): the AUTO press may start a loaded, stopped deck ONCE
+  private landUntil = 0; // ms (deps.now) — the post-settle landing; 0 = none
+  private stemHold = false; // cueing is holding at the mix point for stems (status only)
+  private planResolved = false;
+  // THE IDLE DECK'S TRACK — may AUTO overwrite it? Holds, per deck, the videoId AUTO is free to
+  // replace: a track AUTO loaded itself, or one that has already been the live track. Anything
+  // else sitting on the idle deck was put there by the user, and protectIdle queues it instead of
+  // loading over it.
+  private claimable: Record<DeckId, string | null> = { A: null, B: null };
 
   constructor(private deps: AutoMixerDeps) {}
 
@@ -256,9 +397,16 @@ export class AutoMixer {
     this.anchor = this.liveId ? this.deps.deckTrack(this.liveId) : null;
     this.anchorAge = 0;
     this.playedCount = 0;
-    if (this.liveId && !this.deps.queue.getCurrent()) {
-      this.deps.queue.setCurrent(this.deps.deckTrack(this.liveId));
+    this.held = false;
+    this.forced = false;
+    if (this.liveId) {
+      this.claimable[this.liveId] = this.liveVideoId;
+      if (!this.deps.queue.getCurrent()) this.deps.queue.setCurrent(this.deps.deckTrack(this.liveId));
     }
+    // Nothing playing → the AUTO press itself is the "go": the first idle tick may START a loaded,
+    // stopped deck (tryKickoff). One-shot — after a pause, or a manual stop of both decks, AUTO
+    // never force-starts a deck again; it waits (waitReason "press-play").
+    this.kickoffPlay = !this.liveId;
     this.phase = this.liveId ? "armed" : "idle";
     if (this.liveId) this.stageGain(this.liveId); // level the deck we're inheriting
     this.emit(true);
@@ -272,30 +420,61 @@ export class AutoMixer {
     this.anchor = null;
     this.anchorAge = 0;
     this.playedCount = 0;
+    this.held = false;
+    this.forced = false;
+    this.kickoffPlay = false;
     this.phase = "idle";
     this.emit(true);
   }
 
+  /** MIX NOW — honoured from any pre-mix phase, and clears Hold. From armed it goes straight
+   *  through preload and cueing; the mix starts as soon as the incoming deck is loaded (and, for a
+   *  bounded moment, its stems). `forced` makes preload keep the mix point at "now" instead of
+   *  recomputing the structural exit — which is what used to swallow the press. */
   mixNow(): void {
-    if (!this.enabled || !this.liveId) return;
-    if (this.phase === "armed" || this.phase === "preload" || this.phase === "cueing") {
-      this.mixOutTime = this.deps.engine.deck(this.liveId).position();
-      void this.tick();
-    }
-  }
-
-  skip(): void {
     if (!this.enabled) return;
-    this.gen++; // invalidate any in-flight preload — it may be loading the track we're skipping
-    this.abandonCue();
-    this.deps.queue.remove(this.nextTrack?.videoId ?? "");
-    this.resetArm();
-    this.phase = this.liveId ? "armed" : "idle";
+    this.held = false;
+    if (this.liveId && (this.phase === "armed" || this.phase === "preload" || this.phase === "cueing")) {
+      this.forced = true;
+      this.mixOutTime = this.deps.engine.deck(this.liveId).position();
+      if (this.phase === "armed") this.phase = "preload";
+      this.emit(true);
+      void this.tick();
+      return;
+    }
     this.emit(true);
   }
 
+  /** SKIP — drop the track that would be mixed in next: the cued `nextTrack`, else the preloaded
+   *  one, else the queue head. Mid-mix it aborts the transition first, exactly like cancel
+   *  (incoming paused, crossfader back on the live deck, locks released). The idle deck held a track
+   *  AUTO loaded, so the next armed tick preloads the new head over it. */
+  skip(): void {
+    if (!this.enabled) return;
+    const target = this.nextTrack ?? this.preloadedTrack ?? this.deps.queue.peekNext();
+    this.cancel(); // bumps gen → an in-flight load of the skipped track is discarded
+    if (target?.videoId) this.deps.queue.remove(target.videoId);
+    this.emit(true);
+  }
+
+  /** HOLD — a toggle: "stay on this track". While held no automatic transition starts; a natural
+   *  track end still continues onto the next track, so the music never stops. Pressed during a
+   *  transition it aborts the mix and keeps the incoming track queued. Pressing it again, or Mix
+   *  now, releases it; so does the live track changing. */
   hold(): void {
-    this.cancel();
+    if (!this.enabled) return;
+    if (this.held) {
+      this.held = false;
+      this.emit(true);
+      return;
+    }
+    this.held = true;
+    if (this.phase === "preload" || this.phase === "cueing" || this.phase === "mixing") this.cancel();
+    else this.emit(true);
+  }
+
+  isHeld(): boolean {
+    return this.held;
   }
 
   /** Abort any in-progress transition and return the decks to a clean state. */
@@ -318,10 +497,18 @@ export class AutoMixer {
       const sign = this.liveId === "A" ? -1 : 1;
       this.deps.applyCrossfade(sign);
       this.lastXfade = sign;
+      this.cuedIdle = null; // handled above — a later abandonCue must not neutralise it twice
     } else {
       this.abandonCue();
     }
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
+    this.stopFine();
+    this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -338,13 +525,21 @@ export class AutoMixer {
 
   // Clear the pending-transition bookkeeping (not the live deck).
   private resetArm(): void {
-    this.preloading = false;
+    // `preloading` is deliberately NOT cleared here. It is the in-flight guard of an async load and
+    // is released by that load's own `finally`; clearing it from a skip/cancel let a second load
+    // start onto the same deck while the first was still landing.
+    this.forced = false;
+    this.stemHold = false;
+    this.planResolved = false;
     this.mixStarted = false;
     this.mixElapsed = 0;
     this.plan = null;
     this.mixOutTime = null;
     this.nextTrack = null;
     this.clearPreload();
+    this.dd = null; // a planned double drop belongs to THIS live track and THAT preload
+    this.ddChecked = "";
+    this.ddDropped = false;
   }
 
   // Forget the eagerly-preloaded track (the idle deck identity changed, or the queue/next
@@ -430,6 +625,8 @@ export class AutoMixer {
   }
 
   getStatus(): AutoMixStatus {
+    const live = this.liveDeck();
+    const mixing = this.phase === "mixing";
     return {
       enabled: this.enabled,
       phase: this.phase,
@@ -437,13 +634,57 @@ export class AutoMixer {
       plan: this.plan,
       mixOutTime: this.mixOutTime,
       countdownSec: this.countdown(),
+      held: this.held,
+      waitReason: this.waitReason(),
+      mixProgress: mixing ? this.mixProgress() : null,
+      liveDuration: live && live.duration > 0 ? live.duration : null,
+      nextOnDeck: this.nextOnDeck(),
+      planLabel: this.plan ? transitionLabel(this.plan) : null,
+      planResolved: this.planResolved,
+      manual: this.phase === "manual",
+      forced: this.forced,
     };
   }
 
+  private mixProgress(): number {
+    return clamp(this.mixElapsed / Math.max(0.001, this.barsSeconds), 0, 1);
+  }
+
+  // Before the mix: seconds to the mix point. During it: seconds of blend left.
   private countdown(): number | null {
-    if (!this.liveId || this.mixOutTime == null) return null;
+    if (!this.liveId) return null;
+    if (this.phase === "mixing") return Math.max(0, this.barsSeconds * (1 - this.mixProgress()));
+    if (this.mixOutTime == null) return null;
     if (this.phase !== "armed" && this.phase !== "preload" && this.phase !== "cueing") return null;
-    return Math.max(0, this.mixOutTime - this.deps.engine.deck(this.liveId).position());
+    const live = this.deps.engine.deck(this.liveId);
+    // Track seconds ÷ tempo = seconds you will actually wait (at +8 % a 60 s gap is 55.6 s).
+    return Math.max(0, (this.mixOutTime - live.position()) / (live.rate > 0 ? live.rate : 1));
+  }
+
+  // The next track, once it is actually sitting on the idle deck.
+  private nextOnDeck(): { deck: DeckId; videoId: string } | null {
+    if (!this.liveId) return null;
+    const idle = other(this.liveId);
+    const onDeck = this.deps.deckTrack(idle)?.videoId;
+    const want = this.nextTrack?.videoId ?? (this.preloadedId === idle ? this.preloadedTrack?.videoId : undefined);
+    return want && onDeck === want ? { deck: idle, videoId: want } : null;
+  }
+
+  // WHY NOTHING IS MOVING — derived from the machine's own state every time, never latched, so it
+  // can't go stale. Ordered most-specific first.
+  private waitReason(): AutoMixWaitReason {
+    if (!this.enabled) return null;
+    if (this.phase === "mixing" || this.phase === "settle" || this.phase === "manual") return null;
+    if (this.phase === "cueing" && this.stemHold) return "stems";
+    if (this.preloading || (this.eagerLoading && (this.phase === "preload" || this.forced))) return "loading-next";
+    const live = this.liveDeck();
+    const anyLoaded = !!(this.deps.deckTrack("A") || this.deps.deckTrack("B"));
+    if (live ? !live.playing : anyLoaded && !this.kickoffPlay) return "press-play";
+    if (this.phase === "cueing" || this.nextOnDeck()) return null;
+    if (this.deps.queue.peekNext()) return null;
+    if (this.deps.queue.isFilling?.()) return "radio-filling";
+    if (this.deps.queue.playlistEnded) return "playlist-ended";
+    return "queue-empty";
   }
 
   private playingDeck(): DeckId | null {
@@ -453,7 +694,18 @@ export class AutoMixer {
   }
 
   async tick(): Promise<void> {
-    if (!this.enabled) return;
+    // NOT RE-ENTRANT. The app fires this every 150 ms without waiting, and idle/preload ticks await
+    // a deck load that can take seconds — overlapping ticks double-loaded and double-advanced.
+    if (!this.enabled || this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.tickOnce();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async tickOnce(): Promise<void> {
     const t = this.deps.now();
     const dt = this.lastTickMs == null ? 0 : Math.min(0.5, (t - this.lastTickMs) / 1000);
     this.lastTickMs = t;
@@ -462,6 +714,7 @@ export class AutoMixer {
     void this.maybeFillRadio();
     // Re-sync to reality (user loads / deck switches / pauses) unless mid-transition.
     this.reconcile();
+    this.followJumps(dt);
 
     switch (this.phase) {
       case "idle":
@@ -477,7 +730,11 @@ export class AutoMixer {
         this.tickCueing();
         break;
       case "mixing":
-        this.tickMixing(dt);
+        try {
+          this.tickMixing(dt);
+        } catch (err) {
+          this.rescue("mixing", err);
+        }
         break;
       case "manual":
         this.tickManual();
@@ -486,6 +743,57 @@ export class AutoMixer {
         break;
     }
     this.emit(false);
+  }
+
+  // THE MIX POINT FOLLOWS THE TRACK. mixOutTime is a position in the live track, chosen once; when
+  // the user moved the track under it (operator, 2026-11-04: "if i mess with the jog while its on,
+  // the timing for next song does not respond properly") nothing re-chose it. Search past the exit
+  // and AUTO mixed the moment it was reached — at once, with a full-length blend running into the
+  // outro; search back and it still aimed at the old point. Now a jump re-plans from where you
+  // landed: armed re-picks the exit (not behind the playhead), cueing keeps the cued deck and only
+  // moves the exit. Preload re-plans on its own; a running mix is timed on wall clock, not position.
+  private lastLivePos: number | null = null;
+  private lastLiveFor: DeckId | null = null;
+  private followJumps(dt: number): void {
+    const live = this.liveDeck();
+    if (!live || !this.liveId) {
+      this.lastLivePos = null;
+      return;
+    }
+    const pos = live.position();
+    const prev = this.lastLiveFor === this.liveId ? this.lastLivePos : null;
+    this.lastLivePos = pos;
+    this.lastLiveFor = this.liveId;
+    if (prev == null || this.forced || this.mixOutTime == null) return;
+    if (this.phase !== "armed" && this.phase !== "cueing") return;
+    if (live.loop?.active || this.holdLoop) return; // a loop wraps every cycle — that is not a seek
+    const rate = live.rate > 0 ? live.rate : 1;
+    const expected = prev + (live.playing ? dt * rate : 0);
+    if (Math.abs(pos - expected) < JUMP_S) return;
+    event("automix.replan", { phase: this.phase, from: +prev.toFixed(1), to: +pos.toFixed(1), was: +this.mixOutTime.toFixed(1) });
+    if (this.phase === "armed") {
+      this.mixOutTime = null; // tickArmed re-picks it from here, this same tick
+      this.dd = null; // …and re-asks whether a double drop still fits from where we landed
+      this.ddChecked = "";
+      return;
+    }
+    this.mixOutTime = this.computeMixOut(live, this.barsSeconds, pos + 0.5);
+    this.fitBlendToRoom(live, this.mixOutTime);
+  }
+
+  // Shorten the planned blend to what the track has left after `exitAt` (same rule Mix now always
+  // used): a 24-bar blend that starts 10 bars before the end runs the outgoing into silence.
+  private fitBlendToRoom(live: Deck, exitAt: number): void {
+    if (!this.plan) return;
+    const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+    const room = (live.duration || 0) - END_GUARD - exitAt;
+    if (room > 0 && this.barsSeconds > room && bpm > 0) {
+      const bars = phraseBars(Math.max(2, room / barsToSeconds(1, bpm)));
+      if (bars < this.plan.bars) {
+        this.plan = { ...this.plan, bars, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(bars) : 0 };
+        this.barsSeconds = barsToSeconds(bars, bpm);
+      }
+    }
   }
 
   // Keep the queue stocked with suggestions that fit this moment.
@@ -519,8 +827,8 @@ export class AutoMixer {
   // PAUSE or a manual LOAD is never mistaken for "skip to the next queued song".
   private reconcile(): void {
     const e = this.deps.engine;
-    const aPlay = e.deck("A").playing;
-    const bPlay = e.deck("B").playing;
+    const aPlay = playingOrHeld(e.deck("A"));
+    const bPlay = playingOrHeld(e.deck("B"));
     // Record the playing edge for NEXT tick's decideLive — always, even mid-mix, so the edge is
     // accurate when we return to a reconciling phase. Read prev before overwriting.
     const prev = this.wasPlaying;
@@ -562,42 +870,76 @@ export class AutoMixer {
     const prev = this.liveVideoId;
     this.liveId = id;
     this.liveVideoId = this.deps.deckTrack(id)?.videoId ?? null;
-    this.deps.queue.setCurrent(this.deps.deckTrack(id));
+    this.claimable[id] = this.liveVideoId; // it has been live → AUTO may load over it later
+    const wasQueued = this.deps.queue.setCurrent(this.deps.deckTrack(id)) === true;
     if (this.liveVideoId && this.liveVideoId !== prev) {
       // A user-driven track change resets the "vibe" anchor — suggestions should now
       // tether to what they just put on, not the original auto-mix seed. A fresh anchor is at
       // full strength: age 0.
       this.anchor = this.deps.deckTrack(id);
       this.anchorAge = 0;
-      this.deps.queue.reseedRadio();
+      this.held = false; // Hold was "stay on THAT track"
+      // Re-seed only on a real CHANGE of live track. From nothing (prev null — AUTO just switched
+      // on, or the decks were stopped) there is no old seed to replace, and reseeding here is what
+      // made pressing AUTO throw away the queue the user was looking at.
+      // …and not when the new track came OUT of the list (operator, 2026-11-05: "loading a song
+      // completely reloads all the suggestions even though the song loaded is part of the
+      // suggestions"). Playing one of them is following the list, not leaving it.
+      if (prev && !wasQueued) this.deps.queue.reseedRadio();
     }
     this.resetArm();
     this.phase = "armed";
+  }
+
+  // THE USER'S TRACK ON THE IDLE DECK. Before AUTO loads onto `idle`, check what is there: if it
+  // is a track the user put there (not one AUTO loaded, not one that has already been live) and it
+  // is not already the next track, queue it at the front as a user pick instead of loading over
+  // it. It is then the next track, and the preload latches it where it sits.
+  private protectIdle(idle: DeckId): void {
+    const t = this.deps.deckTrack(idle);
+    if (!t?.videoId || this.claimable[idle] === t.videoId) return;
+    if (this.deps.engine.deck(idle).playing) return; // a playing deck is reconcile's business
+    this.claimable[idle] = t.videoId; // decided once: queued now, and AUTO's to manage from here
+    if (this.deps.queue.peekNext()?.videoId === t.videoId) return;
+    this.deps.queue.enqueueNext(t);
+    event("automix.keepIdle", { deck: idle, id: t.videoId });
   }
 
   // Natural track-end autoplay-continue: load + play the next queued track onto the
   // free deck (a plain continue when no mix was in progress).
   private async advanceToNext(): Promise<void> {
     if (this.preloading || !this.liveId) return;
-    const g = this.gen;
-    const next = await this.deps.queue.ensureNext(this.radioCtx());
-    if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
-    const target = other(this.liveId);
-    if (this.deps.engine.deck(target).playing) return; // don't stomp a deck in use
+    // Guard BEFORE the first await: reconcile calls this every tick while the deck sits at its end,
+    // and ensureNext can take a network round trip. Set after it (the old order), a second call
+    // got through, loaded the track after next onto the OTHER deck and advanced the queue twice.
     this.preloading = true;
+    const g = this.gen;
+    const target = other(this.liveId);
     try {
-      await this.deps.loadDeck(target, next);
-      if (!this.enabled || this.gen !== g) return;
-      if (!this.landed(next.videoId, this.deps.deckTrack(target)?.videoId === next.videoId)) return; // didn't land → drop + try a different track
+      if (this.deps.engine.deck(target).playing) return; // don't stomp a deck in use
+      this.protectIdle(target);
+      const next = await this.deps.queue.ensureNext(this.radioCtx());
+      if (!next || !this.enabled || !this.liveId || this.gen !== g || other(this.liveId) !== target) return;
+      if (this.deps.engine.deck(target).playing) return;
+      if (this.deps.deckTrack(target)?.videoId !== next.videoId) {
+        await this.deps.loadDeck(target, next);
+        if (!this.enabled || this.gen !== g) return;
+        if (!this.landed(next.videoId, this.deps.deckTrack(target)?.videoId === next.videoId)) return; // didn't land → drop + try a different track
+      }
+      this.claimable[target] = next.videoId;
       this.stageGain(target); // level it BEFORE it is audible
       this.deps.engine.deck(target).play();
       const sign = target === "A" ? -1 : 1;
       this.deps.applyCrossfade(sign);
       this.lastXfade = sign;
-      this.deps.queue.advance();
+      // Remove THIS track by id — not "pop the head", which is a different track if the queue
+      // moved while it loaded.
+      this.deps.queue.remove(next.videoId);
+      this.deps.queue.setCurrent(next);
       this.advancedByAuto(); // AUTO chose this one — age the anchor, move along the arc
       this.liveId = target;
       this.liveVideoId = next.videoId;
+      this.held = false; // Hold applied to the track that just ended
       this.resetArm();
       this.phase = "armed";
     } catch {
@@ -613,30 +955,40 @@ export class AutoMixer {
       this.adoptLive(playing);
       return;
     }
-    // A deck has a track loaded but PAUSED → adopt it as context (radio seeds from
-    // it) WITHOUT auto-playing. This is the key fix: pausing/loading never force-starts
-    // the next song. Only a truly empty pair triggers a fresh autoplay start.
-    const loaded: DeckId | null = this.deps.deckTrack("A") ? "A" : this.deps.deckTrack("B") ? "B" : null;
+    const loaded = this.kickoffDeck();
     if (loaded) {
+      if (this.kickoffPlay) {
+        // THE AUTO PRESS IS THE "GO". A track is on a deck and nothing is playing: start it.
+        this.kickoffPlay = false;
+        this.startLoaded(loaded);
+        return;
+      }
+      // Any LATER moment with nothing playing (the user stopped both decks after taking a mix
+      // over): adopt the deck as context — radio seeds from it — and wait for play. AUTO only
+      // force-starts on the AUTO press itself.
       const vid = this.deps.deckTrack(loaded)?.videoId ?? null;
       if (this.liveId !== loaded || this.liveVideoId !== vid) this.adoptLive(loaded);
       return;
     }
     if (this.preloading) return;
-    const first = this.deps.queue.advance() ?? this.deps.queue.peekNext();
+    const first = this.deps.queue.peekNext();
     if (!first) return;
     const g = this.gen;
     this.preloading = true;
+    this.kickoffPlay = false;
+    this.emit(false);
     try {
       await this.deps.loadDeck("A", first);
       if (!this.enabled || this.gen !== g) return;
       if (!this.landed(first.videoId, this.deps.deckTrack("A")?.videoId === first.videoId)) return; // didn't land → drop + try a different track
+      this.claimable.A = first.videoId;
       this.stageGain("A"); // level it BEFORE it is audible
       this.deps.engine.deck("A").play();
       this.deps.applyCrossfade(-1);
       this.lastXfade = -1;
       this.liveId = "A";
       this.liveVideoId = first.videoId;
+      this.deps.queue.remove(first.videoId);
       this.deps.queue.setCurrent(first);
       this.phase = "armed";
     } catch {
@@ -644,6 +996,41 @@ export class AutoMixer {
     } finally {
       this.preloading = false;
     }
+  }
+
+  // Which loaded deck to start on the AUTO press: the one the crossfader already lets through
+  // (left of centre → A, right → B; centre → A), else whichever deck has a track.
+  private kickoffDeck(): DeckId | null {
+    const a = !!this.deps.deckTrack("A");
+    const b = !!this.deps.deckTrack("B");
+    if (!a && !b) return null;
+    const prefer: DeckId = this.deps.getCrossfade() > 0 ? "B" : "A";
+    if (prefer === "A") return a ? "A" : "B";
+    return b ? "B" : "A";
+  }
+
+  // Start a deck the user loaded, as the first live track of this AUTO session. The track is the
+  // user's own choice, so it becomes the vibe anchor; the queue is left exactly as it was.
+  private startLoaded(id: DeckId): void {
+    const track = this.deps.deckTrack(id);
+    this.gen++;
+    this.liveId = id;
+    this.liveVideoId = track?.videoId ?? null;
+    this.claimable[id] = this.liveVideoId;
+    this.anchor = track;
+    this.anchorAge = 0;
+    this.deps.queue.setCurrent(track);
+    this.stageGain(id);
+    const sign = id === "A" ? -1 : 1;
+    this.deps.applyCrossfade(sign); // make sure it is the deck the room hears
+    this.lastXfade = sign;
+    const d = this.deps.engine.deck(id);
+    d.play();
+    // Seed the edge so the next reconcile does not read this start as the user dropping a track.
+    this.wasPlaying = { A: this.deps.engine.deck("A").playing, B: this.deps.engine.deck("B").playing };
+    this.resetArm();
+    this.phase = "armed";
+    event("automix.kickoff", { deck: id, id: this.liveVideoId });
   }
 
   private liveDeck(): Deck | null {
@@ -655,6 +1042,11 @@ export class AutoMixer {
     if (!live) {
       this.phase = "idle";
       return;
+    }
+    if (this.landUntil) {
+      if (this.deps.now() < this.landUntil && !this.forced) return; // still landing (see settle)
+      this.landUntil = 0;
+      this.quietGpuEnd();
     }
     if (!live.playing) return; // paused → just wait; never preload/mix off a paused deck
     // Catch the live deck up if we haven't levelled it yet — a user-loaded deck adopted before its
@@ -673,10 +1065,62 @@ export class AutoMixer {
     this.warmAhead();
     if (this.mixOutTime == null) {
       this.barsSeconds = barsToSeconds(12, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
-      this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
+      this.mixOutTime = this.computeMixOut(live, this.barsSeconds, live.position() + CUE_LEAD_S);
     }
+    this.maybePlanDoubleDrop(live);
+    // ★ CLEAR THE GPU BEFORE THE MIX, NOT AT IT. The quiet window only stops NEW separations; one
+    // already running (the track after next, warming) runs to the end on the GPU and starves the
+    // compositor — long frames with no script in them, measured through a blend. So the window goes
+    // up PRE_QUIET_S ahead of the mix point, which lets anything in flight finish first. The
+    // incoming's own stems are exempt (quietGpuFor): those are what the mix is waiting for.
+    if (this.mixOutTime != null && this.liveId) {
+      const until = (this.mixOutTime - live.position()) / (live.rate > 0 ? live.rate : 1);
+      if (until < PRE_QUIET_S) this.quietGpuFor(other(this.liveId));
+    }
+    if (this.forced) {
+      this.phase = "preload"; // Mix now: no lead-in to wait for
+      return;
+    }
+    if (this.held) return; // Hold: keep the mix point on screen, never start toward it
     const lead = this.barsSeconds + 8;
     if (live.position() >= (this.mixOutTime ?? Infinity) - lead) this.phase = "preload";
+  }
+
+  // THE DOUBLE DROP IS DECIDED WHILE WE WAIT. It moves the mix point EARLIER (eight bars before the
+  // outgoing's last hook, not after it), so it cannot be a mix-time choice like the other gestures:
+  // by the time the normal preload fires, its start is already behind us. The incoming is decoded on
+  // the idle deck long before (ensurePreload), so its structure is known — plan once per track.
+  private maybePlanDoubleDrop(live: Deck): void {
+    if (!this.liveId || this.forced) return;
+    const idle = other(this.liveId);
+    const t = this.preloadedId === idle ? this.preloadedTrack : null;
+    if (!t?.videoId || this.ddChecked === t.videoId) return;
+    this.ddChecked = t.videoId;
+    this.dd = null;
+    const inc = this.deps.engine.deck(idle);
+    const liveT = this.deps.deckTrack(this.liveId);
+    const incT = this.deps.deckTrack(idle);
+    const liveBpm = live.beatgrid?.bpm ?? null;
+    const plan = planDoubleDrop(
+      { sections: this.sectionsOf(live), bpm: liveBpm, key: liveT?.key ?? live.key?.camelot ?? null, energy: liveT?.energy },
+      { sections: this.sectionsOf(inc), bpm: inc.beatgrid?.bpm ?? null, key: incT?.key ?? inc.key?.camelot ?? null, energy: incT?.energy },
+      {
+        lockable: tempoLockable(live.effectiveBpm ?? liveBpm, inc.beatgrid?.bpm),
+        notBefore: live.position() + CUE_LEAD_S + barsToSeconds(2, liveBpm ?? 0),
+        arc: this.deps.queue.arc,
+        lastStyle: this.lastStyle,
+        perf: this.perf(),
+      },
+    );
+    if (!plan || !live.beatgrid || !inc.beatgrid) return;
+    this.dd = {
+      videoId: t.videoId,
+      mixOut: nearestDownbeat(live.beatgrid, plan.mixOut, live.position() + CUE_LEAD_S),
+      mixIn: nearestDownbeat(inc.beatgrid, plan.mixIn),
+    };
+    this.mixOutTime = this.dd.mixOut; // the countdown now points at the build, not the old exit
+    this.barsSeconds = barsToSeconds(DD_BARS, liveBpm ?? 0);
+    event("automix.doubleDrop", { planned: Math.round(this.dd.mixOut), drop: Math.round(plan.drop), inc: Math.round(plan.incDrop) });
   }
 
   // Eagerly load the next queued track onto the idle deck while the current one plays, so
@@ -687,25 +1131,29 @@ export class AutoMixer {
     if (this.eagerLoading || this.preloading || !this.liveId) return;
     const idle = other(this.liveId);
     if (this.deps.engine.deck(idle).playing) return; // user is on that deck — don't grab it
-    const g = this.gen;
-    const next = await this.deps.queue.ensureNext(this.radioCtx());
-    if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
-    const tgt = other(this.liveId);
-    if (this.deps.engine.deck(tgt).playing) return;
-    // Already sitting on the idle deck (we loaded it, or it happens to be there)? Latch it
-    // as preloaded so we don't reload — its stems are already deriving.
-    if (this.deps.deckTrack(tgt)?.videoId === next.videoId) {
-      this.preloadedId = tgt;
-      this.preloadedTrack = next;
-      return;
-    }
+    // Guard BEFORE the await (ensureNext can be a network fetch) — set after it, two armed ticks
+    // both got through and loaded the idle deck twice.
     this.eagerLoading = true;
+    const g = this.gen;
     try {
+      this.protectIdle(idle); // a track the user put on the idle deck is queued, never loaded over
+      const next = await this.deps.queue.ensureNext(this.radioCtx());
+      if (!next || !this.enabled || !this.liveId || this.gen !== g) return;
+      const tgt = other(this.liveId);
+      if (tgt !== idle || this.deps.engine.deck(tgt).playing) return;
+      // Already sitting on the idle deck (we loaded it, or the user's track was queued above)?
+      // Latch it as preloaded so we don't reload — its stems are already deriving.
+      if (this.deps.deckTrack(tgt)?.videoId === next.videoId) {
+        this.preloadedId = tgt;
+        this.preloadedTrack = next;
+        return;
+      }
       await this.deps.loadDeck(tgt, next); // decode + analysis + (desktop) neural stems — EARLY
       if (this.enabled && this.liveId != null && this.gen === g && !this.deps.engine.deck(tgt).playing) {
         // Only latch if it actually LANDED — loadDeck resolves even on a failed load, so latching
         // blind would re-load the same broken track every tick. landed() drops it after MAX misses.
         if (this.landed(next.videoId, this.deps.deckTrack(tgt)?.videoId === next.videoId)) {
+          this.claimable[tgt] = next.videoId;
           this.preloadedId = tgt;
           this.preloadedTrack = next;
           this.stageGain(tgt); // level it now, long before the blend needs it
@@ -729,29 +1177,40 @@ export class AutoMixer {
     // Prefer the eagerly-preloaded track already decoded on the idle deck (its stems had the
     // whole current track to derive); only load here as a fallback if the early preload
     // hasn't landed yet.
-    const preloaded =
-      this.preloadedId === idle && !!this.preloadedTrack && this.deps.deckTrack(idle)?.videoId === this.preloadedTrack.videoId;
-    const g = this.gen;
-    const next = preloaded ? this.preloadedTrack! : await this.deps.queue.ensureNext(this.radioCtx());
-    if (!next) {
-      this.phase = "armed"; // nothing queued yet — radio may fill, retry later
-      return;
-    }
+    // Guard BEFORE any await (see ensurePreload).
     this.preloading = true;
+    const g = this.gen;
+    this.emit(false); // waitReason → loading-next, before the (possibly long) load
     try {
-      if (!preloaded) await this.deps.loadDeck(idle, next);
+      this.protectIdle(idle);
+      // A latched preload is only honoured while it is still the queue's next track — the user
+      // may have reordered, removed or queued something in front of it since it loaded.
+      const head = this.deps.queue.peekNext();
+      const preloaded =
+        this.preloadedId === idle &&
+        !!this.preloadedTrack &&
+        this.deps.deckTrack(idle)?.videoId === this.preloadedTrack.videoId &&
+        (!head || head.videoId === this.preloadedTrack.videoId);
+      const next = preloaded ? this.preloadedTrack! : await this.deps.queue.ensureNext(this.radioCtx());
+      if (!next) {
+        if (this.gen === g) this.phase = this.forced ? "preload" : "armed"; // nothing queued yet — radio may fill, retry
+        return;
+      }
+      const onDeck = this.deps.deckTrack(idle)?.videoId === next.videoId;
+      if (!onDeck) await this.deps.loadDeck(idle, next);
       // Bail if the world changed under us during the async load (incl. a skip/cancel/adopt
       // that bumped the generation — otherwise we'd cue the stale next track).
       if (!this.enabled || this.liveId == null || this.gen !== g || this.deps.engine.deck(idle).playing) {
+        if (this.gen === g) this.phase = "armed";
+        return;
+      }
+      // A fresh load that didn't LAND → drop it (in landed) and retry a different track next
+      // cycle, rather than cueing a deck that never got the track.
+      if (!onDeck && !this.landed(next.videoId, this.deps.deckTrack(idle)?.videoId === next.videoId)) {
         this.phase = "armed";
         return;
       }
-      // A fresh (non-preloaded) load that didn't LAND → drop it (in landed) and retry a different
-      // track next cycle, rather than cueing a deck that never got the track.
-      if (!preloaded && !this.landed(next.videoId, this.deps.deckTrack(idle)?.videoId === next.videoId)) {
-        this.phase = "armed";
-        return;
-      }
+      this.claimable[idle] = next.videoId;
       this.stageGain(idle); // idempotent — a preloaded deck was already levelled at preload time
       this.markDropCue(idle); // give "Mix now" somewhere musical to jump to
       this.nextTrack = next;
@@ -759,6 +1218,20 @@ export class AutoMixer {
       const inc = this.deps.engine.deck(idle);
       this.plan = pickTransition(deckDescriptor(live, this.deps.queue.getCurrent()), deckDescriptor(inc, next));
       const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+      if (!tempoLockable(bpm, inc.beatgrid?.bpm)) {
+        // Too far apart to beat-match: a 4-bar gesture with one cut (see faderX / cutPoint).
+        this.plan = { ...this.plan, bars: 4, bassSwapBar: 0 };
+      }
+      // A PAIR THAT WILL GET STEMS gets the room a mashup needs (mashup.ts): four phrases, so 32
+      // bars, or 16 where the track cannot give that much (the section fitting below shortens it).
+      // The incoming's stems may still be separating; pending counts, since the mix waits for them.
+      if (tempoLockable(bpm, inc.beatgrid?.bpm) && live.hasStems && (inc.hasStems || !!this.deps.stemsPending?.(idle)) && this.plan.bars < 32) {
+        this.plan = { ...this.plan, bars: 32, bassSwapBar: phraseSwapBar(32) };
+      }
+      {
+        const banded = bandBars(bpm, this.plan.bars);
+        if (banded !== this.plan.bars) this.plan = { ...this.plan, bars: banded, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(banded) : 0 };
+      }
       // FIT THE BLEND TO THE SECTION. The planner asks for a length based on how compatible the
       // pair is; the track decides whether it has that much to give. A 24-bar blend that starts
       // 12 bars before the outro ends straddles the seam and sounds like a mistake, so the
@@ -767,15 +1240,42 @@ export class AutoMixer {
       // a shortened blend can leave later, which is usually the better exit.
       this.barsSeconds = barsToSeconds(this.plan.bars, bpm);
       const liveSections = this.sectionsOf(live);
-      if (liveSections) {
-        const provisional = this.computeMixOut(live, this.barsSeconds);
-        const fitted = blendBarsFor(liveSections, provisional, bpm, this.plan.bars);
-        if (fitted !== this.plan.bars) {
-          this.plan = { ...this.plan, bars: fitted, bassSwapBar: Math.max(1, Math.round((this.plan.bassSwapBar / this.plan.bars) * fitted)) };
-          this.barsSeconds = barsToSeconds(fitted, bpm);
-        }
+      const dd = !this.forced && this.dd && this.dd.videoId === next.videoId && this.dd.mixOut >= live.position() ? this.dd : null;
+      if (dd) {
+        // THE DOUBLE DROP: its own cue points, its own length — skip the blend fitting entirely.
+        this.plan = { ...this.plan, style: "doubleDrop", bars: DD_BARS, bassSwapBar: 0 };
+        this.barsSeconds = barsToSeconds(DD_BARS, bpm);
+        this.mixOutTime = dd.mixOut;
+        inc.seek(dd.mixIn);
+        this.plan = { ...this.plan, loopExtend: false };
+        inc.setEqLow(EQ_KILL);
+        const sign = this.liveId === "A" ? -1 : 1;
+        this.deps.applyCrossfade(sign);
+        this.lastXfade = sign;
+        this.cuedIdle = idle;
+        this.mixStarted = false;
+        this.quietGpuFor(idle);
+        this.phase = "cueing";
+        return;
       }
-      this.mixOutTime = this.computeMixOut(live, this.barsSeconds);
+      if (this.forced) {
+        // MIX NOW: the exit is HERE, not the structural one — recomputing it is what used to turn
+        // the press into a 30 s countdown. The blend only shrinks if the track would run out first.
+        this.fitBlendToRoom(live, live.position());
+        this.mixOutTime = live.position();
+      } else {
+        const here = live.position() + 0.5; // the load may have taken a while: never an exit behind us
+        if (liveSections) {
+          const provisional = this.computeMixOut(live, this.barsSeconds, here);
+          const fitted = blendBarsFor(liveSections, provisional, bpm, this.plan.bars);
+          if (fitted !== this.plan.bars) {
+            this.plan = { ...this.plan, bars: fitted, bassSwapBar: this.plan.bassSwapBar ? phraseSwapBar(fitted) : 0 };
+            this.barsSeconds = barsToSeconds(fitted, bpm);
+          }
+        }
+        this.mixOutTime = this.computeMixOut(live, this.barsSeconds, here);
+        this.fitBlendToRoom(live, this.mixOutTime);
+      }
       const mixIn = this.computeMixIn(inc, this.barsSeconds);
       inc.seek(mixIn);
       // LOOP EXTEND. When the incoming track has a long intro, the honest options are to cut into
@@ -788,7 +1288,7 @@ export class AutoMixer {
       const bodyAt = bodyIdx != null && incSections ? incSections.starts[bodyIdx] : null;
       this.plan = {
         ...this.plan,
-        loopExtend: !!live.beatgrid && bodyAt != null && bodyAt - mixIn > this.barsSeconds * 1.35,
+        loopExtend: !this.forced && !!live.beatgrid && bodyAt != null && bodyAt - mixIn > this.barsSeconds * 1.35,
       };
       inc.setEqLow(EQ_KILL);
       const sign = this.liveId === "A" ? -1 : 1;
@@ -797,7 +1297,7 @@ export class AutoMixer {
       this.cuedIdle = idle;
       this.mixStarted = false;
       // From here to settle the screen is animating continuously — hold off any new separation.
-      this.quietGpuStart();
+      this.quietGpuFor(idle);
       this.phase = "cueing";
     } catch {
       this.abandonCue();
@@ -821,11 +1321,32 @@ export class AutoMixer {
       this.phase = "armed";
       return;
     }
-    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.05) {
+    if (this.held && !this.forced) {
+      // Hold pressed while cued (hold() cancels the cue, but a cue can land from an in-flight
+      // preload just after): stand down rather than mix.
+      this.abandonCue();
+      this.resetArm();
+      this.phase = "armed";
+      return;
+    }
+    this.quietGpuFor(idle);
+    // A hand on the outgoing platter (or a pause) holds the mix: starting the incoming under a
+    // scratch is not a transition. It goes the moment the deck is playing again.
+    if (!live.playing) return;
+    if (this.mixOutTime != null) {
+      const until = (this.mixOutTime - live.position()) / Math.max(0.25, live.rate || 1);
+      if (until <= FINE_AHEAD_S && until > -0.5) this.startFine();
+    }
+    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.004) {
       // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
-      if (this.shouldHoldForStems(live, idle)) return;
-      this.startMix();
+      this.stemHold = this.shouldHoldForStems(live, idle);
+      if (this.stemHold) return;
+      try {
+        this.startMix();
+      } catch (err) {
+        this.rescue("start", err);
+      }
     } else if (this.plan?.loopExtend && !this.holdLoop && this.nearMixOut(live, this.barsSeconds)) {
       // A bar before the exit, close the outgoing into a 4-bar loop. It keeps playing musically
       // (the same phrase, in time) instead of running out, which buys the incoming's long intro
@@ -893,6 +1414,8 @@ export class AutoMixer {
       fx: !!this.findFx(liveId),
       incomingBody: !!incSections && firstBodySection(incSections) != null,
       grid: !!live.beatgrid && !!inc.beatgrid,
+      lock: tempoLockable(live.effectiveBpm ?? live.beatgrid?.bpm, inc.beatgrid?.bpm),
+      bridge: tempoLockable(live.effectiveBpm ?? live.beatgrid?.bpm, inc.beatgrid?.bpm, BRIDGE_MAX),
     };
   }
 
@@ -971,6 +1494,27 @@ export class AutoMixer {
       reverb.setParam("size", 0.85);
       reverb.setParam("decay", 0.8);
       reverb.setParam("mix", 0);
+    } else if (style === "doubleDrop") {
+      const { delay } = this.borrowFx(liveId, ["delay"]);
+      if (delay) {
+        delay.setParam("sync", 1);
+        delay.setParam("div", 2);
+        delay.setParam("feedback", 0.55);
+        delay.setParam("mix", 0);
+      }
+    } else if (style === "tempoBridge") {
+      const { delay, reverb } = this.borrowFx(liveId, ["delay", "reverb"]);
+      if (delay) {
+        delay.setParam("sync", 1);
+        delay.setParam("div", 2); // 1/8: the roll's own subdivision, so the echo and the loop agree
+        delay.setParam("feedback", 0.68);
+        delay.setParam("mix", 0);
+      }
+      if (reverb) {
+        reverb.setParam("size", 0.9);
+        reverb.setParam("decay", 0.85);
+        reverb.setParam("mix", 0);
+      }
     } else if (style === "gateChop") {
       const { gate } = this.borrowFx(liveId, ["gate"]);
       if (!gate) return;
@@ -1168,6 +1712,37 @@ export class AutoMixer {
     }
   }
 
+  // ★ A TRANSITION THAT THROWS MUST STILL LAND (operator, 2026-11-04: the header stuck on
+  // "Mixes into … in 0s"). startMix runs from a fire-and-forget tick, so an exception in any step
+  // — a borrowed FX device whose worklet never loaded, a deck reloaded under us — vanished, the
+  // machine stayed in "cueing" past its mix point, retried every 150 ms and threw every time: the
+  // clock sat at 0 s and the next track never came in. Now the failure is logged and the set moves
+  // on with a clean cut onto the incoming deck (settle undoes everything the gesture touched).
+  private rescue(where: "start" | "mixing", err: unknown): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[htl] AUTO ${where} failed — cutting to the next track`, err);
+    event("automix.rescue", { where, err: msg.slice(0, 160), style: this.plan?.style ?? null });
+    try {
+      if (this.liveId) {
+        const inc = this.deps.engine.deck(other(this.liveId));
+        if (!inc.playing) inc.play();
+      }
+      this.mixStarted = true;
+      this.settle();
+    } catch (err2) {
+      // Even the cut failed: stand down to armed rather than loop on the same throw.
+      console.error("[htl] AUTO rescue failed", err2);
+      try {
+        this.abandonCue();
+      } catch {
+        /* nothing left to undo */
+      }
+      this.mixStarted = false;
+      this.resetArm();
+      this.phase = "armed";
+    }
+  }
+
   private startMix(): void {
     if (this.mixStarted || !this.liveId || !this.plan) return;
     const idle = other(this.liveId);
@@ -1178,12 +1753,22 @@ export class AutoMixer {
     // Choose the gesture: what suits this pair, filtered by what the decks can do, and biased
     // away from whatever the last transition was. `useStems` follows the decision rather than
     // driving it — a stem swap is now one option among several rather than an automatic upgrade.
+    // From the first bar of the blend to the end of its landing, nothing heavy runs: no separation
+    // starts and no stem set is applied (applying packs ~0.3 s on the main thread). Stems that miss
+    // the cue arrive after the landing instead of freezing the blend.
+    this.quietGpuStart();
+    this.landUntil = 0;
     const caps = this.capabilities(this.liveId, idle);
     const shape = this.styleShape(idle);
-    const style = resolveStyle(this.plan, caps, this.lastStyle, { shape });
+    const style =
+      this.plan.style === "doubleDrop" && caps.lock && caps.grid
+        ? "doubleDrop"
+        : resolveStyle({ ...this.plan, style: this.plan.style === "doubleDrop" ? "blend" : this.plan.style }, caps, this.lastStyle, { shape });
     this.plan.style = style;
     // …and how the incoming ARRIVES, which is now a separate decision from how the outgoing leaves.
-    this.plan.entry = resolveEntry(style, caps, shape);
+    this.plan.entry = caps.lock ? resolveEntry(style, caps, shape) : "open"; // a cut lands whole
+    this.unlocked = !caps.lock;
+    if (style === "tempoBridge") this.beginBridge(live, inc);
     // The acapella hold, when the harmony actually permits it. keyKnown is the load-bearing half:
     // pickTransition reports keyMatch:true for an UNKNOWN pair too (a neutral guess), and holding
     // a lead vocal over a bed on that guess is the way this move goes badly wrong. Unknown is not
@@ -1192,6 +1777,9 @@ export class AutoMixer {
       style === "stemswap" && this.plan.keyMatch && this.plan.keyKnown && this.perf() !== "subtle";
     this.lastStyle = style;
     this.useStems = style === "stemswap";
+    this.planResolved = true;
+    this.forced = false; // Mix now delivered
+    this.stemHold = false;
     event("automix.transition", {
       style,
       entry: this.plan.entry,
@@ -1202,7 +1790,17 @@ export class AutoMixer {
       loopExtend: !!this.plan.loopExtend,
     });
 
+    // ★ TIMED (operator, 2026-11-04: "a huge lag spike at the time of auto mixing"). Every step of
+    // the start runs in one tick; the event names the slow one in the flight recorder and a capture.
+    const t0 = performance.now();
+    const cost: Record<string, number> = {};
+    const lap = (k: string, from: number) => {
+      cost[k] = Math.round((performance.now() - from) * 10) / 10;
+      return performance.now();
+    };
+    let tl = t0;
     this.armGesture(style, this.liveId);
+    tl = lap("gesture", tl);
     // ★ THE TAIL NEEDS ONE DECK, NOT TWO. This used to sit inside the `useStems` branch below,
     // which meant the user's AUTO chain only ever engaged on a full stem swap — and a stem swap
     // needs BOTH decks separated. But the tail routes an OUTGOING stem and touches the incoming
@@ -1212,6 +1810,7 @@ export class AutoMixer {
     // every gesture: an echo-out or a filter over a separated outgoing track now dissolves its
     // vocal through whatever the user has dialled, the same way a stem swap already did.
     this.beginVocalTail(this.liveId);
+    tl = lap("tail", tl);
     if (this.useStems) {
       // The incoming enters as DRUMS + BASS only — its melody (other) and vocal come in
       // LATER in the blend (beats → melody → vocal), so nothing stacks on the way in.
@@ -1230,10 +1829,24 @@ export class AutoMixer {
     } else if (this.plan.style === "spinOut") {
       inc.setEqLow(0);
     }
-    if (engine.syncRole(idle) !== "slave") engine.toggleSync(idle);
-    if (this.plan.keyMatch && engine.keyRole(idle) !== "slave") engine.toggleKey(idle);
-    this.beginGlide(live, inc);
-    inc.play();
+    tl = lap("prep", tl);
+    // ★ SYNC ONLY A PAIR THAT CAN LOCK. Syncing 130 BPM under 88 played the incoming ~30 % slow for
+    // the whole blend and snapped it at settle; the glide dragged the outgoing the other way. An
+    // unmatchable pair keeps both tempos and gets a gesture that does not need a beat-match
+    // (resolveStyle never offers blend / stemswap without caps.lock).
+    if (caps.lock) {
+      if (engine.syncRole(idle) !== "slave") engine.toggleSync(idle);
+      if (this.plan.keyMatch && engine.keyRole(idle) !== "slave") engine.toggleKey(idle);
+    }
+    tl = lap("sync", tl);
+    if (caps.lock) this.beginGlide(live, inc);
+    tl = lap("glide", tl);
+    if (caps.lock) inc.play();
+    else this.incPending = true; // starts on the cut's downbeat (tickMixing)
+    lap("play", tl);
+    const total = performance.now() - t0;
+    perfWork("automix.start", total);
+    event("automix.startCost", { ms: Math.round(total * 10) / 10, ...cost });
     this.cuedIdle = idle; // still ours through the mix
     this.mixStarted = true;
     this.mixElapsed = 0;
@@ -1259,7 +1872,15 @@ export class AutoMixer {
     // phase-lock rides pure PI with the full ±SYNC_TRIM_MAX headroom (the same signal the Smart
     // Fader sets on arm; endGlide clears it). Without this every auto-transition wobbled.
     this.deps.engine.setCommandedRamp(true);
-    if (!this.plan?.keyMatch) {
+    // KEY-LOCK STAYS ON through the glide unless the pair is within 2 %. Real DJs leave master tempo
+    // on (Kim et al.: only 2.5 % of tracks in 1,557 mixes were transposed at all); a vinyl ride over
+    // a 10 % gap is a 1.6-semitone pitch bend of both records mid-blend.
+    const near = (() => {
+      const f = foldTempoOctave(inc.beatgrid?.bpm ?? 0, live.effectiveBpm ?? live.beatgrid?.bpm ?? 0);
+      const a = live.effectiveBpm ?? live.beatgrid?.bpm ?? 0;
+      return f != null && a > 0 && Math.max(f / a, a / f) - 1 <= 0.02;
+    })();
+    if (!this.plan?.keyMatch && near) {
       this.glideKeylock = { A: this.deps.engine.deck("A").keylock, B: this.deps.engine.deck("B").keylock };
       // PIN keylock off (not just setKeylock(false)) for the vinyl pitch ride: pinning also stops
       // setPitch from silently re-engaging keylock on a user KEY-nudge mid-glide (Deck.setPitch),
@@ -1312,22 +1933,47 @@ export class AutoMixer {
     // The user grabbed the crossfader → they're finishing the mix; stand back.
     const cf = this.deps.getCrossfade();
     if (this.lastXfade != null && Math.abs(cf - this.lastXfade) > XFADE_GRAB) {
+      event("automix.handoff", { why: "fader", cf: +cf.toFixed(3), ours: +this.lastXfade.toFixed(3) });
       this.handoffToManual();
       return;
     }
-    // The user stopped the incoming deck → hand off rather than fight.
-    if (!inc.playing) {
+    // The user stopped the incoming deck → hand off rather than fight. A hand on its platter (a
+    // nudge, a quick scratch) is not a stop — see playingOrHeld.
+    if (!this.incPending && !playingOrHeld(inc)) {
+      event("automix.handoff", { why: "incoming stopped" });
       this.handoffToManual();
       return;
     }
 
-    // Progress on wall-clock PLAYING time, so jogging/scratching the deck can't
-    // scramble the fade. Pauses simply freeze it.
-    if (live.playing) this.mixElapsed += dt;
+    // Progress in the LIVE TRACK'S time while it plays (elapsed × its tempo), so a jog or a scratch
+    // cannot scramble the fade and a pause freezes it — and so bar k of the transition IS bar k of
+    // the music. It counted wall seconds against a length measured in track seconds: under the
+    // tempo glide a 32-bar blend at +5 % ran ~1.6 bars ahead of the phrase it was written for.
+    if (live.playing) this.mixElapsed += dt * (live.rate > 0 ? live.rate : 1);
     const p = clamp(this.mixElapsed / Math.max(0.001, this.barsSeconds), 0, 1);
+    const cutK = cutBar(this.plan.style, this.plan.bars);
+    const cutFrac = cutK / Math.max(1, this.plan.bars);
+    const cutDone = this.atBar(live, cutK, p);
 
+    // AN UNMATCHED PAIR STARTS THE INCOMING AT THE CUT, on the one — not at the top of the
+    // transition, where it would run unsynced under the outgoing (muted, but out of phase with the
+    // downbeat it is meant to land on).
+    if (this.incPending && cutDone && this.plan.style !== "tempoBridge") {
+      this.incPending = false;
+      inc.play();
+    }
     const liveSign = this.liveId === "A" ? -1 : 1;
-    const cfv = lerp(liveSign, -liveSign, p);
+    // A cut moves the fader at the BAR LINE (atBar: the live track's own downbeat), not when the
+    // progress fraction happens to cross it on a 150 ms tick.
+    const steps = this.unlocked || this.plan.style === "cut";
+    const px = steps ? (cutDone ? Math.max(p, cutFrac) : Math.min(p, cutFrac - 1e-6)) : p;
+    const x =
+      this.plan.style === "tempoBridge"
+        ? bridgeShape(p * BRIDGE.bars, this.perf() !== "subtle").fader
+        : this.plan.style === "doubleDrop"
+          ? this.ddShape(live, p).fader
+          : faderX(this.plan.style, px, this.plan.bars, this.plan.bassSwapBar, !this.unlocked);
+    const cfv = lerp(liveSign, -liveSign, x);
     this.deps.applyCrossfade(cfv);
     this.lastXfade = cfv;
 
@@ -1340,15 +1986,29 @@ export class AutoMixer {
     // the transition started.
     this.raceStems(live, inc, idle, p);
 
-    const swapStart = this.plan.style === "cut" ? 0 : this.plan.bassSwapBar / Math.max(1, this.plan.bars);
-    const swapSpan = 1 / Math.max(1, this.plan.bars);
-    const s = clamp((p - swapStart) / Math.max(0.001, swapSpan), 0, 1);
+    // The bass swap: one BEAT from the swap bar's downbeat, measured on the live track's playhead
+    // (so the fine loop draws it smoothly, on the beat) — see swapProgress.
+    const s = this.swapProgress(live, p);
     if (this.useStems) {
-      const g = stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      const bar = p * this.plan.bars;
+      const raw =
+        this.plan.bars >= 8
+          ? mashupGains(bar, this.plan.bars, { keyOk: this.plan.keyMatch && this.plan.keyKnown })
+          : stemBlend(p, s, { keyMatch: this.plan.keyMatch, acapella: !!this.plan.acapella });
+      if (this.plan.bars >= 8) this.maybeLoopForMashup(live, bar);
+      const xg = crossfadeGains(cfv);
+      const g = {
+        live: faderCompensated(raw.live, this.liveId === "A" ? xg.A : xg.B),
+        inc: faderCompensated(raw.inc, this.liveId === "A" ? xg.B : xg.A),
+      };
       for (const k of AutoMixer.STEMS) {
         live.setStemGain(k, g.live[k]);
         inc.setStemGain(k, g.inc[k]);
       }
+    } else if (this.plan.style === "tempoBridge") {
+      this.tickBridge(live, inc, p);
+    } else if (this.plan.style === "doubleDrop") {
+      this.tickDoubleDrop(live, inc, p);
     } else if (this.plan.style === "dropSwap") {
       // THE DROP SWAP. Not a blend at all: the outgoing COLLAPSES — its bass is pulled and a
       // high-pass climbs until only a thin ghost of it is left — and then it is simply gone, with
@@ -1371,12 +2031,12 @@ export class AutoMixer {
       // tempos do NOT agree, which is exactly when a beatmatched blend is the wrong idea.
       const rev = this.borrowedFx?.saved.find((x) => x.device.kind === "reverb")?.device;
       const wet = clamp((p - 0.1) / 0.5, 0, 1);
-      rev?.setParam("mix", wet * 0.8);
+      rev?.setParam("mix", this.unlocked && cutDone ? 1 : wet * 0.8);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setFilter(lerp(0, 0.7, wet)); // the dry body thins as the wet swells
       // A freeze on the tail turns the last swell into a pad the incoming walks in over — thrown
       // ON THE DOWNBEAT of the last two bars, not at whatever fraction happens to be near it.
-      if (barsLeft(p, this.plan.bars) <= 2) rev?.setParam("freeze", 1);
+      if (this.atBar(live, this.freezeBar(), p)) rev?.setParam("freeze", 1);
     } else if (this.plan.style === "gateChop") {
       // THE GATE CHOP. The outgoing is cut into tempo-synced slices that get deeper as it leaves,
       // so it stops sounding like a track being faded and starts sounding like a rhythmic device
@@ -1403,19 +2063,19 @@ export class AutoMixer {
       // dry level away and let the wet tail carry.
       const wet = clamp((p - 0.25) / 0.45, 0, 1);
       const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
-      dly?.setParam("mix", wet * 0.75);
+      dly?.setParam("mix", this.unlocked && cutDone ? 1 : wet * 0.75);
       live.setEqLow(lerp(0, EQ_KILL, clamp(p / 0.35, 0, 1))); // lows go first — never two bass lines
       live.setEqHigh(lerp(0, -6, wet));
       live.setFilter(lerp(0, 0.5, wet));
       // Freeze the repeats at the end: the outgoing is gone but its last phrase keeps ringing over
       // the incoming, which is the whole point of throwing it in the first place. On the downbeat
       // of the last two bars — a delay freezing off the grid smears the very thing it captured.
-      if (barsLeft(p, this.plan.bars) <= 2) dly?.setParam("freeze", 1);
+      if (this.atBar(live, this.freezeBar(), p)) dly?.setParam("freeze", 1);
     } else if (this.plan.style === "spinOut") {
       // THE SPIN OUT. A clash that no blend can fix, made deliberate: the outgoing keeps its full
       // body right up to the last bar and is then spun down (fired once, at the trigger point) as
       // the incoming lands on its "1". Everything before that is just holding steady.
-      if (!this.spinFired && p >= 0.72) {
+      if (!this.spinFired && cutDone) {
         this.spinFired = true;
         live.spinback();
       }
@@ -1425,11 +2085,11 @@ export class AutoMixer {
       // leaves through a high-pass in the back half. Bass still swaps so lows don't
       // stack. The filter masks an unproven pairing — sounds deliberate.
       live.setFilter(lerp(0, 0.85, clamp((p - 0.45) / 0.55, 0, 1)));
-      live.setEqLow(lerp(0, EQ_KILL, s));
+      live.setEqLow(bassSwapDb(s).out);
     } else {
       // EQ3 blend: bass swap, plus duck the OUTGOING highs in the last third so the
       // hats/cymbals don't clash on the way out — a 3-band handover, not just lows.
-      live.setEqLow(lerp(0, EQ_KILL, s));
+      live.setEqLow(bassSwapDb(s).out);
       live.setEqHigh(lerp(0, -10, clamp((p - 0.6) / 0.4, 0, 1)));
       // Contextual one-knob filter motion layered on the EQ: the INCOMING slides in from
       // under a gentle low-pass over the first half, the OUTGOING ghosts out through a
@@ -1438,7 +2098,7 @@ export class AutoMixer {
       live.setFilter(lerp(0, 0.6, clamp((p - 0.5) / 0.5, 0, 1)));
     }
     // …and the INCOMING half, once, for every gesture — see applyEntry.
-    if (!this.useStems) this.applyEntry(inc, p, s);
+    if (!this.useStems && this.plan.style !== "tempoBridge" && this.plan.style !== "doubleDrop") this.applyEntry(inc, p, s);
 
     // Flourishes ride ON TOP of whatever gesture just ran, so they go last — a lift written before
     // the style's own setEqHigh would simply be overwritten.
@@ -1446,13 +2106,249 @@ export class AutoMixer {
     // The stutter window: a fast tremolo on the outgoing's filter, driven off transition progress
     // (not a timer) so pausing freezes it along with everything else.
     if (this.mixElapsed < this.stutterUntil) {
-      const phase = Math.sin(this.mixElapsed * Math.PI * 16); // ~8 Hz — a bar of 16ths at 120bpm
+      // A 16th-note tremolo AT THIS TRACK'S TEMPO (was a fixed 8 Hz: right at 120 BPM only, and
+      // drifting off the grid at any other tempo).
+      const bpm = live.effectiveBpm ?? live.beatgrid?.bpm ?? 120;
+      const phase = Math.sin(2 * Math.PI * (bpm / 15) * this.mixElapsed);
       live.setFilter(clamp(0.55 + 0.45 * phase, 0, 1));
     }
 
     // Done when the ramp finishes, the outgoing track runs out, or the user kills
     // the outgoing deck (a deliberate "drop the old track" move → finish on incoming).
-    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !live.playing) this.settle();
+    // (A hand on the outgoing platter is not that — see playingOrHeld.)
+    if (p >= 1 || (live.duration && live.position() >= live.duration - 0.1) || !playingOrHeld(live)) {
+      this.settle();
+      return;
+    }
+    this.updateFine(live);
+  }
+
+  // ── THE DOUBLE DROP (shape in doubleDrop.ts) ─────────────────────────────────────────────────
+  private ddShape(live: Deck, p: number) {
+    const b = p * DD_BARS;
+    const dropped = this.atBar(live, DD.build, p);
+    const breath = this.perf() !== "subtle" && !dropped && this.atBar(live, DD.breath, p);
+    return doubleDropShape(b, dropped, breath);
+  }
+
+  private tickDoubleDrop(live: Deck, inc: Deck, p: number): void {
+    const sh = this.ddShape(live, p);
+    inc.setFilter(sh.incFilter);
+    inc.setEqLow(sh.incLowDb);
+    inc.setEqHigh(sh.incHighDb);
+    live.setEqLow(sh.outLowDb);
+    live.setEqHigh(sh.outHighDb);
+    live.setFilter(sh.outFilter);
+    if (live.hasStems) live.setStemGain("vocals", sh.outVocal);
+    const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
+    dly?.setParam("mix", sh.echo);
+    if (!this.ddDropped && sh.outLowDb <= EQ_KILL && sh.incLowDb === 0) {
+      this.ddDropped = true;
+      event("automix.drop", { style: "doubleDrop", at: +(p * DD_BARS).toFixed(3) });
+    }
+  }
+
+  // ── THE TEMPO BRIDGE ─────────────────────────────────────────────────────────────────────────
+  //
+  // A pair too far apart to beat-match (past the Beat-match range) but within BRIDGE_MAX. A DJ does
+  // not crossfade that, and does not just cut it either when there is a bar of runway: they CATCH
+  // the outgoing record in a loop, ride the tempo fader to the new track's BPM while the same bar
+  // goes round (key-lock on, so it speeds up rather than chipmunks), build it — the loop halving,
+  // a filter climbing, the bass pulled — take one beat of breath, and drop the new track on its
+  // first real downbeat. The old record leaves as its own frozen echo. See bridgeShape for the
+  // numbers and BRIDGE for the bar map.
+  private beginBridge(live: Deck, inc: Deck): void {
+    if (!this.plan) return;
+    const liveBpm = live.beatgrid?.bpm ?? 0;
+    const incBpm = inc.beatgrid?.bpm ?? 0;
+    const target = foldTempoOctave(incBpm, live.effectiveBpm ?? liveBpm);
+    if (!liveBpm || !target) return;
+    const gap = Math.max(target / liveBpm, liveBpm / target) - 1;
+    this.plan = { ...this.plan, bars: BRIDGE.bars, bassSwapBar: 0 };
+    this.barsSeconds = barsToSeconds(BRIDGE.bars, liveBpm); // in the live track's time: loop passes
+    this.bridge = {
+      baseBeats: gap > 0.2 ? 8 : 4, // a wider ride gets a 2-bar loop: more music to hear it on
+      fromPct: live.tempo ?? 0,
+      toPct: (target / liveBpm - 1) * 100,
+      keylock: live.keylock,
+    };
+    live.setKeylock(true);
+    this.loopRoll(live, this.bridge.baseBeats, false); // CAUGHT, on this downbeat
+    // The incoming lands on its body section — the drop — not wherever the blend cue left it.
+    const s = this.sectionsOf(inc);
+    const body = s ? firstBodySection(s) : null;
+    if (body != null && s) inc.seek(nearestDownbeat(inc.beatgrid!, s.starts[body]));
+    inc.setEqLow(0);
+    inc.setFilter(0);
+    this.incPending = true; // started on the drop (tickBridge), never at the top
+    event("automix.bridge", { from: Math.round(liveBpm), to: Math.round(target), gap: Math.round(gap * 100), loop: this.bridge.baseBeats });
+  }
+
+  private tickBridge(live: Deck, inc: Deck, p: number): void {
+    const br = this.bridge;
+    if (!br) return;
+    const showy = this.perf() !== "subtle";
+    const b = p * BRIDGE.bars;
+    const sh = bridgeShape(b, showy);
+    live.setTempo(lerp(br.fromPct, br.toPct, sh.tempoT));
+    live.setFilter(sh.filter);
+    live.setEqLow(sh.eqLow);
+    const dly = this.borrowedFx?.saved.find((x) => x.device.kind === "delay")?.device;
+    const rev = this.borrowedFx?.saved.find((x) => x.device.kind === "reverb")?.device;
+    dly?.setParam("mix", sh.delayMix);
+    rev?.setParam("mix", sh.reverbMix);
+    if (sh.freeze) dly?.setParam("freeze", 1);
+    // The roll keeps the base loop's in-point (LoopEngine anchors a resize), so the halving
+    // tightens onto the same downbeat the loop was caught on.
+    this.loopRoll(live, sh.rollBeats > 0 ? Math.min(sh.rollBeats, br.baseBeats) : br.baseBeats, false);
+    if (sh.dropped && this.incPending) {
+      this.incPending = false;
+      inc.play(); // ON THE ONE: the fine loop has the clock within a frame of this bar line
+      event("automix.drop", { at: +b.toFixed(3) });
+    }
+  }
+
+  private endBridge(): void {
+    const br = this.bridge;
+    this.bridge = null;
+    if (!br || !this.liveId) return;
+    try {
+      this.deps.engine.deck(this.liveId).setKeylock(br.keylock); // the user's own setting back
+    } catch {
+      /* deck gone */
+    }
+  }
+
+  // ── THE AUDIO CLOCK ────────────────────────────────────────────────────────────────────────────
+  //
+  // The mixer ticks every 150 ms — a third of a beat at 128 BPM. Every DISCRETE moment of a
+  // transition (the bass swap, a cut, a freeze, a spinback) used to wait for the first tick past
+  // its fraction of the progress, so "on the one" meant up to a 16th note late, every time. Now
+  // each moment is a BAR LINE of the live track (its own beat grid, counted from the mix-out
+  // downbeat), tested against the playhead — which reads the AudioContext clock — and for the
+  // ~third of a second around each one the mixer redraws every 16 ms. The moment lands within a
+  // frame of the beat; the rest of the transition costs what it always did.
+
+  /** The live track's position of the k-th bar line after the mix-out downbeat. Null without a grid. */
+  private barPos(live: Deck, k: number): number | null {
+    const g = live.beatgrid;
+    if (!g?.beats?.length || this.mixOutTime == null) return null;
+    // +10 ms: inside the downbeat's own interval, so float32 grid storage cannot read the beat
+    // before it as "at or before" (beatTimeOffset counts from the beat at-or-before its anchor).
+    return beatTimeOffset(g, this.mixOutTime + 0.01, Math.max(0, k) * BEATS_PER_BAR);
+  }
+
+  /** Has the live track reached the k-th bar line? Without a grid, the progress fraction decides. */
+  private atBar(live: Deck, k: number, p: number): boolean {
+    const pos = this.barPos(live, k);
+    if (pos == null || !this.plan) return p >= k / Math.max(1, this.plan?.bars ?? 1);
+    return live.position() >= pos - 0.004;
+  }
+
+  // THE OUTGOING VOCAL MUST NOT RUN OUT UNDER THE MASHUP. From the swap on, all that is left of
+  // the old track is its vocal over the new instrumental; if the record ends before the blend
+  // does, that vocal would stop mid-phrase. So at the swap, when the music left is shorter than
+  // the blend left, the outgoing closes into a 4-bar loop — the hook repeats over the new beat,
+  // which is exactly what a mashup is — and is released at settle like any hold loop.
+  private maybeLoopForMashup(live: Deck, bar: number): void {
+    if (!this.plan || this.holdLoop || !live.beatgrid || !this.liveId) return;
+    const { q2 } = mashupMarks(this.plan.bars);
+    if (bar < q2 || bar > q2 + 0.75) return;
+    const secPerBar = this.barsSeconds / Math.max(1, this.plan.bars);
+    const g = live.beatgrid;
+    const end = g.lastSound && g.lastSound > live.duration * 0.5 ? g.lastSound : live.duration;
+    const left = (this.plan.bars - bar) * secPerBar;
+    if (end - live.position() > left + secPerBar) return;
+    live.setBeatLoop(16);
+    this.holdLoop = this.liveId;
+    event("automix.mashupLoop", { bar: +bar.toFixed(2), left: +left.toFixed(1) });
+  }
+
+  /** The bar an echo/wash freezes on: the cut for an unmatched pair, else the last two bars. */
+  private freezeBar(): number {
+    if (!this.plan) return 0;
+    return this.unlocked ? cutBar(this.plan.style, this.plan.bars) : Math.max(0, this.plan.bars - 2);
+  }
+
+  /** The bass swap's progress 0..1: one beat from the swap bar's downbeat, on the playhead. */
+  private swapProgress(live: Deck, p: number): number {
+    if (!this.plan) return 0;
+    const k = this.plan.style === "cut" ? 0 : this.plan.bassSwapBar;
+    const start = this.barPos(live, k);
+    const g = live.beatgrid;
+    if (start == null || !g) {
+      const swapStart = k / Math.max(1, this.plan.bars);
+      return clamp((p - swapStart) / Math.max(0.001, 1 / Math.max(1, this.plan.bars * 4)), 0, 1);
+    }
+    const beat = beatTimeOffset(g, start + 0.01, 1) - start;
+    return clamp((live.position() - start) / Math.max(0.05, beat), 0, 1);
+  }
+
+  /** The bar lines this transition does something exact on. */
+  private moments(): number[] {
+    if (!this.plan) return [];
+    if (this.plan.style === "tempoBridge") return [...BRIDGE.roll, BRIDGE.breath, BRIDGE.drop];
+    if (this.plan.style === "doubleDrop") return [DD.breath, DD.build, DD_BARS];
+    const out: number[] = [];
+    const style = this.plan.style;
+    if (style === "stemswap" && this.plan.bars >= 8) {
+      const m = mashupMarks(this.plan.bars);
+      out.push(m.q1, m.q2, m.q3);
+    } else if (style === "blend" || style === "filter" || style === "stemswap" || style === "cut") out.push(style === "cut" ? 0 : this.plan.bassSwapBar);
+    if (this.unlocked || style === "cut" || style === "spinOut") out.push(cutBar(style, this.plan.bars));
+    if (style === "echoOut" || style === "washOut") out.push(this.freezeBar());
+    return out;
+  }
+
+  /** Run the 16 ms loop while any moment is within FINE_AHEAD_S ahead (or its beat is still being
+   *  drawn), and stop it otherwise. */
+  private updateFine(live: Deck): void {
+    const rate = Math.max(0.25, live.effectiveRate || live.rate || 1);
+    const g = live.beatgrid;
+    const now = live.position();
+    let near = false;
+    const looped = this.plan?.style === "tempoBridge";
+    const barTrack = this.plan ? this.barsSeconds / Math.max(1, this.plan.bars) : 0;
+    for (const k of this.moments()) {
+      if (looped) {
+        // The playhead wraps inside the loop, so a bridge moment is counted in progress (track
+        // time) — exact now that the fine loop advances it with real time.
+        const until = (k * barTrack - this.mixElapsed) / rate;
+        if (until <= FINE_AHEAD_S && until >= -0.3) near = true;
+        continue;
+      }
+      const pos = this.barPos(live, k);
+      if (pos == null) continue;
+      const beat = g ? beatTimeOffset(g, pos + 0.01, 1) - pos : 0.5;
+      const until = (pos - now) / rate;
+      if (until <= FINE_AHEAD_S && until >= -(beat / rate) - 0.05) near = true;
+    }
+    if (near) this.startFine();
+    else this.stopFine();
+  }
+
+  /** The 16 ms loop. It advances the transition with REAL elapsed time (and moves the main tick's
+   *  reference along with it, so nothing is counted twice) — the bridge counts its bars in that
+   *  progress, and the continuous ramps draw smoothly through the moment as a bonus. */
+  private startFine(): void {
+    if (this.fineTimer) return;
+    this.fineTimer = setInterval(() => {
+      if (!this.enabled || this.ticking || (this.phase !== "mixing" && this.phase !== "cueing")) {
+        if (this.phase !== "mixing" && this.phase !== "cueing") this.stopFine();
+        return;
+      }
+      const t = this.deps.now();
+      const dt = this.lastTickMs == null ? 0 : Math.min(0.5, (t - this.lastTickMs) / 1000);
+      this.lastTickMs = t;
+      if (this.phase === "mixing") this.tickMixing(dt);
+      else this.tickCueing();
+      this.emit(false);
+    }, FINE_MS);
+  }
+
+  private stopFine(): void {
+    if (this.fineTimer) clearInterval(this.fineTimer);
+    this.fineTimer = null;
   }
 
   // ── THE INCOMING HALF OF THE TRANSITION ──────────────────────────────────────────────────────
@@ -1486,6 +2382,13 @@ export class AutoMixer {
     }
     this.cuedIdle = null;
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
+    this.stopFine();
+    this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
@@ -1513,6 +2416,7 @@ export class AutoMixer {
       // Exactly one deck left → adopt it as the new live deck and re-arm.
       this.liveId = a ? "A" : "B";
       this.liveVideoId = this.deps.deckTrack(this.liveId)?.videoId ?? null;
+      this.claimable[this.liveId] = this.liveVideoId;
       this.deps.queue.setCurrent(this.deps.deckTrack(this.liveId));
       this.resetArm();
       this.phase = "armed";
@@ -1529,6 +2433,8 @@ export class AutoMixer {
     const out = this.deps.engine.deck(this.liveId);
     const inc = this.deps.engine.deck(idle);
     const sign = idle === "A" ? -1 : 1;
+    // What the room is left with: a settle onto a deck that is not playing is silence.
+    event("automix.settle", { style: this.plan?.style ?? null, onto: idle, playing: inc.playing, pos: +inc.position().toFixed(2) });
     this.deps.applyCrossfade(sign);
     this.lastXfade = sign;
     // The incoming deck becomes live — neutralise everything we touched on it.
@@ -1552,27 +2458,41 @@ export class AutoMixer {
     inc.setTempo(0);
     inc.setPitch(0);
     this.useStems = false;
+    this.unlocked = false; // the cut-on-the-one state ends with the transition, however it ends
+    this.incPending = false;
+    this.stopFine();
+    this.endBridge();
+    this.dd = null;
+    this.ddChecked = "";
+    this.ddDropped = false;
     this.returnFx(); // borrowed FX devices must never outlive the transition
     this.endVocalTail(); // …and neither may an AUTO-owned chain
     this.releaseHoldLoop();
     this.spinFired = false;
     this.stutterFired = false;
     this.stutterUntil = 0;
-    this.deps.queue.advance();
+    // Remove the track that ACTUALLY played, by id. `queue.advance()` popped the head, which is a
+    // different track whenever the user queued or reordered something after the cue.
+    const played = this.nextTrack ?? this.deps.deckTrack(idle);
+    if (played?.videoId) this.deps.queue.remove(played.videoId);
     this.advancedByAuto(); // AUTO mixed this one in — age the anchor, move along the arc
     this.liveId = idle;
-    this.liveVideoId = this.nextTrack?.videoId ?? this.deps.deckTrack(idle)?.videoId ?? null;
-    this.deps.queue.setCurrent(this.nextTrack);
+    this.liveVideoId = played?.videoId ?? null;
+    this.claimable[idle] = this.liveVideoId;
+    this.held = false;
+    this.deps.queue.setCurrent(played);
     this.cuedIdle = null;
     this.nextTrack = null;
     this.plan = null;
+    this.planResolved = false;
     this.mixOutTime = null;
     this.mixStarted = false;
     this.mixElapsed = 0;
-    // The mix is over and the screen is calm again — let deferred separations run. Released
-    // BEFORE clearPreload/armed on purpose: the very next armed tick starts the next track's
-    // load, and that load wants the GPU free the instant it asks for it.
-    this.quietGpuEnd();
+    // THE LANDING. The mix is over, but the new track has only just become the whole room: the
+    // next track's load (decode, analysis, a cached stem set applied — each a main-thread stall)
+    // used to start on this very tick and land on the transition's last bars. Hold the quiet
+    // window LAND_S longer; tickArmed releases it and only then lets the preload begin.
+    this.landUntil = this.deps.now() + LAND_S * 1000;
     // The deck we just blended in is now live; the OUTGOING deck is the new idle. Forget the
     // old preload so the next armed tick eagerly loads the next-next track onto it.
     this.clearPreload();
@@ -1605,12 +2525,13 @@ export class AutoMixer {
   // WHERE TO LEAVE. Structure-aware (chooseMixOut prefers the end of the final chorus); the
   // result is snapped to the grid here, because a mix that starts off-beat is audibly wrong
   // however musically apt the moment was.
-  private computeMixOut(deck: Deck, barsSeconds: number): number {
+  private computeMixOut(deck: Deck, barsSeconds: number, notBefore = 0): number {
     const s = this.sectionsOf(deck);
-    if (!s) return 0;
-    const t = chooseMixOut(s, barsSeconds, END_GUARD);
+    if (!s) return notBefore;
+    const t = chooseMixOut(s, barsSeconds, END_GUARD, notBefore);
     const grid = deck.beatgrid;
-    return grid ? nearestBeat(grid, t) : t;
+    // On a BAR LINE, not just a beat (and never behind the floor the caller set).
+    return grid ? nearestDownbeat(grid, t, notBefore) : t;
   }
 
   // WHERE TO COME IN. Anchored so the incoming track's first BODY section — the first one that
@@ -1624,8 +2545,31 @@ export class AutoMixer {
     const firstBeat = grid.firstBeat ?? 0;
     const baseDown =
       grid.beats && grid.beats.length && grid.downbeat != null ? grid.beats[grid.downbeat] ?? firstBeat : firstBeat;
-    const t = chooseMixIn(s, barsSeconds, baseDown);
-    return t <= baseDown ? baseDown : Math.max(baseDown, nearestBeat(grid, t));
+    // A phrase start, as quiet as the record gets, timed to land on its next section (mashup.ts
+    // chooseEntry). The old back-count from the first repeated section is the fallback for a
+    // track with no structure to choose from.
+    const secPerBar = grid.bpm > 0 ? 240 / grid.bpm : 0;
+    const t = chooseEntry(s, barsSeconds, { floor: baseDown, secPerBar, energyAt: (at) => this.energyAt(deck, at, secPerBar * 2) }) ?? chooseMixIn(s, barsSeconds, baseDown);
+    // On a BAR LINE: the incoming starts on its own "one", which is what lands on the outgoing's.
+    return t <= baseDown ? baseDown : Math.max(baseDown, nearestDownbeat(grid, t));
+  }
+
+  /** How loud the record is over [at, at + len] relative to its whole-track level (1 = average);
+   *  null when the decoded mix is gone (a phone that kept only stems). Strided — a few ms. */
+  private energyAt(deck: Deck, at: number, len: number): number | null {
+    const b = deck.buffer;
+    const avg = deck.loudness;
+    if (!b || !avg || len <= 0) return null;
+    const d = b.getChannelData(0);
+    const i0 = Math.max(0, Math.floor(at * b.sampleRate));
+    const i1 = Math.min(d.length, Math.floor((at + len) * b.sampleRate));
+    let sum = 0;
+    let n = 0;
+    for (let i = i0; i < i1; i += 64) {
+      sum += d[i] * d[i];
+      n++;
+    }
+    return n ? Math.sqrt(sum / n) / avg : null;
   }
 
   // Raise / lower the GPU quiet window. Raising twice is a no-op (one hold per transition); the
@@ -1658,6 +2602,18 @@ export class AutoMixer {
     return Math.max(1, (this.plan?.bars ?? 0) * BEATS_PER_BAR);
   }
 
+  // ★ NEVER HOLD THE GPU WHILE WAITING FOR IT. The quiet window defers every separation job
+  // (gpuRun), including the incoming deck's own — so raising it at the cue while that deck's stems
+  // were still pending meant the cue then waited STEM_WAIT_MAX for stems that could not start, and
+  // every transition after a quick load went without them (seen 2026-11-05: a 32-bar stem pair
+  // mixed as a plain blend, caps "bg"). The window goes up once the incoming's stems are in (or
+  // nothing is coming); cueing and mixing ticks call this again until it does.
+  private quietGpuFor(idle: DeckId): void {
+    if (this.gpuQuiet) return;
+    if (this.deps.stemsPending?.(idle)) return;
+    this.quietGpuStart();
+  }
+
   private quietGpuStart(): void {
     if (this.gpuQuiet) return;
     this.gpuQuiet = holdGpu();
@@ -1670,9 +2626,31 @@ export class AutoMixer {
     event("automix.gpu", { at: "resume" });
   }
 
+  private lastPhase: AutoMixPhase | null = null;
   private emit(force: boolean): void {
     const s = this.getStatus();
-    const key = `${s.enabled}|${s.phase}|${s.liveDeck}|${s.plan?.style ?? ""}|${Math.round(s.countdownSec ?? -1)}`;
+    if (s.phase !== this.lastPhase) {
+      this.lastPhase = s.phase;
+      event("automix.phase", { phase: s.phase });
+    }
+    // Everything the UI draws, at the resolution it draws it: whole seconds of countdown, 5% steps
+    // of mix progress — so a mixing tick re-renders a few times a second, not on every 150 ms tick
+    // for nothing.
+    const key = [
+      s.enabled,
+      s.phase,
+      s.liveDeck,
+      s.planLabel ?? "",
+      s.planResolved,
+      Math.round(s.countdownSec ?? -1),
+      s.mixProgress == null ? -1 : Math.round(s.mixProgress * 20),
+      s.held,
+      s.waitReason ?? "",
+      s.nextOnDeck ? `${s.nextOnDeck.deck}:${s.nextOnDeck.videoId}` : "",
+      s.forced,
+      s.mixOutTime == null ? -1 : Math.round(s.mixOutTime),
+      s.liveDuration == null ? -1 : Math.round(s.liveDuration),
+    ].join("|");
     if (!force && key === this.lastEmitKey) return;
     this.lastEmitKey = key;
     this.deps.onChange(s);
@@ -1696,10 +2674,10 @@ export function entryRamp(
     // The blend's arrival: in from under a gentle low-pass over the first half, bass on the plan's
     // swap schedule.
     case "sweep":
-      return { filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)), eqLow: lerp(EQ_KILL, 0, s) };
+      return { filter: lerp(-0.55, 0, clamp(p / 0.5, 0, 1)), eqLow: bassSwapDb(s).in };
     // The filter style's arrival: further down, and opening across the WHOLE blend.
     case "sweepWide":
-      return { filter: lerp(-0.85, 0, p), eqLow: lerp(EQ_KILL, 0, s) };
+      return { filter: lerp(-0.85, 0, p), eqLow: bassSwapDb(s).in };
     // Sits under the outgoing's tightening loop and opens as it does. Bass is already free — the
     // loop chop kills the outgoing low separately, so there is nothing to swap with.
     case "underLoop":
@@ -1853,14 +2831,102 @@ export function stemBlend(
   const liveOther = km ? clamp((p - 0.55) / 0.45, 0, 1) : clamp((p - 0.5) / 0.2, 0, 1);
   return {
     live: {
-      drums: rhythmOut,
+      // Drums swap EQUAL-POWER over their bar: two different kits add as power, so the straight
+      // trade the bass uses (one low end, never two) dropped the swap bar ~3 dB in its middle.
+      drums: Math.cos((s * Math.PI) / 2),
       bass: rhythmOut,
-      // Disjoint vocal windows: outgoing out over [0, 0.45], incoming in over [0.6, 1].
-      vocals: lerp(1, 0, clamp(p / 0.45, 0, 1)),
+      // Disjoint vocal windows: the outgoing SINGS ON until the new groove is in, leaves over
+      // [0.3, 0.5]; the incoming's voice arrives over [0.55, 0.8]. The old windows faded the
+      // outgoing vocal from the first beat (gone by 0.45) and brought the incoming's in only at
+      // 0.6 — a track losing its singer while nothing replaced it, then ~4 bars of 24 with no voice
+      // at all: half of the "dead spaces" in stem transitions (operator, 2026-11-04).
+      vocals: lerp(1, 0, clamp((p - 0.3) / 0.2, 0, 1)),
       other: lerp(1, 0, liveOther),
     },
-    inc: { drums: rhythmIn, bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.6) / 0.4, 0, 1)), other: incOther },
+    inc: { drums: Math.sin((s * Math.PI) / 2), bass: rhythmIn, vocals: lerp(0, 1, clamp((p - 0.55) / 0.25, 0, 1)), other: incOther },
   };
+}
+
+/** Where in the transition (0..1) an UNMATCHED pair's single cut happens: the incoming starts on that
+ *  downbeat and the fader moves only then. Echo/wash cut half-way (two bars of throw, two of tail
+ *  over the new track); the spin when the spinback fires; a drop or a cut on the last bar. */
+export function cutPoint(style: TransitionStyle, bars: number): number {
+  return cutBar(style, bars) / Math.max(1, bars);
+}
+
+/** The BAR (counted from the mix-out downbeat) an unmatched pair's cut lands on — and a locked
+ *  cut's, and the spinback's. Echo/wash half-way; everything else on the last bar's downbeat (the
+ *  spinback used to fire at 72 %, which is no bar line at all). */
+export function cutBar(style: TransitionStyle, bars: number): number {
+  const b = Math.max(1, bars);
+  if (style === "echoOut" || style === "washOut") return Math.max(1, Math.round(b / 2));
+  return b > 1 ? b - 1 : 0;
+}
+
+/** How far ahead (s) a discrete moment switches the mixer to its fine 16 ms render loop, and how
+ *  long after it the loop keeps going (a one-beat bass swap has to be drawn all the way through). */
+const FINE_AHEAD_S = 0.35;
+const FINE_MS = 16;
+
+const smooth = (x: number) => {
+  const t = clamp(x, 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+/** THE FADER, as a function of the transition. 0 = all outgoing, 1 = all incoming.
+ *
+ *  • A BEAT-MATCHED blend (blend / filter / stemswap) comes IN EARLY and goes OUT LATE: the incoming
+ *    reaches the middle over the first quarter, both sit there, and the outgoing leaves over the
+ *    final phrase (the later of the bass swap and the last 8 bars). That is the shape Kim, Yang &
+ *    Nam measured from 50,742 real transitions (DAFx 2022): incoming fader up early, outgoing held
+ *    to the end. A straight line from 0 to 1 is a fade — the outgoing loses level from bar one.
+ *  • A CUT is a cut: nothing until its last bar's downbeat, then all of it.
+ *  • An UNMATCHED pair moves the fader once, at cutPoint — before it the incoming is silent (it is
+ *    not even playing), so two unsynced beats never overlap; the echo/wash tail is the only overlap.
+ *  • Every other gesture keeps the straight line its own shaping was written against. */
+export function faderX(style: TransitionStyle, p: number, bars: number, swapBar: number, lock: boolean): number {
+  if (!lock) {
+    const cut = cutPoint(style, bars);
+    if (p < cut) return 0;
+    if (style === "echoOut" || style === "washOut") return 0.5 + 0.5 * smooth((p - cut) / Math.max(1e-3, 1 - cut));
+    return 1;
+  }
+  if (style === "cut") return p < cutPoint("cut", bars) ? 0 : 1;
+  if (style === "blend" || style === "filter" || style === "stemswap") {
+    const b = Math.max(1, bars);
+    const inEnd = 0.25;
+    const outStart = Math.max(swapBar / b, 1 - Math.min(8, b / 2) / b);
+    if (p < inEnd) return 0.5 * smooth(p / inEnd);
+    if (p < outStart) return 0.5;
+    return 0.5 + 0.5 * smooth((p - outStart) / Math.max(1e-3, 1 - outStart));
+  }
+  return clamp(p, 0, 1);
+}
+
+/** An EQUAL-POWER low-end handover in dB: the outgoing's low shelf follows cos, the incoming's sin,
+ *  floored at the kill. The old ramp was linear in DECIBELS, which put both basses at −13 dB in the
+ *  middle — about 10 dB under one full bass for half the swap: a hole in the low end. */
+export function bassSwapDb(s: number): { out: number; in: number } {
+  const db = (g: number) => (g <= 1e-4 ? EQ_KILL : Math.max(EQ_KILL, 20 * Math.log10(g)));
+  const t = clamp(s, 0, 1);
+  return { out: db(Math.cos((t * Math.PI) / 2)), in: db(Math.sin((t * Math.PI) / 2)) };
+}
+
+/** Highest stem level the deck accepts (Deck.setStemGain clamps to it). */
+export const STEM_GAIN_MAX = 1.5;
+
+/** THE STEM LEVELS ARE THE CROSSFADE. In a stem swap stemBlend already says how loud each part of
+ *  each deck should be; the crossfader moving across the same blend took a second bite out of the
+ *  same signal. The equal-power fader sits both decks at −3 dB in the middle, exactly where the
+ *  outgoing has lost its vocal and the incoming has not yet brought its parts in, and the sum fell
+ *  4.5–5 dB for a third of the blend (measured, stemLevel.test.ts) — the "dead spaces" in stem
+ *  transitions (operator, 2026-11-04). Dividing each stem by the fader gain it is about to pass
+ *  through makes what you HEAR equal stemBlend's numbers; the fader still moves, so the screen,
+ *  the handoff detection and a grab all behave as before. Capped at the deck's ceiling: where the
+ *  fader has a deck almost shut, a stem cannot make that back, and it is on its way out anyway. */
+export function faderCompensated(g: StemGains, fader: number): StemGains {
+  const c = (v: number) => (v <= 0 ? 0 : fader <= 1e-3 ? STEM_GAIN_MAX : Math.min(STEM_GAIN_MAX, v / fader));
+  return { drums: c(g.drums), bass: c(g.bass), vocals: c(g.vocals), other: c(g.other) };
 }
 
 export function other(id: DeckId): DeckId {

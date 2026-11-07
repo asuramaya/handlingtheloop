@@ -24,6 +24,14 @@
 // mono sum) is applied to all stems, which are mixed during overlap-add.
 //
 // Loaded via a Blob URL so it works regardless of bundler (see AudioEngine).
+/** The playback-rate range the stretch engine honours. ONE definition, used by the worklet's
+ *  clamp below AND by Deck.effRate(), so the transport clock can never run at a rate the audio is
+ *  not playing at. Operator, 2026-11-03: with the ±100% tempo range, the fader's bottom is rate 0;
+ *  the clock stopped (visuals froze) while the worklet read `0 || 1` as "no value" and played at
+ *  NORMAL speed. Between 0 and 0.25 the two also disagreed (clock slower than the audio). */
+export const ENGINE_RATE_MIN = 0.25;
+export const ENGINE_RATE_MAX = 4;
+
 export const STRETCH_WORKLET_SRC = `
 const RING = 8192;          // intermediate FIFO length (> max FS + margin)
 const RMASK = RING - 1;     // RING is a power of two
@@ -69,6 +77,10 @@ class Stretch extends AudioWorkletProcessor {
     this.grainStart = 0;     // last grain read position (source samples)
     this.naturalNext = 0;    // source idx the next grain should continue from
     this.loopActive = false; this.loopStart = 0; this.loopEnd = 0;
+    this.loopWrap = false; this.loopStartI = 0; this.loopLenI = 0;
+    // FREEZE (FX2): grains keep being read from one instant instead of moving on. freezeAt = the
+    // source sample frozen on; spray = how far (samples) each grain may wander around it.
+    this.freezeOn = false; this.freezeAt = 0; this.freezeSpray = 0;
     // intermediate FIFO (stretched, pre-resample)
     this.ringL = new Float32Array(RING); this.ringR = new Float32Array(RING);
     this.wHead = 0; this.rHead = 0; // FIFO write (int) / read (frac) cursors
@@ -198,8 +210,10 @@ class Stretch extends AudioWorkletProcessor {
   }
   onMsg(d) {
     if (d.type === 'config') { this.applyConfig(d); return; }
-    if (d.type === 'speed') { this.speedTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
-    if (d.type === 'pitch') { this.pitchTarget = Math.max(0.25, Math.min(4, d.value || 1)); return; }
+    // A missing/NaN value means "no change → 1"; a real 0 is the slowest rate, NOT 1 (\`0 || 1\`
+    // was exactly the full-speed-at-the-bottom-of-the-fader bug).
+    if (d.type === 'speed') { const v = Number.isFinite(d.value) ? d.value : 1; this.speedTarget = Math.max(${ENGINE_RATE_MIN}, Math.min(${ENGINE_RATE_MAX}, v)); return; }
+    if (d.type === 'pitch') { const v = Number.isFinite(d.value) ? d.value : 1; this.pitchTarget = Math.max(${ENGINE_RATE_MIN}, Math.min(${ENGINE_RATE_MAX}, v)); return; }
     if (d.type === 'loadPcm') {
       // gL/gR are one typed array per group (1 = mix, 4 = stems), transferred. Mobile
       // sends Int16Arrays (half the memory → fits a phone) rescaled by INV16 at output;
@@ -223,10 +237,21 @@ class Stretch extends AudioWorkletProcessor {
       // Declicked re-seat (Deck only sends this while playing): fade out fast, then the
       // process loop resets at silence and fades back in. No immediate reset → no click.
       this.seekPending = Math.max(0, d.offset || 0); this.ended = false; this.gainTarget = 0;
+    } else if (d.type === 'freeze') {
+      // ★ FREEZE (operator, 2026-11-07). The engine already builds its output from overlapping
+      // grains; frozen, every grain is read from (about) the same instant, so the sound holds as
+      // a drone with no rhythm. Deck's own clock keeps running meanwhile — that is the track going
+      // on underneath — and the release re-seats there with a declicked seek.
+      this.freezeOn = !!d.on;
+      if (this.freezeOn) { this.freezeAt = this.idealPos; this.freezeSpray = Math.max(0, (d.spray || 0) * this.sr); }
     } else if (d.type === 'stop') {
       this.playing = false; this.gainTarget = 0;
     } else if (d.type === 'loop') {
       this.loopActive = !!d.active; this.loopStart = (d.start || 0) * this.sr; this.loopEnd = (d.end || 0) * this.sr;
+      // Integer loop window for the grain READS (see wrapIdx): only a real, non-degenerate loop wraps.
+      this.loopStartI = Math.round(this.loopStart);
+      this.loopLenI = Math.max(0, Math.round(this.loopEnd) - this.loopStartI);
+      this.loopWrap = this.loopActive && this.loopLenI > 0;
     } else if (d.type === 'taps') {
       this.setTaps(!!d.on);
     } else if (d.type === 'stemGain') {
@@ -257,6 +282,7 @@ class Stretch extends AudioWorkletProcessor {
     }
   }
   reset(offsetSec) {
+    this.freezeOn = false; // a re-seat (start / seek / new track) always thaws
     this.idealPos = Math.max(0, offsetSec * this.sr);
     this.grainStart = this.idealPos;
     this.naturalNext = this.idealPos;
@@ -269,10 +295,36 @@ class Stretch extends AudioWorkletProcessor {
     if (this.pvOlaL) { this.pvOlaL.fill(0); this.pvOlaR.fill(0); }
     if (this.pvPrevMag) this.pvPrevMag.fill(0);
     this.pvInit = false; this.pvEMA = 0;
+    // ★ PV PRE-ROLL. The vocoder's output at a re-seat is an overlap-add that starts EMPTY: the
+    // first N − Rs output samples are a fade-in of partial frames, so whatever sits just after the
+    // seat comes out late and smeared. Measured on this worklet with a click 10 ms after a restart:
+    // PV hifi delivered it 88 ms late at 1% of its level, PV balanced 41 ms late at 12%; WSOLA 1.7
+    // ms late at 85%. A playing deck re-seats on EVERY jog release, which is the operator's
+    // "micro jogs ... sound slurry" on a PV setting. So start the analysis that much EARLIER and
+    // skip the warm-up in the FIFO: the first sample read is already a full overlap.
+    if (this.engineMode === 'pv' && this.pvWin && !this.taps && this.pvN > this.Rs) {
+      const ratio = Math.max(0.05, (this.speedTarget || 1) / (this.pitchTarget || 1)); // input per synthesis sample
+      const preIn = Math.min(this.idealPos, (this.pvN - this.Rs) * ratio);
+      this.idealPos -= preIn;
+      this.grainStart = this.naturalNext = this.idealPos;
+      this.rHead = preIn / ratio; // the FIFO samples that are only warm-up are never read
+    }
     this.refreshTarget();
   }
   // mono(idx): gain-weighted L+R sum across groups, bounds-clamped to silence.
+  // ★ A LOOP'S GRAINS READ ONLY THE LOOP (operator, 2026-11-06: "super short loops bug out … at
+  // 1/16 or shorter it kind of breaks"). The clock wrapped at loopEnd, but every grain (WSOLA: FS +
+  // its search; PV: the FFT frame) read the track LINEARLY from where it started, so a grain near the
+  // seam played the audio AFTER the loop. On Balanced that is up to ~25 ms of it: a little smear on a
+  // long loop, most of the sound on a 1/16 (~29 ms at 128 bpm). Every source read in a loop now folds
+  // back into [loopStart, loopEnd), so the signal a grain sees is the loop repeated, the true source.
+  wrapIdx(si) {
+    const ls = this.loopStartI, L = this.loopLenI;
+    if (si >= ls && si < ls + L) return si;
+    return ls + ((((si - ls) % L) + L) % L);
+  }
   mono(idx) {
+    if (this.loopWrap) idx = this.wrapIdx(idx);
     if (idx < 0 || idx >= this.length) return 0;
     let s = 0;
     for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) s += ga * (this.gL[g][idx] + this.gR[g][idx]); }
@@ -320,6 +372,7 @@ class Stretch extends AudioWorkletProcessor {
       if (total > 0) { this.idealPos -= total; this.naturalNext -= total; this.refreshTarget(); }
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
+    if (this.freezeOn) this.idealPos = this.freezeAt + (Math.random() * 2 - 1) * this.freezeSpray;
 
     const FS = this.FS, HS = this.HS, OVL = this.OVL, SEARCH = this.SEARCH, win = this.win;
     const offStep = this.offStep, tapStep = this.tapStep;
@@ -337,7 +390,7 @@ class Stretch extends AudioWorkletProcessor {
     let flux = 0;
     for (let i = SEARCH + 1; i < SEARCH + HS; i++) { const dM = M[i] - M[i - 1]; flux += dM * dM; }
     const ema = this.energyEMA;
-    const transient = this.transientOn && ema > 1e-7 && flux > this.tThresh * ema && flux > 1e-5;
+    const transient = !this.freezeOn && this.transientOn && ema > 1e-7 && flux > this.tThresh * ema && flux > 1e-5;
     this.energyEMA = ema + 0.3 * (flux - ema);
     // cross-correlation search for the best-matching grain offset — plain array reads
     // into M (candidate start index = SEARCH + d). Skipped on a transient → bestD = 0
@@ -359,8 +412,9 @@ class Stretch extends AudioWorkletProcessor {
     const olaL = this.olaL, olaR = this.olaR, len = this.length, scale = this.pcmScale;
     if (!this.taps) {
       // The hot path, byte-for-byte what it always was: one gain-weighted sum per sample.
+      const wrap = this.loopWrap;
       for (let i = 0; i < FS; i++) {
-        const si = gs + i; const w = win[i];
+        const si = wrap ? this.wrapIdx(gs + i) : gs + i; const w = win[i];
         if (si >= 0 && si < len) {
           let l = 0, r = 0;
           for (let g = 0; g < this.nG; g++) { const ga = this.gain_[g]; if (ga) { l += ga * this.gL[g][si]; r += ga * this.gR[g][si]; } }
@@ -370,9 +424,9 @@ class Stretch extends AudioWorkletProcessor {
     } else {
       // Tapped: the same window over the same grain, kept SEPARATE per group. The main
       // accumulator still gets the sum, in the same order, so the main output is unchanged.
-      const tL = this.tapOlaL, tR = this.tapOlaR, nG = this.nG;
+      const tL = this.tapOlaL, tR = this.tapOlaR, nG = this.nG, wrap = this.loopWrap;
       for (let i = 0; i < FS; i++) {
-        const si = gs + i; const w = win[i];
+        const si = wrap ? this.wrapIdx(gs + i) : gs + i; const w = win[i];
         if (si >= 0 && si < len) {
           const ws = w * scale;
           let l = 0, r = 0;
@@ -409,6 +463,7 @@ class Stretch extends AudioWorkletProcessor {
     if (transient) { adv = HS; this.debt += HS - Ha; }
     else { const corr = Math.max(-HS * 0.5, Math.min(HS * 0.5, this.debt)); adv = Ha - corr; this.debt -= corr; }
     this.idealPos += adv;
+    if (this.freezeOn) { this.idealPos = this.freezeAt; this.debt = 0; } // frozen: time does not move
     this.grainStart = gs; this.naturalNext = gs + HS;
     const tb = SEARCH + bestD + HS;
     for (let i = 0; i < OVL; i++) tgt[i] = M[tb + i];
@@ -471,8 +526,9 @@ class Stretch extends AudioWorkletProcessor {
   pvSpectrum(ch, base) {
     const N = this.pvN, win = this.pvWin, re = this.fre, im = this.fim, scale = this.pcmScale;
     const src = ch === 0 ? this.gL : this.gR, len = this.length, nG = this.nG;
+    const wrap = this.loopWrap;
     for (let i = 0; i < N; i++) {
-      const si = base + i; let acc = 0;
+      const si = wrap ? this.wrapIdx(base + i) : base + i; let acc = 0;
       if (si >= 0 && si < len) { for (let g = 0; g < nG; g++) { const ga = this.gain_[g]; if (ga) acc += ga * src[g][si]; } }
       re[i] = win[i] * acc * scale; im[i] = 0;
     }
@@ -533,6 +589,7 @@ class Stretch extends AudioWorkletProcessor {
       this.pvInit = false; // phase-reset across the loop seam
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
+    if (this.freezeOn) this.idealPos = this.freezeAt + (Math.random() * 2 - 1) * this.freezeSpray;
     const N = this.pvN, Rs = this.Rs, bins = (N >> 1) + 1;
     const base = Math.round(this.idealPos);
     // L: forward STFT → transient decision (HF-weighted magnitude flux vs EMA) → synth
@@ -552,6 +609,7 @@ class Stretch extends AudioWorkletProcessor {
     olaL.copyWithin(0, Rs, N); olaL.fill(0, N - Rs, N);
     olaR.copyWithin(0, Rs, N); olaR.fill(0, N - Rs, N);
     this.idealPos += Ra;
+    if (this.freezeOn) this.idealPos = this.freezeAt; // frozen: a spectral freeze, time does not move
     this.grainStart = base; this.naturalNext = base + Rs;
     this.pvInit = true;
   }

@@ -529,7 +529,10 @@
   pointer-events: none;
   display: none;
 }
-@media (min-width: 769px) {
+/* Width alone was the gate, so a phone turned to landscape (844px wide) crossed it and printed key
+   letters over its own labels ("LOOP" with an O through it, "SYNC" cut to "SYN") on a device with no
+   keyboard. A key hint needs a real pointer + hover, i.e. a desktop. */
+@media (min-width: 769px) and (hover: hover) and (pointer: fine) {
   body.show-keys .kbd {
     display: block;
   }
@@ -1219,13 +1222,17 @@
      shared default until the user resizes that side. The width var belongs to the EDGE,
      not the panel — Library-left and a future left-docked panel would share "the left
      dock's remembered width", same as Search/Settings already share "the right dock's". */
+  /* ★ BELOW THE CHIN. Side docks started at top 0, so the chin (z 5000, fixed across the top)
+     covered each docked panel's header row: in Settings that hid the section menu entirely
+     (operator, 2026-11-02: "the hamburger menu is broken in some of the panel placement
+     modes"). --chin-h is measured live (useChinHeight). */
   .modal-backdrop.dock-left {
-    inset: 0 auto 0 0;
+    inset: var(--chin-h, 41px) auto 0 0;
     width: clamp(var(--dock-min), var(--dock-w-left, var(--dock-w)), var(--dock-max));
     max-width: min(var(--dock-max), calc(100vw - 160px));
   }
   .modal-backdrop.dock-right {
-    inset: 0 0 0 auto;
+    inset: var(--chin-h, 41px) 0 0 auto;
     width: clamp(var(--dock-min), var(--dock-w-right, var(--dock-w)), var(--dock-max));
     max-width: min(var(--dock-max), calc(100vw - 160px));
   }
@@ -2427,13 +2434,20 @@ body.no-glow .hw-btn.shift.on {
 }
 
 /* SYNC / KEY-match: full word normally, bare initial once the row genuinely can't fit it
-   (same 380px cutoff as the chin, above) — S/K letter-only rather than a mid-word clip.
-   Role state (master/slave/on) still reads from the button's own colour, so the missing
-   letters aren't load-bearing. */
+   — S/K letter-only rather than a mid-word clip. Role state (master/slave/on) still reads from
+   the button's own colour, so the missing letters aren't load-bearing.
+   ★ KEYED TO THE ROW'S OWN WIDTH, NOT THE VIEWPORT. It used to be (max-width: 380px), which a
+   phone held sideways (844 wide) never matches, yet there each deck's pitch row is ~181px and its
+   SYNC button 30px: "SYNC" clipped to "SYN", and "MASTER" (the master role's label) needs ~60px.
+   Measured: four 60px buttons + the lock + gaps is ~300px of row, so below that the initials
+   show. A 360px phone (row 344px) now keeps the full words, which it has room for. */
+.pitch-row {
+  container: pitchrow / inline-size;
+}
 .btn-label-short {
   display: none;
 }
-@media (max-width: 380px) {
+@container pitchrow (max-width: 300px) {
   .btn-label-full {
     display: none;
   }

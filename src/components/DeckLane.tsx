@@ -9,8 +9,9 @@ import { CaptionBar } from "./CaptionBar";
 import { useLongPress } from "./useLongPress";
 import { usePhone } from "../htl/state/usePhone";
 import { TRACK_DND_MIME } from "./TrackTable";
-import { fmtTime } from "../util/format";
+import { displayTrack, fmtTime } from "../util/format";
 import type { StemBadge, StemStatus } from "../App";
+import { isStemBusy, stemProcText } from "./stemProcText";
 
 export interface DeckMeta {
   name: string;
@@ -86,8 +87,15 @@ function LaneTime({ deck, duration }: { deck: Deck; duration: number }) {
   const [, bump] = useState(0);
   useEffect(() => {
     let raf = 0;
+    // Re-render only when the TEXT changes (about once a second), not every frame: a React
+    // commit per frame per deck for a readout that shows whole seconds was pure overhead.
+    let shown = "";
     const loop = () => {
-      if (deck.visualPlaying || deck.jogging) bump((n) => n + 1);
+      const now = fmtTime(deck.visualPosition());
+      if ((deck.visualPlaying || deck.jogging) && now !== shown) {
+        shown = now;
+        bump((n) => n + 1);
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -148,16 +156,17 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
-  const stemBusy =
-    stemStatus != null &&
-    (stemStatus.phase === "separating" || (stemStatus.phase === "downloading" && !!stemStatus.src));
+  const stemBusy = isStemBusy(stemStatus);
   // GPU-job tells live in the deck HEADER now (no floating bubbles): stem separation/fetch %
   // takes the slot first (it gates lyrics), then the lyric transcription %. Both are plain
-  // header text with a small spinner dot, on the SAME axis as BPM/key/grid.
-  const procText = stemBusy && stemStatus
-    ? `${stemStatus.phase === "separating" ? "Separating" : "Fetching stems"}${stemStatus.pct != null ? ` ${Math.round(stemStatus.pct)}%` : "…"}`
-    : lyricStatus || null;
-  const procTitle = stemBusy && stemStatus ? stemStatus.detail : lyricStatus || undefined;
+  // header text with a small spinner dot, on the SAME axis as BPM/key/grid. The stem wording is
+  // stemProcText's, which names the download / GPU-setup stages instead of a frozen "0%".
+  // ★ LYRICS ARE NOT IN THE HEADER ANY MORE. The caption bar under the waveform is always rendered
+  // and always shows the lyric state, so the header fallback printed it twice per deck ("No lyrics
+  // found" in the header AND the bar) and cost a row on a short screen (operator, 2026-11-03: fix
+  // the double). The header keeps the stem tell, which has no other home.
+  const procText = stemProcText(stemStatus);
+  const procTitle = stemBusy ? stemStatus.detail : undefined;
   // Highlight the lane while a library/search track row is dragged over it.
   const [dropActive, setDropActive] = useState(false);
 
@@ -269,7 +278,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           >
             DECK {id}
           </button>
-          <LaneTitle name={meta.name} artist={meta.artist} />
+          {(() => {
+            const dt = displayTrack(meta.name, meta.artist);
+            return <LaneTitle name={dt.title || meta.name} artist={meta.artist ? dt.artist : meta.artist} />;
+          })()}
           {headerDrag && (
             <span className="lane-drag" aria-hidden="true">
               ⠿

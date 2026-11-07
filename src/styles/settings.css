@@ -112,14 +112,18 @@
 .settings-panel {
   /* --center-w-settings (CenterResizeHandles) — only actually consumed in "center" mode; the
      edge/bottom dock overrides below force width:100% regardless, same as before. */
-  width: clamp(var(--center-w-min, 360px), var(--center-w-settings, min(460px, 94vw)), var(--center-w-max, 1200px));
+  width: clamp(var(--center-w-min, 360px), var(--center-w-settings, min(720px, 94vw)), var(--center-w-max, 1200px));
   /* FIXED, not max-height: a max-height still SHRINKS to whatever a shorter tab's content
      needs, so switching Color (tall) → Debug (short) → MIDI (tall again) visibly resized the
      whole window every tab change — disorienting on a "center" placement, where nothing else
      on screen anchors it. A firm height means the window never moves; a short tab just leaves
      empty space below it, and a tall one scrolls inside `.settings-body` (flex:1, its own
      overflow-y) same as before. */
-  height: 50dvh;
+  /* ★ 50dvh WAS A KEYHOLE (operator, 2026-11-04: "keep working on settings overall ui and ux"): at
+     900px tall it left ~330px of list, one and a half Turntable tiles. Still FIXED (see above), but
+     most of the window: 78dvh, capped so a tall monitor does not get a 1400px column of settings.
+     The default width went 460 → 720 so, with the section list open beside it, the drawn tiles still sit two across. */
+  height: min(78dvh, 820px);
   padding: 16px 18px;
 }
 /* A keycap chip used in the help overlay + intro text. */
@@ -2274,3 +2278,538 @@
   color: var(--neon-lime);
 }
 
+
+/* ── Settings menu (☰), left side, Library-shaped. The head button names where you are; the list
+   runs down the panel's left edge, beside the content when there is room and over it when the
+   panel is a narrow dock (the container query, so it follows the PANEL's width, not the window). ── */
+.settings-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 4px 6px 4px 0;
+  cursor: pointer;
+  min-width: 0;
+}
+.settings-nav-btn h2 {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-nav-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 15px;
+  color: var(--muted);
+}
+.settings-nav-btn:hover .settings-nav-icon,
+.settings-nav-btn.open .settings-nav-icon {
+  color: var(--text);
+  border-color: var(--neon-purple);
+}
+.settings-nav-sep {
+  color: var(--muted);
+  font-weight: 400;
+}
+.settings-frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  container-type: inline-size;
+}
+.settings-frame > .settings-body {
+  min-width: 0;
+}
+.settings-nav {
+  flex: none;
+  width: 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px 8px 0;
+  margin-right: 12px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.settings-frame.nav-open > .settings-body {
+  margin-left: 0;
+}
+@container (max-width: 519px) {
+  .settings-nav {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 4;
+    width: min(200px, 70%);
+    margin: 0;
+    padding: 6px;
+    background: var(--panel, var(--bg));
+    border-right: 1px solid var(--line);
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.45);
+  }
+}
+.settings-nav-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.settings-nav-item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+/* The selected section is FILLED, not edged (operator, 2026-11-02: "a full highlight color of the
+   selected setting"): at a glance the list says where you are, the way the chin buttons do. */
+.settings-nav-item.on,
+.settings-nav-item.on:hover {
+  color: #fff;
+  background: var(--neon-purple);
+}
+
+/* ── Settings ▸ Turntable tiles: a gesture's curve, its readout and its control(s), together. ── */
+.tt-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 2px 0 4px;
+}
+.tt-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+}
+.tt-tile:hover,
+.tt-tile:focus-within {
+  border-color: var(--accent);
+}
+.tt-tile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+.tt-tile-title {
+  white-space: nowrap;
+  font: 700 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.tt-tile-val {
+  margin-left: auto;
+  font: 600 11px/1.3 ui-monospace, monospace;
+  color: var(--accent);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0 8px;
+  text-align: right;
+}
+.tt-tile-val .trace-key {
+  white-space: nowrap;
+}
+.tt-tile-val .trace-key.alt {
+  color: var(--text);
+  opacity: 0.8;
+}
+.tt-tile-val .trace-key.alt::before {
+  content: "- - ";
+  letter-spacing: -1px;
+}
+.tt-graph {
+  display: block;
+  width: 100%;
+  height: 64px;
+  overflow: visible;
+  cursor: ew-resize;
+  touch-action: none;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.tt-graph .ref {
+  stroke: var(--line);
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+.tt-graph .zero {
+  stroke: var(--line);
+  vector-effect: non-scaling-stroke;
+}
+.tt-graph .trace {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.tt-graph .trace.alt {
+  stroke: var(--text);
+  stroke-dasharray: 3 2;
+  opacity: 0.8;
+}
+.tt-tile .tt-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--neon-cyan);
+  cursor: pointer;
+}
+.tt-tile .settings-row {
+  padding: 2px 0 0;
+  border-top: none;
+}
+.tt-big {
+  height: 64px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.tt-big b {
+  color: var(--text);
+  font-size: 18px;
+}
+.tt-more {
+  margin: 6px 0 2px;
+}
+
+/* A narrow dock: Tempo's label-left / control-right rows ran into each other ("Quality ~21 ms",
+   "Attack detector balanced"). Stack the control under its label there instead. */
+@container (max-width: 420px) {
+  .tt-tempo .settings-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .tt-tempo .settings-row > .settings-label {
+    flex: 1 0 100%;
+  }
+  .tt-tempo .settings-row > .settings-control,
+  .tt-tempo .settings-row > .toggle {
+    margin-left: auto;
+  }
+}
+
+.color-mode-hint {
+  margin: -2px 0 6px;
+}
+
+/* ── Settings search: a box at the top of the content; results are the real sections, filtered. ── */
+.settings-search {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  padding: 2px 0 8px;
+  background: var(--panel, var(--bg));
+}
+.settings-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.settings-search input:focus {
+  outline: none;
+  border-color: var(--neon-purple);
+}
+.search-group {
+  margin-bottom: 12px;
+}
+.search-group-title {
+  display: block;
+  margin: 4px 0 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--neon-purple);
+  font: 700 12px/1 ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.search-group-title:hover {
+  text-decoration: underline;
+}
+.search-miss {
+  display: none !important;
+}
+
+/* A narrow dock: the head carries the section name, the ☰ and the profile picker in ~300px, and
+   "Settings /" was what pushed the section name off the end. The panel is plainly Settings. */
+.settings-panel {
+  container-type: inline-size;
+  container-name: settings-panel;
+}
+@container settings-panel (max-width: 420px) {
+  .settings-crumb {
+    display: none;
+  }
+}
+
+/* Controls ▸ Key map ▸ Navigation: the fixed keys (Esc, Alt, library browsing). */
+.keynav {
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.keynav-title {
+  font: 700 10px/1 ui-monospace, monospace;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.keynav-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.keynav-row kbd {
+  flex: none;
+  min-width: 92px;
+  font: 700 11px/1.4 ui-monospace, monospace;
+  color: var(--text);
+}
+
+/* ☰ entry whose settings differ from the defaults: a small dot after the name. */
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-nav-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--neon-purple);
+  flex: none;
+}
+.settings-nav-item.on .settings-nav-dot {
+  background: #fff;
+}
+.settings-reset-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 14px;
+  padding: 8px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* A deck colour that "From cover art" is overriding: still editable (it is what a track with no
+   art gets), but dimmed so the row stops claiming to be the colour on the board. */
+.color-row.is-fallback .color-swatch,
+.color-row.is-fallback .settings-value {
+  opacity: 0.45;
+}
+
+/* Touch-only device: the key map is folded behind this (ControlsTab ▸ useFinePointer). */
+.keymap-unfold {
+  align-self: flex-start;
+  margin: 2px 0 8px;
+}
+
+/* A slider row WRAPS when label + value + slider do not fit: the control drops to its own line,
+   right-aligned, instead of being laid over the label. Seen at 390px on Audio ▸ Master headroom,
+   where the value text ("none — loudest, may pump") printed across the label and its ⓘ. Wrapping
+   uses each item's content width, so a row that fits is unchanged. */
+.settings-row.slider-row {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.settings-row.slider-row > .settings-control {
+  margin-left: auto;
+  max-width: 100%;
+}
+.settings-row.slider-row > .settings-label {
+  flex-basis: auto;
+}
+.settings-row.slider-row > .settings-control {
+  min-width: 0;
+}
+.settings-row.slider-row .settings-value {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Interface ▸ live waveform preview (WaveformPreview). Sticky inside the settings scroller so
+   it stays visible while the swatches below it are edited. */
+/* ★ PINNED AS A HEADER, NOT FLOATING OVER THE LIST (operator, 2026-11-04: "lets fix this scroll
+   bug"). It was a card-coloured band with no edge: cards slid under it and showed sliced through,
+   which read as broken rendering. Now: the PANEL's own colour (it matched nothing before:
+   --panel-2 against the panel's --panel), a hairline + soft shadow on its bottom edge so content
+   visibly goes UNDER a header, and above every row's own stacking. */
+.wave-preview {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 0 12px;
+  padding: 8px 0 10px;
+  background: var(--panel, #0b0b11);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: 0 10px 12px -10px rgba(0, 0, 0, 0.75);
+}
+.wave-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 80px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.search-group-body .wave-preview {
+  position: static;
+}
+
+/* A single drawn tile in a card (Tempo ▸ Sync pull): full width, not half a grid. */
+.tt-tiles.tt-tiles-one {
+  grid-template-columns: 1fr;
+  margin-bottom: 4px;
+}
+
+/* ---- THE settings slider (RangeInput): thin track, accent fill up to the thumb (--pct), a small
+   round thumb with a dark ring. One look for every slider in settings (2026-11-04). ---- */
+.settings-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-slider:focus-visible {
+  outline: none;
+}
+.settings-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--pct, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) var(--pct, 0%) 100%
+  );
+}
+.settings-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+.settings-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel, #0b0b11);
+  box-shadow: 0 0 0 1px var(--accent);
+  transition: transform 0.08s;
+}
+.settings-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--panel, #0b0b11);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.settings-slider:hover::-webkit-slider-thumb,
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ---- Turntable tiles, one layout (2026-11-04: "standardized and clean") ---- */
+.tt-tiles {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  align-items: stretch;
+}
+.tt-tile {
+  gap: 8px;
+  padding: 10px 12px 10px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+.tt-tile-head {
+  flex-wrap: nowrap;
+}
+/* The readout has its OWN line: one line, left-aligned, the same height in every tile. */
+.tt-tile-val {
+  margin-left: 0;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+  min-height: 15px;
+  gap: 0 12px;
+  text-align: left;
+}
+/* A legend swatch per trace (the solid / dashed line it names), replacing the "- -" text. */
+.tt-tile-val .trace-key::before,
+.tt-tile-val .trace-key.alt::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-top: 2px solid var(--accent);
+  letter-spacing: 0;
+}
+.tt-tile-val .trace-key.alt::before {
+  border-top: 2px dashed var(--text);
+}
+.tt-tile-val .trace-key.alt {
+  opacity: 0.85;
+}
+/* The slider sits right under the graph, and graphs start at the same height in every tile, so
+   sliders line up across a row; an extra row (Slip) goes below and the shorter tiles keep the
+   space at their bottom instead of between graph and slider. */
+.tt-tile-foot {
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tt-tile .tt-slider {
+  width: 100%;
+}
+.tt-big b {
+  font-size: 20px;
+}

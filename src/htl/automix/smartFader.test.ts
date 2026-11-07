@@ -69,62 +69,84 @@ describe("SmartFader tempo morph fold", () => {
     sf = new SmartFader(eng as unknown as AudioEngine);
   });
 
-  test("a genre gap (120 → 174) folds into the live octave, not a raw +45% ramp", () => {
+  // ★ ONLY A MATCHABLE PAIR IS MORPHED (analysis tempoLockable, operator 2026-11-04: the smart
+  // fader "works completely against it because it cannot sync tempo/bpm"). These two cases used to
+  // assert a −27.5 % and a +40 % morph of the outgoing deck; that IS the counterproductive behaviour.
+  test("a genre gap (120 → 174) is not beat-matched: both keep their tempo, no SYNC, still a throw", () => {
     eng.A.beatgrid = { bpm: 120 };
     eng.A.effectiveBpm = 120;
     eng.A.playing = true;
     eng.B.beatgrid = { bpm: 174 };
     eng.B.effectiveBpm = 174;
-
-    expect(sf.arm(-1)).toBe(true); // full on A (the live deck) → throw begins at p=0
-    // Halfway through the throw the master must sit inside A's octave band [120/√2, 120·√2] ≈
-    // [84.9, 169.7]; the buggy raw ramp would command ~147 BPM (+22.5%). Folded target is 87
-    // (174/2), so halfway ≈ 103.5 BPM.
-    sf.onCrossfade(0);
-    const mid = bpmAt(120, eng.A.tempoPct);
-    expect(mid).toBeGreaterThan(120 / Math.SQRT2);
-    expect(mid).toBeLessThan(120 * Math.SQRT2);
-    expect(mid).toBeCloseTo(103.5, 1);
-
-    // Complete the throw: the common tempo lands on the FOLDED incoming BPM (87), i.e. −27.5% off
-    // A's base — never the raw +45% that would stretch far past a clean WSOLA range and lurch the
-    // slave an octave. A's last commanded tempo is the p→1 value.
-    sf.onCrossfade(1);
-    const landed = bpmAt(120, eng.A.tempoLog[eng.A.tempoLog.length - 1]);
-    expect(Math.abs(landed - 87)).toBeLessThan(2);
-
-    // The deck we faded INTO must land at its OWN natural tempo (0 shift) — explicitly released,
-    // not left riding the blend tempo. (B was the incoming/slave; the throw completing releases it.)
-    expect(eng.B.tempoPct).toBe(0);
-    expect(eng.B.tempoLog.length).toBeGreaterThan(0); // proves the explicit release fired
-  });
-
-  test("no boundary crossing: the whole ramp stays within one octave band", () => {
-    eng.A.beatgrid = { bpm: 120 };
-    eng.A.effectiveBpm = 120;
-    eng.A.playing = true;
-    eng.B.beatgrid = { bpm: 174 };
-    eng.B.effectiveBpm = 174;
-    sf.arm(-1);
-    // Sweep the fader across the whole throw; every commanded master BPM must stay in the band.
+    expect(sf.arm(-1)).toBe(true);
+    expect(sf.state().locked).toBe(false);
     for (let cf = -1; cf <= 1.0001; cf += 0.1) sf.onCrossfade(Math.min(1, cf));
-    for (const pct of eng.A.tempoLog) {
-      const bpm = bpmAt(120, pct);
-      expect(bpm).toBeGreaterThan(120 / Math.SQRT2 - 0.01);
-      expect(bpm).toBeLessThan(120 * Math.SQRT2 + 0.01);
-    }
+    expect(eng.A.tempoLog).toEqual([]); // the outgoing was never dragged
+    expect(eng.syncRole("B")).toBe("off");
+    expect(eng.B.playing).toBe(true); // the throw still brought the incoming in
+    expect(eng.crossfade).toBeCloseTo(1, 6);
+    expect(eng.commandedRamp).toBe(false);
+    expect(eng.A.keylock).toBe(true); // key-lock left alone: there is no glide to pitch
   });
 
-  test("a near pair (124 → 174, within √2) morphs without folding", () => {
+  test("a near pair (124 → 130) morphs to the incoming's tempo and lands it at its own", () => {
     eng.A.beatgrid = { bpm: 124 };
     eng.A.effectiveBpm = 124;
     eng.A.playing = true;
-    eng.B.beatgrid = { bpm: 174 };
-    eng.B.effectiveBpm = 174;
+    eng.B.beatgrid = { bpm: 130 };
+    eng.B.effectiveBpm = 130;
     sf.arm(-1);
+    expect(sf.state().locked).toBe(true);
+    expect(eng.syncRole("B")).toBe("slave");
+    sf.onCrossfade(0);
+    expect(bpmAt(124, eng.A.tempoPct)).toBeCloseTo(127, 1);
     sf.onCrossfade(1);
     const landed = bpmAt(124, eng.A.tempoLog[eng.A.tempoLog.length - 1]);
-    // 174/124 = 1.403 < √2, so no fold — the common tempo reaches the incoming's natural 174.
-    expect(Math.abs(landed - 174)).toBeLessThan(2);
+    expect(Math.abs(landed - 130)).toBeLessThan(1);
+    expect(eng.B.tempoPct).toBe(0); // explicitly released to natural
+  });
+
+  test("a double-time pair (120 → 246) still matches in the folded octave, never crossing it", () => {
+    eng.A.beatgrid = { bpm: 120 };
+    eng.A.effectiveBpm = 120;
+    eng.A.playing = true;
+    eng.B.beatgrid = { bpm: 246 };
+    eng.B.effectiveBpm = 246;
+    sf.arm(-1);
+    expect(sf.state().locked).toBe(true);
+    for (let cf = -1; cf <= 1.0001; cf += 0.1) sf.onCrossfade(Math.min(1, cf));
+    for (const pct of eng.A.tempoLog) {
+      const bpm = bpmAt(120, pct);
+      expect(bpm).toBeGreaterThan(119.9);
+      expect(bpm).toBeLessThan(123.1); // 246 folds to 123: a 2.5 % move, not a 2x one
+    }
+  });
+
+  test("no beat grid: it still arms and throws (crossfade + bass swap), it just does not sync", () => {
+    eng.A.playing = true;
+    expect(sf.arm(-1)).toBe(true);
+    expect(sf.state().locked).toBe(false);
+    sf.onCrossfade(0.5);
+    expect(eng.B.playing).toBe(true);
+    expect(eng.A.tempoLog).toEqual([]);
+  });
+
+  test("after AUTO moved the fader, the next throw starts from the deck that is actually live", () => {
+    eng.A.beatgrid = { bpm: 124 };
+    eng.A.effectiveBpm = 124;
+    eng.A.playing = true;
+    eng.B.beatgrid = { bpm: 126 };
+    eng.B.effectiveBpm = 126;
+    sf.arm(-1); // from A
+    expect(sf.state().from).toBe("A");
+    // AUTO mixes A → B on its own (not through the smart fader) and stops A.
+    eng.setCrossfade(1);
+    eng.A.playing = false;
+    eng.B.playing = true;
+    sf.noteExternalCrossfade();
+    sf.onCrossfade(0.9); // the hand starts the next throw from the B side
+    expect(sf.state().from).toBe("B");
+    expect(sf.state().to).toBe("A");
+    expect(eng.B.tempoLog.length).toBeGreaterThan(0); // the morph moved B, the live deck — not A
   });
 });

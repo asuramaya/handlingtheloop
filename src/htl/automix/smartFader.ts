@@ -23,7 +23,7 @@
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
 import type { Intent } from "../room/protocol";
-import { foldTempoOctave } from "../analysis";
+import { foldTempoOctave, tempoLockable } from "../analysis";
 import { trace } from "../debug/trace";
 import { clamp, clamp01, lerp } from "../../util/math";
 
@@ -38,6 +38,9 @@ export interface SmartFaderState {
   from: DeckId | null; // outgoing (live) deck
   to: DeckId | null; // incoming deck
   progress: number; // 0..1 across the current throw
+  /** The pair is beat-matched across the throw (tempo morph + SYNC). False = a clean crossfade with
+   *  a bass swap and both decks at their own tempo (too far apart, or no grid to lock to). */
+  locked: boolean;
 }
 
 export class SmartFader {
@@ -49,6 +52,9 @@ export class SmartFader {
   private toBpm = 0; // incoming deck's natural BPM (morph target)
   private keylockSaved: Partial<Record<DeckId, boolean>> = {};
   private lastProgress = 0;
+  private locked = false; // this throw is beat-matched (see tempoLockable)
+  private pinned = false; // key-lock pins + commanded ramp are ours right now
+  private stale = false; // something else moved the crossfader since our last apply
 
   // ★ A TRANSITION THAT ONLY HAPPENS HERE IS A DIVERGENCE. Smart Fader drives the decks straight
   // — tempo, EQ, play — and none of those setters touch the wire, so on a shared board the far
@@ -80,23 +86,24 @@ export class SmartFader {
     return this.armed;
   }
   state(): SmartFaderState {
-    return { armed: this.armed, from: this.fromId, to: this.toId, progress: this.lastProgress };
+    return { armed: this.armed, from: this.fromId, to: this.toId, progress: this.lastProgress, locked: this.locked };
   }
 
-  /** Arm at the current crossfade position `cf` (−1 = full A … +1 = full B). Returns false (→ plain
-   *  crossfader) if a deck lacks a beatgrid to morph between. */
+  /** The crossfader was moved by something other than this fader — AUTO's transition, a session
+   *  peer. The direction and the morph's start tempo were captured for the OLD situation; after AUTO
+   *  has mixed A → B, "from" is still A, and the next touch ran the morph backwards against the deck
+   *  that is actually live. The next throw re-reads the decks instead of trusting that. */
+  noteExternalCrossfade(): void {
+    if (this.armed) this.stale = true;
+  }
+
+  /** Arm at the current crossfade position `cf` (−1 = full A … +1 = full B). Always arms; whether
+   *  the throw beat-matches is decided per throw (state().locked). Returns true. */
   arm(cf: number, announce = true): boolean {
     if (this.armed) return true;
-    if (!this.setupDirection(cf)) return false;
-    // The pitch glide is intentional — PIN key-lock off so the tempo morph pitches the decks
-    // (turntable-style) AND a manual KEY nudge mid-transition adds to the glide instead of
-    // re-engaging key-lock (which would freeze it). Saved per-deck so disarm restores the setting.
+    // Saved per-deck BEFORE any pin, so disarm restores the user's own key-lock setting.
     this.keylockSaved = { A: this.engine.deck("A").keylock, B: this.engine.deck("B").keylock };
-    this.engine.deck("A").setKeylockPinnedOff(true);
-    this.engine.deck("B").setKeylockPinnedOff(true);
-    // The throw COMMANDS the master's tempo off its grid, so tell SYNC to drop the grid-rubato
-    // feed-forward (it assumes grid-natural playback and fought the morph) and ride pure phase-lock.
-    this.engine.setCommandedRamp(true);
+    this.setupDirection(cf);
     this.armed = true;
     // The mode itself crosses: the far side pins key-lock the same way (or its decks will not
     // glide with the morph) and its strip shows SMART instead of a plain crossfader.
@@ -111,12 +118,11 @@ export class SmartFader {
    *  also releases SYNC.) Leaves the crossfade where it is. */
   disarm(announce = true): void {
     if (!this.armed) return;
-    this.engine.setCommandedRamp(false); // back to normal beatmatch sync (feed-forward re-acquires)
+    this.unpin();
     for (const id of ["A", "B"] as DeckId[]) {
       const d = this.engine.deck(id);
       this.tempo(id, 0);
       this.eqLow(id, 0);
-      d.setKeylockPinnedOff(false); // unpin first, then restore the user's saved key-lock
       const k = this.keylockSaved[id];
       if (k != null) {
         d.setKeylock(k);
@@ -125,7 +131,32 @@ export class SmartFader {
     }
     if (announce) for (const d of ["A", "B"] as DeckId[]) this.emit({ kind: "board", deck: d, id: "smartFader", arg: "disarm" });
     this.armed = false;
+    this.locked = false;
+    this.stale = false;
     this.fromId = this.toId = null;
+  }
+
+  // A beat-matched throw: PIN key-lock off so the tempo morph pitches the decks (turntable-style)
+  // and a KEY nudge adds to the glide instead of re-engaging key-lock; and tell SYNC the master's
+  // tempo is COMMANDED (drop the grid-rubato feed-forward that fought the morph). Re-asserted on
+  // every locked move, not just at arm: AUTO's own glide clears both when its transition ends or a
+  // grab hands it to the hand, which left a smart throw that took over from AUTO un-pinned.
+  private pin(): void {
+    this.engine.deck("A").setKeylockPinnedOff(true);
+    this.engine.deck("B").setKeylockPinnedOff(true);
+    this.engine.setCommandedRamp(true);
+    this.pinned = true;
+  }
+  private unpin(): void {
+    if (!this.pinned) return;
+    this.engine.setCommandedRamp(false); // back to normal beatmatch sync (feed-forward re-acquires)
+    this.engine.deck("A").setKeylockPinnedOff(false);
+    this.engine.deck("B").setKeylockPinnedOff(false);
+    for (const id of ["A", "B"] as DeckId[]) {
+      const k = this.keylockSaved[id];
+      if (k != null) this.engine.deck(id).setKeylock(k);
+    }
+    this.pinned = false;
   }
 
   /** Drive the transition from a crossfade position `cf` (−1..+1). Call from the crossfader handler
@@ -134,6 +165,11 @@ export class SmartFader {
     if (!this.armed) {
       this.engine.setCrossfade(cf);
       return;
+    }
+    if (this.stale) {
+      // Taking over from wherever the decks really are (AUTO mid-blend, or after it finished).
+      this.stale = false;
+      this.setupDirection(cf);
     }
     this.apply(cf, true); // a real fader move (the throw) → may start the incoming rolling
   }
@@ -152,10 +188,20 @@ export class SmartFader {
     const toDeck = this.engine.deck(to);
     const fromBase = fromDeck.beatgrid?.bpm ?? 0;
     const toBpm = toDeck.beatgrid?.bpm ?? 0;
-    if (!fromBase || !toBpm) return false;
 
     this.fromId = from;
     this.toId = to;
+    // ★ ONLY A PAIR THAT CAN BE BEAT-MATCHED IS BEAT-MATCHED (analysis tempoLockable). Otherwise the
+    // throw is still a smart one — the bass swap, the incoming starting under the fader — but both
+    // decks keep their own tempo and nothing is synced. Before, a pair with no grid made Smart Fader
+    // refuse to arm at all, and a pair too far apart got a 25–40 % morph that sounded like neither.
+    this.locked = tempoLockable(fromDeck.effectiveBpm ?? fromBase, toBpm) && !!fromBase;
+    if (!this.locked) {
+      this.unpin();
+      if (this.engine.syncRole(to) === "slave") this.engine.toggleSync(to); // a previous throw's lock
+      return true;
+    }
+    this.pin();
     this.fromBaseBpm = fromBase;
     // Start the morph from the live deck's CURRENT effective BPM (not its natural BPM) so arming
     // never snaps a deck the DJ had pitched — the throw begins exactly where the deck is playing.
@@ -185,6 +231,7 @@ export class SmartFader {
     const from = this.fromId;
     const to = this.toId;
     if (!from || !to) return;
+    if (this.locked) this.pin(); // idempotent; see pin()
 
     // Progress along the throw: 0 when the fader sits on `from`, 1 when it reaches `to`.
     const p = clamp01(from === "A" ? (cf + 1) / 2 : (1 - cf) / 2);
@@ -210,13 +257,15 @@ export class SmartFader {
     // had become 128), so the decks end mismatched and the endpoint release snaps the incoming to its
     // real natural BPM — the audible jump. fromBaseBpm is re-read too (a refined master grid stays
     // exact). fromStartBpm stays frozen: it's the morph's START, and it's the deck being morphed.
-    const incNatural = toDeck.beatgrid?.bpm || this.toBpm;
-    const fromBase = fromDeck.beatgrid?.bpm || this.fromBaseBpm;
-    const foldedTarget = foldTempoOctave(incNatural, this.fromStartBpm) ?? incNatural;
-    const targetBpm = lerp(this.fromStartBpm, foldedTarget, p);
-    const tempoPct = (targetBpm / fromBase - 1) * 100;
-    trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +foldedTarget.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +incNatural.toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
-    this.tempo(from, tempoPct);
+    if (this.locked) {
+      const incNatural = toDeck.beatgrid?.bpm || this.toBpm;
+      const fromBase = fromDeck.beatgrid?.bpm || this.fromBaseBpm;
+      const foldedTarget = foldTempoOctave(incNatural, this.fromStartBpm) ?? incNatural;
+      const targetBpm = lerp(this.fromStartBpm, foldedTarget, p);
+      const tempoPct = (targetBpm / fromBase - 1) * 100;
+      trace("sf", { from, to, p: +p.toFixed(3), start: +this.fromStartBpm.toFixed(1), toFold: +foldedTarget.toFixed(1), tgt: +targetBpm.toFixed(1), pct: +tempoPct.toFixed(2), incBpm: +incNatural.toFixed(1), incEff: +(toDeck.effectiveBpm ?? 0).toFixed(1) });
+      this.tempo(from, tempoPct);
+    }
 
     // Bass swap across the middle of the throw.
     const s = clamp01((p - BASS_LO) / (BASS_HI - BASS_LO));
@@ -235,7 +284,7 @@ export class SmartFader {
     // direction; setupDirection then re-locks with the roles swapped so the next throw blends back.
     if (p >= 0.999) {
       this.eqLow(from, 0);
-      this.tempo(to, 0);
+      if (this.locked) this.tempo(to, 0);
       this.setupDirection(cf);
     }
   }

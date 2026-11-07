@@ -339,13 +339,20 @@ async function rawPlayer(videoId: string, o: PlayerOpts, fx: Fetcher = directFet
 //
 // ★ AND THERE IS CURRENTLY NO SECOND CLIENT TO ADD. xxit needs a client that is BOTH
 // `REQUIRE_JS_PLAYER: False` (formats carry direct, non-ciphered URLs — we never download or
-// parse base.js) AND free of a `GVS_PO_TOKEN_POLICY`. Against yt-dlp master those sets are:
-//     REQUIRE_JS_PLAYER: False  →  android, android_vr, ios, visionos
-//     no GVS_PO_TOKEN_POLICY    →  web, web_safari, web_embedded, visionos, tv, tv_downgraded
-// (Re-derived against yt-dlp master 2026-09-09: `web` and `web_safari` are un-gated too — they
-// were missing from this list before. The CONCLUSION is unchanged, because both need the JS
-// player, but the roster is a closed-world claim and a reader counts candidates off it.)
-// VISIONOS is the only member of both — the last unwalled JS-free client in the table. When it
+// parse base.js) AND free of a `GVS_PO_TOKEN_POLICY`.
+//
+// ★ THE ROSTER OF WHO QUALIFIES IS DELIBERATELY NOT WRITTEN DOWN HERE ANY MORE. It used to be, as
+// two lists; it went stale, 9523844 corrected it on 2026-09-09 under a line admitting "the roster
+// is a closed-world claim and a reader counts candidates off it" — and by 2026-10-31 it was stale
+// AGAIN, missing a 14th upstream client (`tv_samsung`, un-gated but JS-player-bound). Both times
+// the CONCLUSION below held, so nobody reading the conclusion saw anything wrong, which is the
+// whole trap: the conclusion was being underwritten by a list nobody re-derived. It is now derived
+// on every run by `node scripts/ytclient-watch.mjs`, which prints both sets and FIRES if the
+// intersection changes in either direction — including GROWING, because a genuine second rung
+// appearing is the one piece of good news a quiet watch would otherwise bury.
+//
+// VISIONOS is, as of the last run, the only member of both — the last unwalled JS-free client in
+// the table. Ask the script, not this comment, for today's answer. When it
 // goes, the answer is not another entry in this array: it is a real PO-token provider (already
 // known NOT to unlock ANDROID_VR, which likely wants Play Integrity hardware attestation) or
 // accepting a signature-cipher path. Both are architectural. Tracked as osiris thread 6c430b35,

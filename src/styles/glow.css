@@ -194,3 +194,42 @@ body:not(.no-glow) .eq-tool:hover {
 body:not(.no-glow) .eq-tool.on {
   box-shadow: 0 0 20px color-mix(in srgb, var(--tool, var(--accent)) 90%, transparent);
 }
+
+/* ★ WHERE THE HARDWARE KNOBS ARE (DeckControls data-knobs, App knobsOn). Quiet, not a frame: in stem
+   mode each stem cell names the controller knob that drives it — HI→DRUM, MID→BASS, LOW→VOICE,
+   CFX→INST, the same top-to-bottom order as the board — and its label takes the deck colour. In EQ
+   mode those tags are gone and a small KNOBS word sits in the EQ panel's label row instead.
+   (Operator, 2026-11-06: the first version's ring + badge "looks atrocious".) */
+.bank[data-knobs="stems"] .stems-row .vcell { position: relative; }
+.bank[data-knobs="stems"] .stems-row .vcell .vcell-label { color: var(--accent); }
+.bank[data-knobs="stems"] .stems-row .vcell::before {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0.85;
+  pointer-events: none;
+}
+.bank[data-knobs="stems"] .stems-row .vcell:nth-child(1)::before { content: "HI"; }
+.bank[data-knobs="stems"] .stems-row .vcell:nth-child(2)::before { content: "MID"; }
+.bank[data-knobs="stems"] .stems-row .vcell:nth-child(3)::before { content: "LOW"; }
+.bank[data-knobs="stems"] .stems-row .vcell:nth-child(4)::before { content: "CFX"; }
+.bank[data-knobs="eq"] .eq-pro { position: relative; }
+.bank[data-knobs="eq"] .eq-pro::before {
+  content: "KNOBS";
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  color: var(--accent);
+  pointer-events: none;
+}

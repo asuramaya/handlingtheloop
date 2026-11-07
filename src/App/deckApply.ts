@@ -37,6 +37,12 @@
 // precedent, not clearing a prerequisite for something we had yet to invent.
 
 import type { DeckSnapshot } from "../htl/state/session";
+
+/** Pad a saved cue/loop slot array out to `n` (the deck's own slot count) with empty slots: a save
+ *  from before the second cue bank carries only 8. */
+export function padSlots<T>(a: (T | null)[], n: number): (T | null)[] {
+  return a.length >= n ? a : [...a, ...new Array<T | null>(n - a.length).fill(null)];
+}
 import type { DeckMeta } from "../components/DeckLane";
 import { STEM_KEYS } from "./useStemPipeline";
 import { isMobileDevice } from "../htl/stems/models";
@@ -239,11 +245,10 @@ export function applyDeckControls(deck: SnapshotDeck, s: DeckSnapshot) {
   deck.setQuantize(s.quantize);
   deck.skipBeats = s.skipBeats ?? 4;
   deck.cuePoint = s.cuePoint;
-  deck.hotCues = [...s.hotCues];
-  deck.hotLoops = (s.hotLoops ?? []).map((l) => (l ? { ...l } : null));
-  if (deck.hotLoops.length < deck.hotCues.length) {
-    deck.hotLoops = [...deck.hotLoops, ...new Array(deck.hotCues.length - deck.hotLoops.length).fill(null)];
-  }
+  // Padded to the deck's slot count: a snapshot from before the second cue bank carries only 8.
+  const slots = deck.hotCues.length;
+  deck.hotCues = padSlots([...s.hotCues], slots);
+  deck.hotLoops = padSlots((s.hotLoops ?? []).map((l) => (l ? { ...l } : null)), slots);
   deck.loop = s.loop ? { ...s.loop } : null;
   deck.loopInPoint = s.loopInPoint;
   applyDeckStems(deck, s);

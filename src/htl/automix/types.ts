@@ -28,7 +28,9 @@ export type TransitionStyle =
   | "gateChop"
   | "loopChop"
   | "dropSwap"
-  | "spinOut";
+  | "spinOut"
+  | "tempoBridge"
+  | "doubleDrop";
 
 /** ★ THE OTHER HALF OF A TRANSITION.
  *
@@ -80,10 +82,38 @@ export interface StyleCapabilities {
   fx: boolean;
   incomingBody: boolean; // the incoming has a detected body section to cut to
   grid: boolean; // both decks have a beatgrid (needed for anything rhythmic)
+  /** The pair can be BEAT-MATCHED: tempos within BEATLOCK_MAX once octave-folded (analysis
+   *  tempoLockable). The long overlapping blends need it; without it they are two records fighting.
+   *  Optional so an older caller that never set it keeps its behaviour (undefined = lockable). */
+  lock?: boolean;
+  /** Too far apart to beat-match, but close enough (≤ BRIDGE_MAX once folded) to RIDE the outgoing
+   *  to the incoming's tempo on a loop — the tempoBridge. */
+  bridge?: boolean;
 }
 
 /** Where the queue draws its next tracks from. */
 export type MixMode = "playlist" | "radio";
+
+/** WHO PUT A TRACK IN THE QUEUE. Radio-drawn rows are the machine's guesses and may be replaced
+ *  whenever the vibe moves (reseed, arc change, "Radio" from the source menu). A row the USER put
+ *  there (add, play next, drag-in, or a track they loaded on the idle deck) and a playlist's rows
+ *  are never silently dropped by those operations. */
+export type QueueSource = "user" | "radio" | "playlist";
+
+/** A queued track plus its provenance. Structurally a TrackMeta, so anything that renders tracks
+ *  renders these unchanged. `source` is absent only on rows that arrived from an older peer. */
+export type QueueItem = TrackMeta & { source?: QueueSource };
+
+/** Why AUTO is not (yet) moving, for the status line. null = nothing to wait on.
+ *  - press-play: a track is on a deck but nothing plays (the user paused, or stopped both decks
+ *    after taking over a mix). AUTO never force-starts a deck it did not start itself, except once,
+ *    on the AUTO press.
+ *  - queue-empty: no next track and nothing is fetching one.
+ *  - radio-filling: no next track yet; the radio is fetching candidates.
+ *  - loading-next: the next track is being loaded onto the idle deck before the mix can cue.
+ *  - stems: at the mix point, holding (bounded) for the incoming deck's stems.
+ *  - playlist-ended: the loaded playlist ran out; the queue fell back to radio. */
+export type AutoMixWaitReason = "press-play" | "queue-empty" | "radio-filling" | "loading-next" | "stems" | "playlist-ended" | null;
 
 /** The shape of a set's energy over time — what turns a sequence of compatible tracks into
  *  something that goes somewhere. `ride` holds the level the user established, `build` climbs and

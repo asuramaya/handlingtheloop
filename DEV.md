@@ -67,17 +67,28 @@ session in one, knock from the other. For the **broadcast plane**: dev-login, th
 ### Join from a phone on the LAN
 
 ```
-pnpm worker:lan       # wrangler dev --ip 0.0.0.0 → reachable on your LAN IP:8787
+pnpm worker:lan:https   # build, then the Worker on 127.0.0.1:8787 + an HTTPS proxy on <lan-ip>:8787
 ```
 
-On the phone (same Wi-Fi), open `http://<your-lan-ip>:8787` (e.g. `http://172.20.20.20:8787`;
-find yours with `ip route get 1.1.1.1`). Sign in with the dev login —
-`http://<lan-ip>:8787/api/auth/dev?name=Phone` — or just tune into a live room (anon).
-The app is origin-relative (WebSocket uses `location.host`), so nothing is hardcoded to
-localhost. **Cross-origin isolation is OFF over plain-HTTP LAN** (it needs HTTPS/localhost),
-but that only disables threaded stem *separation* — which phones never do anyway — so
-listening, playback, and R2 stem *download* all work. If the page can't load, allow inbound
-TCP 8787 through the laptop's firewall.
+- **Laptop:** `http://localhost:8787`. `localhost` is a secure context with no certificate, so
+  cross-origin isolation, worklets, and threaded stem separation behave exactly as in production.
+- **Phone (same Wi-Fi):** `https://<lan-ip>:8787`. The proxy prints the address it picked (it skips
+  Docker bridges and Tailscale; pass `--ip` to override). The certificate is self-signed and
+  generated on first run, so Safari warns once: **Show Details → visit this website**. Dev login:
+  `https://<lan-ip>:8787/api/auth/dev?name=Phone`.
+- Both go through **one** Worker, D1 and R2, so stems the laptop separates are the stems the phone
+  downloads. That's the production topology.
+
+**Why not plain HTTP, and why not `wrangler dev --local-protocol https`:**
+- *Plain HTTP on the LAN (`pnpm worker:lan`):* the phone loses `AudioWorklet` entirely, because
+  browsers only expose it in secure contexts, and playback runs on a worklet. Fine for poking at
+  layout, useless for audio.
+- *wrangler's own HTTPS:* it hangs desktop separation at "0%" forever. Chrome's click-through for a
+  self-signed cert does not cover a worker spawned from inside a worker, and onnxruntime starts its
+  threads that way, so session creation waits for threads that never load. Production (a real
+  cert) is unaffected. Details: `scripts/lanproxy.mjs` header, osiris decision 7b5a5bfd.
+
+If the phone can't load the page, allow inbound TCP 8787 through the laptop's firewall.
 
 ## Harnesses
 

@@ -94,6 +94,20 @@ export function artistKey(artist: string | null | undefined): string {
   return s;
 }
 
+/** THE SAME SONG, for "never mix a track into itself" (operator, 2026-11-04: "double mixing S&M
+ *  into itself is not a valid transition"). The same upload, or another upload of the same
+ *  recording by the same act: songCore sees through "(Official Video)" / "Artist - " decorations
+ *  and artistKey through "- Topic" / "VEVO". Both halves must match, so two different songs that
+ *  share a title ("Hold On" by two acts) are not merged. */
+export function sameSong(a: TrackMeta | null | undefined, b: TrackMeta | null | undefined): boolean {
+  if (!a || !b) return false;
+  if (a.videoId && a.videoId === b.videoId) return true;
+  const ca = songCore(a.title);
+  if (!ca || ca !== songCore(b.title)) return false;
+  const aa = artistKey(a.artist);
+  return !!aa && aa === artistKey(b.artist);
+}
+
 /** Normalised words of a title, for looking an artist or a song name up INSIDE it. */
 function titleWords(title: string): string {
   return ` ${(title || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()} `;
@@ -256,8 +270,13 @@ export function radioSeeds(ctx: RadioContext, manual: TrackMeta | null): { track
   };
   // A track the user explicitly queued next IS the vibe, at full strength, until it plays.
   push(manual, 1);
-  push(ctx.current, 1);
-  push(ctx.anchor, anchorWeight(ctx.anchorAge));
+  // While a pick waits, it is the direction the user chose; what is playing is where they are
+  // LEAVING. Equal weights kept half the suggestions on the old direction until the pick went live
+  // (operator, 2026-11-05: replacing the next song left the engine "stuck on the song that was
+  // replaced"). The anchor is the old direction too — it re-anchors when the pick plays.
+  const leaving = manual ? 0.5 : 1;
+  push(ctx.current, leaving);
+  push(ctx.anchor, anchorWeight(ctx.anchorAge) * leaving);
   return out;
 }
 
@@ -265,6 +284,19 @@ export function radioSeeds(ctx: RadioContext, manual: TrackMeta | null): { track
  *  set. Floors at 0.25: never zero (the set should not forget where it started), never dominant. */
 export function anchorWeight(age: number): number {
   return Math.max(0.25, 1 - Math.max(0, age) / 8);
+}
+
+/** Radio candidates outside this length are not songs a set can use: under a minute is a clip, a
+ *  short or an intro; over twelve is a mix, a full album, a lyric video looped to fill 20 minutes.
+ *  The radio surfaces both (watch-next especially), and the selector used to admit them. */
+export const MIN_TRACK_SEC = 60;
+export const MAX_TRACK_SEC = 12 * 60;
+
+/** A known duration inside [MIN_TRACK_SEC, MAX_TRACK_SEC]. An UNKNOWN duration (0/null/NaN) passes:
+ *  plenty of provider rows carry none, and rejecting them would starve the pool. */
+export function plausibleLength(duration: number | null | undefined): boolean {
+  if (duration == null || !Number.isFinite(duration) || duration <= 0) return true;
+  return duration >= MIN_TRACK_SEC && duration <= MAX_TRACK_SEC;
 }
 
 /** Reject a candidate outright, before scoring: already played, already queued, currently on a
@@ -275,6 +307,7 @@ export function isEligible(
   bans: { played: ReadonlySet<string>; ids: ReadonlySet<string>; cores: ReadonlySet<string> },
 ): boolean {
   if (!t.videoId) return false;
+  if (!plausibleLength(t.duration)) return false;
   if (bans.played.has(t.videoId) || bans.ids.has(t.videoId)) return false;
   const core = songCore(t.title);
   if (core && bans.cores.has(core)) return false;

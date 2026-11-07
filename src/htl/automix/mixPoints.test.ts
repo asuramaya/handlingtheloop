@@ -115,8 +115,9 @@ describe("chooseMixIn — the incoming's intro rides under the outro", () => {
 describe("blendBarsFor — a blend that fills its section, not one that straddles it", () => {
   // 120 bpm → 2 s per bar.
   test("caps the requested length at what the section can actually give", () => {
-    // Mix-out at 175, section began at 150 → 25 s of material ≈ 12.5 bars.
-    expect(blendBarsFor(song(), 175, 120, 32)).toBe(12);
+    // Mix-out at 175, section began at 150 → 25 s of material ≈ 12.5 bars → the 8-bar PHRASE that
+    // fits (12 is not a phrase length any more; it ended mid-phrase).
+    expect(blendBarsFor(song(), 175, 120, 32)).toBe(8);
   });
 
   test("never exceeds what the planner asked for", () => {

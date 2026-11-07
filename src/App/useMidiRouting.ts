@@ -2,16 +2,22 @@
 // agent owns this file instead of contending on App. PURE RELOCATION: the body is verbatim from
 // App (sed-extracted); the App spine arrives via `deps`, destructured to the original names so the
 // closure + its useCallback dep array are unchanged. Consumed by useMidi + useGamepad in App.
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { decideSpinFollow } from "./jogSpinFollow";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
-import { EQ_MIN_DB, EQ_MAX_DB, type Deck, type DeckId, type SmartFader } from "@htl";
+import { EQ_MIN_DB, EQ_MAX_DB, cueBankBase, type Deck, type DeckId, type SmartFader } from "@htl";
 import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
+import { pickupStep } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
+
+/** Quantized loop-edge adjust on the jog: platter roll (track-seconds at 0.0025 s/tick) per beat
+ *  step. 0.15 s = 60 ticks ≈ 30° of platter. */
+const LOOP_ADJ_ROLL = 0.15;
 
 export interface MidiRoutingDeps {
   settings: Settings;
@@ -35,6 +41,7 @@ export interface MidiRoutingDeps {
   handlersRef: MutableRefObject<Record<string, (deck: Deck, id: DeckId, s: boolean) => void>>;
   libRef: RefObject<LibraryHandle>;
   toggleLibrary: () => void;
+  closeLibrary: () => void;
   lockedRef: MutableRefObject<boolean>;
   micVolSetRef: MutableRefObject<((v: number) => void) | null>;
   xfaderEnabledRef: MutableRefObject<boolean>;
@@ -75,6 +82,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     handlersRef,
     libRef,
     toggleLibrary,
+    closeLibrary,
     lockedRef,
     micVolSetRef,
     xfaderEnabledRef,
@@ -94,6 +102,70 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
 
   // onMidiEvent-private accumulators (moved verbatim from App — used only by the dispatcher).
   const jogTouched = useRef<Record<DeckId, boolean>>({ A: false, B: false });
+  // FREE-SPIN FOLLOW (App/jogSpinFollow.ts). After a vinyl-mode touch-up the physical platter
+  // keeps turning; while this holds a record for a deck, that deck's grab is still alive and its
+  // CC 0x21 (jogBend) ticks drive the platter instead of bending/seeking. `released`/`lastTick` are
+  // performance.now() ms. One shared checker timer ends a follow when the platter goes still.
+  // `search` marks a PAUSED-ring search rather than a post-release spin: its cap counts from the
+  // latest tick, so a long deliberate search is not cut off mid-turn.
+  const spinFollow = useRef<Record<DeckId, { released: number; lastTick: number; search?: boolean } | null>>({ A: null, B: null });
+  const spinTimer = useRef<number | null>(null);
+  // The latest jog callbacks/engine, for the timer (which outlives any one render's closure).
+  const spinDeps = useRef({ engine, onJogEnd });
+  spinDeps.current = { engine, onJogEnd };
+  // End a follow: release the grab for real. The platter has settled, so JogEngine's coast starts
+  // from the platter's actual (small or play-speed) velocity instead of a stale hand fling.
+  const endSpinFollow = useCallback((id: DeckId) => {
+    if (!spinFollow.current[id]) return;
+    spinFollow.current[id] = null;
+    const deck = spinDeps.current.engine.deck(id);
+    if (deck.grabbing) {
+      deck.scrubEnd();
+      spinDeps.current.onJogEnd(id);
+    }
+    if (!spinFollow.current.A && !spinFollow.current.B && spinTimer.current != null) {
+      clearInterval(spinTimer.current);
+      spinTimer.current = null;
+    }
+  }, []);
+  // Ask the rule whether a following deck has settled; hand it back if so.
+  const checkSpinFollow = useCallback(
+    (id: DeckId) => {
+      const f = spinFollow.current[id];
+      if (!f) return;
+      const deck = spinDeps.current.engine.deck(id);
+      if (!deck.grabbing) {
+        // Something else ended the grab (a transport action, a load): nothing left to hand back.
+        spinFollow.current[id] = null;
+        return;
+      }
+      const now = performance.now();
+      const action = decideSpinFollow({
+        returnsToPlay: deck.jogReturnsToPlay,
+        vel: deck.jogVelocity,
+        rate: deck.rate,
+        msSinceTick: now - f.lastTick,
+        msSinceRelease: now - f.released,
+      });
+      if (action === "handoff") endSpinFollow(id);
+    },
+    [endSpinFollow],
+  );
+  // The checker runs only while some deck is following; ~15 ms is well inside the 60 ms still
+  // window, so a stopped platter is handed back promptly.
+  const ensureSpinTimer = useCallback(() => {
+    if (spinTimer.current != null) return;
+    spinTimer.current = window.setInterval(() => {
+      checkSpinFollow("A");
+      checkSpinFollow("B");
+    }, 15);
+  }, [checkSpinFollow]);
+  useEffect(
+    () => () => {
+      if (spinTimer.current != null) clearInterval(spinTimer.current);
+    },
+    [],
+  );
   const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const knobAcc = useRef<Record<string, number>>({});
 
@@ -102,16 +174,18 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
       if (lockedRef.current) return; // a watch-only participant can't drive the decks
       // A stepped-up listener may drive ONLY their own deck — block control aimed at the
       // other one (navigation/zoom stay free). A deck-less control event targets `focused`.
-      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector" || ev.type === "library";
+      const evNav = ev.type === "zoom" || ev.type === "focus" || ev.type === "browse" || ev.type === "selector" || ev.type === "selectorHold" || ev.type === "library";
       if (!evNav && !canDriveDeckRef.current((ev as { deck?: DeckId }).deck ?? focused)) return;
       // Map a 0..1 knob to dB with a centre detent at 0 dB (DJ EQ convention).
       const eqDb = (v: number) => (v < 0.5 ? EQ_MIN_DB * (0.5 - v) * 2 : EQ_MAX_DB * (v - 0.5) * 2);
       // Stem-volume knob curve: bottom = 0%, CENTRE = 100% (unity), top = 150% (overdrive).
       const stemKnobGain = (v: number) => (v <= 0.5 ? v * 2 : 1 + (v - 0.5));
-      // ~33⅓ rpm platter feel (720 ticks ≈ 1.8 s), scaled by the user's jog sensitivity.
-      const SEC_PER_TICK = 0.0025 * settings.jogSensitivity;
-      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole
-      // track to find a cue (Mixxx uses ~×150 vs scratch; we ride sensitivity too).
+      // 33⅓ rpm: 720 ticks = one turn = 1.8 s of record. ALWAYS 1:1 — a hand on the platter moves
+      // the record exactly as far as vinyl would (operator, 2026-11-02: the scratch half of the old
+      // sensitivity knob was cut; a scratch that is not 1:1 with the platter is not a scratch).
+      const SEC_PER_TICK = 0.0025;
+      // SHIFT + jog = fast track scan: a much coarser step so a flick sweeps the whole track to find
+      // a cue (Mixxx uses ~×150 vs scratch). Settings ▸ Platter ▸ Search speed scales this alone.
       const SEARCH_SEC_PER_TICK = 0.05 * settings.jogSensitivity;
       // Jog (platter or ring) editing a loop edge. GRID LOCK on → integrate the motion and
       // spend it one beat at a time via adjustStep (a per-tick adjustBy snaps to the same
@@ -122,12 +196,14 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           deck.adjustBy(sec);
           return;
         }
-        const interval = deck.beatgrid?.interval || 0.5;
+        // ★ ONE BEAT PER LOOP_ADJ_ROLL OF PLATTER (operator, 2026-11-06: loop edges on the jog are
+        // "bothersome"). It was one beat per beat-INTERVAL of roll, i.e. ~190 ticks (≈ a quarter
+        // turn) per beat at 128 bpm, slower still on slow tracks. Now a fixed ~30° per beat, any bpm.
         const acc = (loopAdjAcc.current[did] ?? 0) + sec;
-        const steps = Math.trunc(acc / interval);
+        const steps = Math.trunc(acc / LOOP_ADJ_ROLL);
         if (steps !== 0) {
           for (let k = 0; k < Math.abs(steps); k++) deck.adjustStep(Math.sign(steps));
-          loopAdjAcc.current[did] = acc - steps * interval;
+          loopAdjAcc.current[did] = acc - steps * LOOP_ADJ_ROLL;
         } else {
           loopAdjAcc.current[did] = acc;
         }
@@ -183,7 +259,8 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
                 // key use — quick release latches, held release lets go — instead of fx2 being the
                 // only surface that could hold. The press half already shares it: MIDI routes
                 // hotcueN through the same HANDLERS entry the keyboard does.
-                if (fxPadRelease(deck, id, i)) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
+                const rel = fxPadRelease(deck, id, i);
+                if (rel) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i, rel === "alt") });
                 refresh();
               }
             }
@@ -194,14 +271,18 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // shift. Otherwise a latched/held shift would silently turn the FOCUSED deck's ▶ into
           // move-loop, so "jog forward" died intermittently on whichever deck had focus (deck B).
           // The focus-model shift (focusShift/latch/keyboard) only applies to a DECKLESS board.
-          const sh = ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
+          // ★ A BINDING THAT FIXES ITS SHIFT KEEPS IT (operator, 2026-11-06: SHIFT+SYNC "key sync … the
+          // button map does not work"). The FLX4 sends SHIFT+SYNC as its own note, bound to keyMatch
+          // with shift forced OFF, but the deck's held SHIFT (midiShift) still turned it into
+          // keyMatch's SHIFTED action, reset-pitch, so key sync never engaged.
+          const sh = ev.shiftFixed ? ev.shift : ev.shift || midiShift[id] || (ev.deck == null && (focusShift || shiftLatched || shiftHeld));
           // Hardware pad bank → HTL pad mode. The FLX emits a distinct note block per base bank, so a
           // pad press tells us which bank the player is physically in; switch the deck to match BEFORE
           // routing — otherwise every bank stays stuck on whatever software mode was set (all CUE). We
           // only switch when the FAMILY differs, so an active shifted peer (ROLL/FX2/GLBL, set from the
           // shifted bank button) survives a plain pad hit in the same family.
           if (ev.padBank) {
-            const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode;
+            const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode === "cue2" ? "cue" : deck.padMode;
             if (family !== ev.padBank) {
               deck.setPadMode(ev.padBank);
               emitRef.current({ kind: "board", deck: id, id: "padMode", arg: ev.padBank });
@@ -214,7 +295,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // (CC) treat as firm. Scoped to the controller — keyboard unchanged.
           const wasPaused = !deck.playing;
           const cueSlot = /^hotcue(\d)$/.exec(ev.action);
-          const hadCue = cueSlot ? deck.hotCues[Number(cueSlot[1]) - 1] != null : false;
+          const hadCue = cueSlot ? deck.hotCues[cueBankBase(deck.padMode) + Number(cueSlot[1]) - 1] != null : false;
           const isLoop = /^beatLoop\d$/.test(ev.action);
           const firm = (ev.velocity ?? 127) >= 40; // soft tap < 40 = jump only
           handlersRef.current[ev.action]?.(deck, id, sh); // sets / resizes / EXITS the loop (shared toggle)
@@ -294,16 +375,52 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
           const ctl = emitRef.current;
+          // ★ SHIFT + TEMPO FADER = KEY SHIFT (operator, 2026-11-06: "find a way to do key shifting,
+          // possibly by using the same tempo slider during shift mode"), and ABSOLUTE like the tempo
+          // (operator: "the same fix where it jumps so there is no dead zone and the mid point is dead
+          // accurate where the groove is on the physical controller"). Held SHIFT, the slider position
+          // IS the key: the centre groove = 0 semitones (a whole semitone of travel rounds to it), the
+          // ends = ±the KEY range, same span as the on-screen KEY. The first shifted move snaps.
+          // The tempo does not move during the gesture.
+          if (ev.target === "tempo" && ev.shift) {
+            if (!ev.deck) break;
+            const r = settings.pitchRange;
+            const semis = Math.max(-r, Math.min(r, Math.round((ev.value - 0.5) * 2 * r)));
+            if (semis !== deck.pitch) {
+              deck.setPitch(semis);
+              ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
+              refresh();
+            }
+            break;
+          }
+          if (ev.target === "tempo") {
+            // ★ A SYNCED FOLLOWER IGNORES ITS HARDWARE TEMPO SLIDER (operator, 2026-11-03: "sync
+            // problems when using sync/master"). SYNC moves the follower's tempo; the FLX4's slider
+            // does not move with it, and any reading (a brush, the fader's own noise) would release
+            // the lock and jump the tempo. A CDJ ignores a synced deck's slider; so does this.
+            if (engine.syncRole(id) === "slave") break;
+            // ★ THE TEMPO SLIDER IS ABSOLUTE: IT JUMPS (operator, 2026-11-06, choosing between the
+            // three that cannot all hold while slider and tempo disagree, no dead zone, no jump, a true
+            // midpoint: "let it jump so we dont have a dead zone and we keep the true mid point").
+            // Pickup made a dead zone; end-stop scaling and catch-up each broke the midpoint. Now the
+            // slider position IS the tempo (centre = 0 %): after SYNC, the screen, the auto-mixer or a
+            // SHIFT+tempo key shift, the first move snaps the tempo to the slider.
+            deck.setTempo((ev.value - 0.5) * 2 * settings.tempoRange);
+            ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
+            refresh();
+            break;
+          }
           // Soft-takeover for an ABSOLUTE pickup knob (Starrypad): don't move the param
           // until the knob value sweeps THROUGH its current value — so switching focus /
           // first touch never jumps. Once caught it tracks 1:1 (and reaches 0/max).
+          // (The hardware TEMPO slider takes over scaled instead — above.)
           if (ev.pickup) {
             const t = ev.target;
+            const key = t;
             let cur01: number | null = null;
             if (t === "level") cur01 = deck.level / 2;
             else if (t === "trim") cur01 = deck.trim / 2;
             else if (t === "pitch") cur01 = (deck.pitch + settings.pitchRange) / (2 * settings.pitchRange);
-            else if (t === "tempo") cur01 = deck.tempo / settings.tempoRange / 2 + 0.5;
             else if (t === "stemDrums") cur01 = deck.stemLevel("drums") / 1.5;
             else if (t === "stemBass") cur01 = deck.stemLevel("bass") / 1.5;
             else if (t === "stemVocals") cur01 = deck.stemLevel("vocals") / 1.5;
@@ -311,19 +428,13 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             else if (t === "filterHp") cur01 = deck.hpAmount;
             else if (t === "filterLp") cur01 = deck.lpAmount;
             if (cur01 != null) {
-              const st = knobPickup.current[t];
-              const caught = st?.caught === true || (st != null && ((st.last <= cur01 && ev.value >= cur01) || (st.last >= cur01 && ev.value <= cur01)));
-              knobPickup.current[t] = { caught, last: ev.value };
+              const next = pickupStep(knobPickup.current[key], cur01, ev.value);
+              knobPickup.current[key] = next;
+              const caught = next.caught;
               if (!caught) break; // not caught yet → ignore so it never jumps
             }
           }
           switch (ev.target) {
-            case "tempo": {
-              const pct = (ev.value - 0.5) * 2 * settings.tempoRange;
-              deck.setTempo(pct);
-              ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
-              break;
-            }
             case "level":
               // The on-screen channel fader spans 0..2 (unity at centre), so map the
               // physical fader 1:1 across that whole range — top of throw = full boost.
@@ -452,10 +563,23 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const deck = engine.deck(ev.deck);
           jogTouched.current[ev.deck] = ev.down;
           if (ev.down) {
-            if (jogVinyl.current[ev.deck]) {
+            if (spinFollow.current[ev.deck] && deck.grabbing) {
+              // The hand caught the still-spinning platter: the grab never ended, so just stop
+              // following. A fresh scrubBegin would re-announce a jog start with no end.
+              spinFollow.current[ev.deck] = null;
+            } else if (jogVinyl.current[ev.deck]) {
+              spinFollow.current[ev.deck] = null;
               deck.scrubBegin();
               onJogStart(ev.deck);
             }
+          } else if (deck.grabbing && jogVinyl.current[ev.deck]) {
+            // Vinyl-mode release: the platter is still the record (App/jogSpinFollow.ts). Keep the
+            // grab, let the free-spin ticks drive it, and hand back once it settles. A release
+            // with the hand held still hands back on this very check, so it adds no latency.
+            const now = performance.now();
+            spinFollow.current[ev.deck] = { released: now, lastTick: now };
+            ensureSpinTimer();
+            checkSpinFollow(ev.deck);
           } else if (deck.scrubbing) {
             deck.scrubEnd();
             onJogEnd(ev.deck);
@@ -514,6 +638,36 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             loopAdjustJog(deck, ev.deck, ev.delta * SEC_PER_TICK);
             break;
           }
+          // ★ ON THE FLX4 THIS STREAM IS MOSTLY NOT A RING. Measured: CC 0x21 arrives 0% while the
+          // top plate is touched and overwhelmingly in the seconds after a touch-up, i.e. it is the
+          // platter still turning after the hand left (decision 8283a6e8). While a free-spin follow
+          // is live, that turning IS the record moving, so it drives the platter like a scratch.
+          // Outside a follow it stays what it was: a nudge (playing) or a frame-search (paused).
+          // ★ PAUSED, THE RING IS A SEARCH YOU CAN HEAR. It used to call deck.bend → a silent
+          // needleDrop seek per tick, with no screen refresh on this path, so the operator saw
+          // "when paused it does nothing in real time then skips the time when main wheel touched
+          // again or played". Now a paused turn grips the platter like a light touch: the ticks
+          // drive it audibly and visibly (scratch resampler, 1:1 like the platter), and it lets go
+          // once the ring has been still for the follow's still window (jogSpinFollow.ts), resting
+          // where it stopped. SHIFT + jog remains the coarse fast search.
+          if (!spinFollow.current[ev.deck] && !deck.playing && !deck.jogging) {
+            deck.scrubBegin();
+            onJogStart(ev.deck);
+            const now = performance.now();
+            spinFollow.current[ev.deck] = { released: now, lastTick: now, search: true };
+            ensureSpinTimer();
+          }
+          if (spinFollow.current[ev.deck] && deck.grabbing) {
+            const sec = ev.delta * SEC_PER_TICK;
+            deck.scrubMove(sec);
+            emitJog(ev.deck, sec);
+            const f = spinFollow.current[ev.deck]!;
+            f.lastTick = performance.now();
+            if (f.search) f.released = f.lastTick;
+            refresh(); // the playhead moves now, not on the next unrelated repaint
+            checkSpinFollow(ev.deck);
+            break;
+          }
           deck.bend(ev.delta * SEC_PER_TICK);
           break;
         }
@@ -539,6 +693,13 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // open/close the library (the chin's Library button / Alt already do that).
           libRef.current?.toggleSourceNav();
           break;
+        case "selectorHold":
+          // HOLD the browse encoder → close the library and hand the board back to the decks. The
+          // press that started the hold already flipped tracks↔sources; reset that so the library
+          // reopens on the track list, where the next spin is expected to land.
+          libRef.current?.setSourceNav(false);
+          closeLibrary();
+          break;
         case "browse":
           // Browse encoder → step the library row cursor (opens the panel if it was shut).
           libRef.current?.browse(ev.delta);
@@ -555,7 +716,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, closeLibrary, ensureSpinTimer, checkSpinFollow],
   );
 
   return { onMidiEvent };

@@ -99,6 +99,19 @@ export interface DeviceProfile {
   // Per-deck status bytes for OUTPUT (LED) messages.
   noteStatus?: Record<DeckId, number>; // button LEDs (e.g. {A:0x90, B:0x91})
   padStatus?: Record<DeckId, number>; // hot-cue pad LEDs (e.g. {A:0x97, B:0x99})
+  /** The channel LEVEL METER (VU) LEDs: a CC per deck, value 0–127 = how much of the column is lit.
+   *  Output-only: no button, no firmware toggle state to desync. */
+  meter?: { status: Record<DeckId, number>; data: number };
+  /** A host-lit "smart" lamp whose hardware feature ECHOES one knob onto another knob's CCs
+   *  (FLX4 SMART CFX: lit, the COLOR knob also sends TRIM). While lit, a message on an `echoes`
+   *  address that lands within `windowMs` of a message on that deck's `source` addresses is the
+   *  echo, not a real turn, and is dropped. `[status, data]` pairs. */
+  echoLamp?: {
+    lamp: [number, number];
+    source: Record<DeckId, [number, number][]>;
+    echoes: Record<DeckId, [number, number][]>;
+    windowMs: number;
+  };
   feedback?: MidiFeedbackMap;
   // SysEx sent once on connect AND repeated on `keepAliveMs` to keep some Pioneer
   // gear awake / streaming (the "rekordbox handshake"). Needs sysex permission.
@@ -108,11 +121,11 @@ export interface DeviceProfile {
 
 // A decoded, normalized event handed to the app dispatcher.
 export type MidiEvent =
-  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number; padBank?: PadBank } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play); padBank = the hardware pad bank (switch the deck's pad mode to match)
+  | { type: "button"; action: string; deck?: DeckId; pressed: boolean; shift: boolean; velocity?: number; padBank?: PadBank; shiftFixed?: boolean } // deck omitted = focused deck; velocity 0..127 for note pads (drives soft-preview vs hard-play); padBank = the hardware pad bank (switch the deck's pad mode to match)
   | { type: "shift"; deck?: DeckId; down: boolean } // the SHIFT button → drives HTL's shift mode (deck omitted = focused)
   | { type: "focus"; deck: DeckId } // a focus button → make this deck the one the controller drives
   | { type: "beatjump"; deck: DeckId; beats: number; shift: boolean }
-  | { type: "fader"; target: FaderTarget; deck?: DeckId; value: number; pickup?: boolean } // value 0..1 (invert applied). pickup = apply soft-takeover in App
+  | { type: "fader"; target: FaderTarget; deck?: DeckId; value: number; pickup?: boolean; shift?: boolean } // value 0..1 (invert applied). pickup = apply soft-takeover in App. shift = that deck's SHIFT is held
   | { type: "knob"; target: FaderTarget; deck?: DeckId; delta: number } // relative encoder nudge (signed fraction of full range)
   | { type: "jogTouch"; deck: DeckId; down: boolean }
   | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean } // delta = signed ticks
@@ -122,6 +135,7 @@ export type MidiEvent =
   | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform
   | { type: "load"; deck: DeckId }
   | { type: "selector" } // browse-encoder press
+  | { type: "selectorHold" } // browse-encoder HELD (~0.5 s): close the library
   | { type: "library" }; // toggle the library dock open/closed (gamepad Guide → crate-dig mode)
 
 // Per-deck button state used to drive LED feedback.

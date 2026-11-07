@@ -6,6 +6,7 @@
 // (zero-copy). Demucs is the ONLY separator — Open-Unmix and the demucs-rs wasm
 // engine were ripped (the project settled on one engine).
 import { FFT, demucsMag, demucsIstftChannel, DEMUCS_BINS } from "./fft";
+import { cachedModelBytes } from "./modelCache";
 
 const NFFT = 4096;
 const MODEL_SR = 44100;
@@ -18,7 +19,18 @@ type Target = (typeof TARGETS)[number];
 // compute (~1 s GPU / multi-s CPU), so smoothness wins. Keeps playback + controls
 // primary, as asked.
 const SEGMENT_YIELD_MS = 16; // ~one frame, so the compositor gets a full paint slot per segment
-const yieldSegment = () => new Promise((r) => setTimeout(r, SEGMENT_YIELD_MS));
+// ★ PAUSED WHILE AUTO MIXES. The main thread relays the GPU quiet window here ({type:"pause"}).
+// A WebGPU dispatch cannot be preempted, but this loop already stops between segments (~0.5 s
+// of GPU each), so a separation that was running when a transition began now finishes its
+// current segment and WAITS — instead of running on through the blend and starving the
+// compositor (measured 2026-11-05: frames up to 1 s, no script in them, all through a mix).
+// Nothing is lost: the job resumes from the next segment when the window lifts.
+let paused = false;
+let resumeWaiters: Array<() => void> = [];
+const yieldSegment = async () => {
+  await new Promise((r) => setTimeout(r, SEGMENT_YIELD_MS));
+  while (paused) await new Promise<void>((r) => resumeWaiters.push(r));
+};
 
 const fft = new FFT(NFFT);
 
@@ -196,9 +208,23 @@ function getSession(ort: any, url: string, eps: string[] = ["wasm"]): Promise<an
     // in this Promise.all, so nulling it for the sidecar silenced the model download's reports for as
     // long as the probe was in flight. Caught in review before commit; a parameter cannot be clobbered
     // by a sibling await.
+    // Both go through the persistent model cache (modelCache.ts): the HF resolve URL redirects to a
+    // freshly-SIGNED CDN URL every time, so the HTTP cache never hit and every worker spawn re-pulled
+    // the full 170 MB. A cache hit reports no load progress — there is no download to report.
+    const onBytes = reportLoad ?? undefined;
+    // SAY WHICH IT WAS. "Downloading model" kept being reported after the cache landed; whether a
+    // load was a cache hit, a download, or a download whose cache write failed was invisible.
+    const t0 = performance.now();
+    let downloaded = false;
     const [modelBytes, dataBytes] = await Promise.all([
-      fetchResumable(url, undefined, reportLoad ?? undefined),
-      fetchResumable(dataUrl).catch(() => null),
+      cachedModelBytes(url, () => {
+        downloaded = true;
+        return fetchResumable(url, undefined, onBytes);
+      }).then((b) => {
+        self.postMessage({ type: "modelCache", url, hit: !downloaded, bytes: b?.byteLength ?? 0, ms: Math.round(performance.now() - t0), cacheApi: typeof caches !== "undefined" });
+        return b;
+      }),
+      cachedModelBytes(dataUrl, () => fetchResumable(dataUrl)).catch(() => null),
     ]);
     if (!modelBytes) throw new Error(`model fetch returned 404: ${url}`);
     const opts: Record<string, unknown> = { executionProviders: eps };
@@ -393,8 +419,17 @@ interface SeparateMsg {
   threads: number;
 }
 
-self.onmessage = async (e: MessageEvent<SeparateMsg>) => {
+self.onmessage = async (e: MessageEvent<SeparateMsg | { type: "pause"; on: boolean }>) => {
   const msg = e.data;
+  if (msg.type === "pause") {
+    paused = msg.on;
+    if (!paused) {
+      const w = resumeWaiters;
+      resumeWaiters = [];
+      for (const r of w) r();
+    }
+    return;
+  }
   if (msg.type !== "separate") return;
   const { id, threads } = msg;
   try {

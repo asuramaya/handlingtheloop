@@ -29,9 +29,32 @@ export const SCRATCH_WORKLET_SRC = `
 // machinery entirely (see stretchWorklet.ts's loadPcm handler, the writer side).
 if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 
-// One render quantum. Below this an update carries a newer position but no usable timing — the
-// worklet has not run in between, so nothing has actually elapsed that we could measure against.
-const MIN_INTERVAL = 128;
+// The shortest stretch of wall clock a re-pace may measure speed over. Shorter updates still move
+// the TARGET (the chase always aims at the newest position); they just bank their time.
+//
+// ★ IT WAS ONE RENDER QUANTUM (128 samples, ~2.7 ms), AND THAT IS WHAT MADE A JOG "TRIP OVER
+// ITSELF". Operator: "smeared and trips over itself... not nearly as bad on touch, noticeably
+// worse on mouse, and super bad on board". A DDJ-FLX4 moves in whole 720/rev ticks (2.5 ms of
+// audio each) on a 1 ms USB clock, so a 2.7 ms window holds 0, 1 or 2 ticks and the speed snapped
+// between ~0×, 0.93× and 1.85× during a steady 0.35× drag. Touch never saw it: its updates are
+// 16.7 ms apart, already longer than the window. Measured by driving THIS source with one hand
+// motion through three input shapes (scripts/joglab/scratchreplay.mjs):
+//   window      board roughness   board lag   board trips   touch / mouse
+//   128 (2.7ms)      0.239           2.7 ms        26        unchanged
+//   512 (10.7ms)     0.044          13.3 ms        11        unchanged
+//   768 (16ms)       0.052          21.3 ms        19        unchanged
+// 512 brought the synthetic board level with touch (0.048) at a lag far under touch's own ~37 ms,
+// and costs pointer input nothing (their gaps already exceed it).
+// THEN A REAL CAPTURE (operator's FLX4, 2026-11-02, 18.3 s, replayed through this source) moved it
+// to 640 together with the granular threshold below: real scratching scored roughness 1.698 at 128,
+// 0.569 at 512, and 0.194 at 640 once the granular threshold stopped firing on ordinary fast
+// strokes; the synthetic board stays at 0.044 with its fewest false reversals (10). (That
+// recorder stores whole milliseconds, which adds jitter longer windows average away, so the real
+// capture is biased toward longer windows; 640 rather than its preferred 768 is the hedge.)
+const MIN_INTERVAL = 640;
+// How far a move from rest may travel and still be a MICRO JOG (seconds of audio), for the arrival
+// stop below. A nudge is a few ticks (2.5 ms each); a scratch sweeps tens of milliseconds and more.
+const MICRO_SPAN = 0.06;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -99,6 +122,8 @@ class Scratch extends AudioWorkletProcessor {
         this.interval = this.nominal;
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
+        this.onset = 0; // samples of first-motion window left (see the move handler)
+        this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the arrival stop
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -131,7 +156,84 @@ class Scratch extends AudioWorkletProcessor {
         // position — so take the position and bank the time, and recompute the step only once a
         // real interval has actually elapsed. Numerator and denominator then always describe the
         // same stretch of wall clock, which is the property both broken versions gave up.
-        {
+        // ★ BUT A MOVE FROM REST HAS NOTHING TO WAIT FOR. Operator: micro jogs "feel laggy on first
+        // touch". The banking above held the first tick after a still platter until MIN_INTERVAL
+        // of input time had passed, i.e. until the next ~60 Hz settle post, and only THEN chased
+        // over that whole interval: 30-48 ms to cover half of a 1-4 tick nudge (measured on this
+        // worklet). From rest there is no previous pace to protect, so pace it at once over
+        // MIN_INTERVAL; the following posts re-pace from real timing as usual.
+        const fromRest =
+          (this.step < 0 ? -this.step : this.step) < 1e-3 &&
+          (this.curStep < 0 ? -this.curStep : this.curStep) < 1e-3 &&
+          Math.abs(this.target - this.pos) < 1 &&
+          Math.abs(d.pos - this.target) >= 1;
+        // Inside that first MIN_INTERVAL (the ONSET) every tick re-aims at once too: a nudge is
+        // usually a burst of 3-8 ticks inside a few ms, and banking ticks 2..n left the head chasing
+        // only the first one until the next settle post.
+        const dtIn = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
+        // ★ ARRIVAL STOP (operator, 2026-11-03: micro jogs "still need work for the slurry feel and
+        // sound"). The glide keeps its last pace until the NEXT message, and after a nudge the next
+        // message is the ~60 Hz settle post: the head ran past where the hand stopped by 23-59% of
+        // the nudge, then re-paced BACKWARD to it, and took 110-190 ms to settle (measured on this
+        // source by scripts/joglab/microjog.mjs). A forward-then-back slide the hand never made.
+        // Stopping at the target ALWAYS cured that and wrecked ordinary scratching (touch roughness
+        // 0.048 → 0.327, board trips 10 → 30): mid-gesture the head meets each target just as the
+        // next update is due, and parking whenever one is late is a stutter. And "a repeated
+        // position means the hand is still" is not reliable either: 60 Hz touch gets settle posts
+        // between ordinary moves. So the stop is scoped to what a micro jog IS: motion that started
+        // from rest and has not travelled further than MICRO_SPAN from there. A scratch leaves that
+        // span within its first stroke and runs exactly the original glide from then on.
+        const rel = (d.pos - this.restPos) / sampleRate;
+        // A GENUINE rest: no real movement reported for ~33 ms. Without this the stop below
+        // re-armed itself: it leaves the head exactly at rest, so the next ordinary 60 Hz touch move
+        // looked like a move from rest and the whole gesture became a string of stops.
+        // ★ A SLOW, STEADY TURN IS NOT A STRING OF NUDGES. Operator, 2026-11-03: the paused outer
+        // ring is "kind of choppy instead of giving me micro adjustment". A slowly turned ring sends
+        // sparse, evenly spaced ticks (20-60 ms apart), and each one reached the head at rest, so
+        // each got the fast first-touch pacing: cover the tick in 13 ms, then park until the next.
+        // Measured (microjog.mjs ring search): parked 9-67% of the turn, speed spread 0.45-1.64×.
+        // A tick that arrives on the rhythm of the ones before it (within 2.5× the last gap, under
+        // 150 ms) is CONTINUING motion: pace it over that gap, so the head arrives as the next tick
+        // does and glides at the ring's own speed. A tick after real stillness keeps the fast onset.
+        // (> 20 ms: only SPARSE input. 60 Hz touch reaches "rest" between ordinary moves ~17 ms
+        // apart, and pacing those as a slow turn cost touch scratching its alignment — measured.)
+        const steady = fromRest && this.lastGap > 0 && this.quiet > 960 && this.quiet < 2.5 * this.lastGap && this.quiet < 7200;
+        if (fromRest && !steady && this.quiet > 1600) { this.micro = true; this.restPos = this.target; }
+        else if (this.micro && (rel > MICRO_SPAN || rel < -MICRO_SPAN)) this.micro = false;
+        if (d.pos !== this.target) { this.lastGap = this.quiet < 1e8 ? this.quiet : 0; this.quiet = 0; }
+        if (!this.granular && d.pos === this.target) {
+          // ★ A SETTLE POST (grabTick re-posting the held position) NEVER HURRIES THE HEAD. It used
+          // to re-pace the remaining distance over the time since the last re-pace, so between two
+          // slow ticks the head was rushed onto the last one and parked: the other half of the
+          // choppiness. It carries no new position, so: if the head already went past the hand,
+          // stop where it is (no slide back, see ARRIVAL STOP); if it is still heading there at its
+          // own pace, just bank the time; only a head stopped short is re-paced, as before.
+          // Both are SCOPED, and measured to need it: applied to every gesture, the hold took board
+          // roughness 0.044 → 0.090 and the real FLX4 capture 0.173 → 0.250, and the banking alone
+          // still cost 60 Hz touch scratching (0.049 → 0.058, worse alignment). So the hold is for
+          // a micro jog and the banking for a steady slow turn; anything else runs the old pacing.
+          const ahead = (this.pos - this.target) * this.curStep;
+          if (this.micro && ahead > 0) { this.target = this.pos; this.step = this.curStep = 0; this.since = 0; return; }
+          if (this.steadyRun && (this.target - this.pos) * this.curStep > 0) { this.accDt += dtIn; this.since = 0; return; }
+        }
+        if (steady) {
+          this.interval = Math.max(MIN_INTERVAL, Math.min(7200, this.lastGap)); // lastGap = this tick's gap (set above)
+          this.accDt = 0;
+          this.onset = 0;
+          this.repace = true;
+          this.steadyRun = true;
+        } else if (fromRest) {
+          this.steadyRun = false;
+          this.interval = MIN_INTERVAL;
+          this.accDt = 0;
+          this.onset = MIN_INTERVAL;
+          this.repace = true;
+        } else if (this.onset > 0 && (this.onset -= dtIn) > 0) {
+          this.interval = MIN_INTERVAL;
+          this.accDt = 0;
+          this.repace = true;
+        } else {
+          this.onset = 0;
           const dtSamples = d.dtMs > 0 ? (d.dtMs * sampleRate) / 1000 : 0;
           this.accDt += dtSamples > 0 ? dtSamples : (this.since > 0 ? this.since : 0);
           if (this.accDt >= MIN_INTERVAL || this.interval <= 0) {
@@ -152,20 +254,30 @@ class Scratch extends AudioWorkletProcessor {
         if (s > 32) s = 32; else if (s < -32) s = -32; // continuous resampler clamp
         this.step = s;
         // Switch to granular when the finger outruns continuous playback (hysteresis
-        // so it doesn't flutter at the boundary). Below ~8× a hand move still sounds
-        // like vinyl; above it the continuous pointer would lag into a multi-second spin.
+        // so it doesn't flutter at the boundary).
+        // ★ THE TRIGGER WAS 8× AND THAT IS THE "POORLY DONE FF/RW" A JOG SCRATCH SOUNDED LIKE.
+        // reqSpeed is the CATCH-UP speed (target − pos over the interval), which overshoots the
+        // hand whenever the read head trails it, so ordinary fast strokes crossed 8× and played
+        // as 45 ms needle-search grains: 14.5% of the operator's real hands-on scratching at the
+        // old window, 8.6% at the new one. A record chirps like vinyl well past 8×; granular is
+        // for zoomed-out waveform drags covering MINUTES, which run far faster than any hand on a
+        // platter. Entering at 24× (leaving at 16×) took real scratching to 0% granular while
+        // those drags still get grains. The continuous resampler is clamped at 32× and
+        // anti-aliased, so 8–24× is within what it was built for.
         const reqSpeed = this.stepRaw < 0 ? -this.stepRaw : this.stepRaw;
-        if (!this.granular && reqSpeed > 8) {
+        if (!this.granular && reqSpeed > 24) {
           this.granular = true;
           this.phaseA = 0; this.startA = this.pos; this.startB = this.pos; this.curRaw = this.stepRaw;
-        } else if (this.granular && reqSpeed < 5) {
+        } else if (this.granular && reqSpeed < 16) {
           this.granular = false; this.curStep = 0;
         }
         // Adapt the pitch-smoothing time constant to the ACTUAL update interval:
         // dense (high-rate, per-input) updates need almost no smoothing → snappy;
         // sparse ~60 Hz updates need more to bridge the gap without a stair-step.
         // Clamp 1…8 ms. (Updates now arrive at the mouse's full report rate.)
-        const tau = Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
+        // During the onset the head starts from standstill: a short tau, or the smoothing alone
+        // spends ~8 ms ramping up to a speed the nudge only needs for ~13.
+        const tau = this.onset > 0 ? 0.002 : Math.min(0.008, Math.max(0.001, (this.interval / sampleRate) * 0.6));
         this.kStep = 1 - Math.exp(-1 / (tau * sampleRate));
       } else if (d.type === 'ramp') {
         // Begin an audio-rate motor ramp. vel = initial read velocity (samples/output-sample,
@@ -352,6 +464,12 @@ class Scratch extends AudioWorkletProcessor {
       if (this.curStep > 32) this.curStep = 32; else if (this.curStep < -32) this.curStep = -32;
       const p0 = this.pos;
       this.pos += this.curStep; // feed-forward glide (fills the inter-update gap, no parking)
+      this.quiet++;
+      if (this.micro && this.curStep !== 0) {
+        // A micro jog lands ON the hand's position and stops there (see ARRIVAL STOP above).
+        const r0 = this.target - p0, r1 = this.target - this.pos;
+        if (r0 * r1 < 0 || r1 === 0) { this.pos = this.target; this.curStep = 0; this.step = 0; }
+      }
       if (this.pos < 0) { this.pos = 0; if (this.curStep < 0) this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; if (this.curStep > 0) this.curStep = 0; }
       const sp = this.curStep < 0 ? -this.curStep : this.curStep;

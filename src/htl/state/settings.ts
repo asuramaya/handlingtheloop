@@ -25,6 +25,7 @@ export interface Settings {
   loopColor: string; // waveform loop region + loop markers
   markerColor: string; // waveform beat grid markers
   shiftColor: string; // SHIFT-mode / alt-action highlight ("Accents"); "" = default amber
+  slipMoveColor: string; // the waveform layer over a held CENSOR / BRAKE / SPIN; "" = the SHIFT highlight
   stripColor: string; // waveform strip (body); "" = follow the deck accent
   stemDrumsColor: string; // per-stem waveform colours; "" each = built-in default
   stemBassColor: string;
@@ -37,13 +38,11 @@ export interface Settings {
   tempoRange: number; // tempo fader half-range (±%)
   pitchRange: number; // KEY knob half-range (± semitones)
   jumpBeats: number; // beat-jump / loop-move "skip" resolution, in beats
-  jogWeight: number; // platter inertia, 0 = featherweight/snappy … 1 = heavy flywheel
-  jogDrag: number; // coast friction, 0 = long frictionless glide … 1 = quick brake
-  jogSensitivity: number; // MIDI jog scratch/search scale (0.25..4, 1 = 33⅓ rpm vinyl default)
+  jogWeight: number; // Settings ▸ Platter "Mass": 0 = featherweight/snappy … 1 = heavy flywheel; drag derives from it (platterDrag)
+  jogSensitivity: number; // hardware jog SHIFT-SEARCH speed only (0.25..4); scratching is always 1:1 with the platter
   jogBendStrength: number; // MIDI jog pitch-bend push scale (0.25..2, 1 = default)
-  vinylSpeed: boolean; // Vinyl Speed Adjust: motor brake/soft-start ramps on play/pause + touch (off = instant)
-  vinylBrakeTime: number; // 0..1 — pause-brake + platter-touch decel time (rekordbox Touch/Brake)
-  vinylStartTime: number; // 0..1 — play soft-start spin-up time (rekordbox Release/Start)
+  vinylBrakeTime: number; // 0..1 — Pause's motor spin-down; 0 = instant (there is no separate on/off any more)
+  vinylStartTime: number; // 0..1 — Play's motor spin-up; 0 = instant
   backSpinLength: number; // 0..1 — spinback length + strength (Short … Long)
   slip: boolean; // Slip mode: a scrub/hold returns to the live (shadow) position on release (off = stay where you scratched)
   wheelSeeks: boolean; // mouse wheel over a waveform: false = zoom (default), true = seek/scrub
@@ -126,6 +125,11 @@ export interface Settings {
   // gestures whenever they fit. This is deliberately NOT a quality setting — none of these makes
   // the mix better, they make it more present.
   autoPerformance: AutoPerformance;
+  /** BEAT-MATCH RANGE, in percent: the widest tempo move (after half/double folding) AUTO and the
+   *  Smart Fader will make to beat-match two tracks. Past it they crossfade with both tempos left
+   *  alone. 10 = a DJ's pitch fader plus a little. 41 (the top) = any pair: every pair folds to
+   *  within √2, so this restores the old "bridge two genres" morph (operator, 2026-11-04). */
+  beatlockRangePct: number;
   /** Where AUTO routes a stem during a transition — see AutoFxSettings. The EFFECT itself lives
    *  in the deck's rack, in a chain named AUTO, not here. */
   autoFx: AutoFxSettings;
@@ -283,6 +287,7 @@ export const DEFAULT_SETTINGS: Settings = {
   loopColor: "#6ee7a8",
   markerColor: "#ffd64a",
   shiftColor: "#ffd250", // SHIFT highlight ("Accents")
+  slipMoveColor: "", // follows the SHIFT highlight until set
   stripColor: "", // empty = use the deck's own accent for the waveform
   stemDrumsColor: "", // empty each = the built-in per-stem colour
   stemBassColor: "",
@@ -296,12 +301,10 @@ export const DEFAULT_SETTINGS: Settings = {
   pitchRange: 12,
   jumpBeats: 4,
   jogWeight: 0.4,
-  jogDrag: 0.4,
   jogSensitivity: 1,
   jogBendStrength: 1,
-  vinylSpeed: false,
-  vinylBrakeTime: 0.22,
-  vinylStartTime: 0.18,
+  vinylBrakeTime: 0, // instant, as the old default (motor toggle off) was
+  vinylStartTime: 0,
   backSpinLength: 0.5,
   slip: false,
   wheelSeeks: false,
@@ -336,6 +339,7 @@ export const DEFAULT_SETTINGS: Settings = {
   syncPhaseGain: 0.06, // the shipped gentleness — nobody's sync feel changes until they choose it
   mobileStems: false, // phones default to the plain mix (lightest); opt in to on-device stems in Settings ▸ Stems
   autoPerformance: "standard", // the small human touches on, the dramatic gestures kept in reserve
+  beatlockRangePct: 10, // beat-match only pairs a pitch fader could match; see analyze.ts BEATLOCK_MAX
   autoFx: { stem: "vocals", seeded: false }, // vocals: the stem that otherwise stops dead
   micFxSeeded: false, // the MIC chain has not been offered yet; the mic lands on the sum until it is
   freqColors: true, // crispy rekordbox-style band colours on by default; off → flat per-deck colour
@@ -440,8 +444,23 @@ export const ACCENT_PRESETS = [
 const store = new Store<Settings>("settings", DEFAULT_SETTINGS, 1);
 migrateLegacyKey("htl.settings", store); // pre-versioned key
 
+/** Stored or synced settings from before Settings ▸ Platter (2026-11-02) carry a motor on/off
+ *  toggle and a separate drag. The toggle is now "Start / Brake at 0 = instant", so a stored OFF
+ *  must zero both times or everyone who had the motor off would suddenly get one; drag is now
+ *  derived from mass. Idempotent: a migrated object passes through unchanged. */
+export function migrateSettings<T extends Partial<Settings>>(raw: T): T {
+  const s = raw as T & { vinylSpeed?: boolean; jogDrag?: number };
+  if (s.vinylSpeed === false) {
+    s.vinylBrakeTime = 0;
+    s.vinylStartTime = 0;
+  }
+  delete s.vinylSpeed;
+  delete s.jogDrag;
+  return s;
+}
+
 export function loadSettings(): Settings {
-  const s = store.get();
+  const s = migrateSettings(store.get());
   // The onnx rip: demucs is the ONLY separator. A stored "htdemucs-onnx" resolves to
   // "htdemucs" via getStemModel's legacy map — persist the mapped id so the raw string
   // never resurfaces in debug UIs. Anything else that isn't in the registry (umx*,
@@ -549,6 +568,8 @@ export function applySettings(s: Settings) {
   root.style.setProperty("--wv-loop", s.loopColor || "#6ee7a8");
   root.style.setProperty("--wv-marker", s.markerColor || "#ffd64a");
   root.style.setProperty("--shift", s.shiftColor || "#ffd250"); // SHIFT / alt-action highlight
+  // The slip-move layer on the waveform (CENSOR / BRAKE / SPIN): its own colour, else SHIFT's.
+  root.style.setProperty("--slip-move", s.slipMoveColor || s.shiftColor || "#ffd250");
   if (s.stripColor) root.style.setProperty("--wv-strip", s.stripColor);
   else root.style.removeProperty("--wv-strip");
   document.body.classList.toggle("no-glow", !s.glow);

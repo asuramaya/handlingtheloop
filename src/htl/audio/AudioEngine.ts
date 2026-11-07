@@ -1,4 +1,7 @@
 import { barAnchor, barPhase, beatPhase, beatTimeOffset, commonPhaseError, localTempoDev, nearestBeat, piTrim, slaveFoldTarget, smartKeyShift } from "../analysis/analyze";
+import { crossfadeGains } from "./crossfadeCurve";
+import { phaseAlignedStart } from "./syncAlign";
+import { SYNC_INTEGRAL_K, SYNC_PHASE_K, SYNC_TICK_MS } from "./syncLoop";
 import { trace, event } from "../debug/trace";
 import { Deck, type SyncRole, type StretchEngineConfig } from "./Deck";
 import { cachedBytes } from "./trackCache";
@@ -217,6 +220,8 @@ export class AudioEngine {
     // Sync follow/release: any tempo change routes through the state machine.
     this.deckA.onTempoChange = () => this.onDeckTempo("A");
     this.deckB.onTempoChange = () => this.onDeckTempo("B");
+    this.deckA.startAlign = (pos) => this.syncedStart("A", pos);
+    this.deckB.startAlign = (pos) => this.syncedStart("B", pos);
     // Key-lock follow/release: any pitch change routes through the KEY machine.
     this.deckA.onPitchChange = () => this.onDeckPitch("A");
     this.deckB.onPitchChange = () => this.onDeckPitch("B");
@@ -442,6 +447,15 @@ export class AudioEngine {
   // Modules we've successfully addModule()'d — so a re-run never double-registers (which
   // throws), but still re-creates any NODE that failed to attach.
   private modulesAdded = new Set<string>();
+
+  /** The FX devices' worklets (reverb, crush, mod delay, comp, tape) are all registered, so a rack
+   *  built now gets real devices, not pass-throughs. Callers that RESTORE a rack (a stored room
+   *  snapshot at boot) check this and wait for ensureWorklets() when it is false, instead of
+   *  building every device degraded and leaning on the repair (operator console, 2026-11-04: two
+   *  "worklet unavailable" warnings per boot, then "fx repaired… 4 device(s) rebuilt"). */
+  get fxWorkletsReady(): boolean {
+    return ["reverb", "crush", "moddelay", "comp", "tape"].every((m) => this.modulesAdded.has(m));
+  }
 
   /** addModule() a worklet source exactly once. Records the failure (surfaced in Settings ▸
    *  Debug) and returns false so the caller skips node creation this round. */
@@ -1068,10 +1082,10 @@ export class AudioEngine {
   private slaveId: DeckId | null = null;
   private propagating = false; // guards the master→slave tempo echo from recursing
   private syncCorrectTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly SYNC_TICK_MS = 80; // phase-lock poll period
+  private static readonly SYNC_TICK_MS = SYNC_TICK_MS; // phase-lock poll period (syncLoop.ts: shared with Settings ▸ Sync pull)
   /** Default P-gain: rate trim per beat of phase error (gentle, ~8 s time constant). Overridable —
    *  see settings.syncPhaseGain and setSyncPhaseGain; the measurement is recorded beside the setting. */
-  private static readonly SYNC_PHASE_K = 0.06;
+  private static readonly SYNC_PHASE_K = SYNC_PHASE_K;
   private syncPhaseK = AudioEngine.SYNC_PHASE_K;
   /** How hard SYNC pulls a deck back onto the beat. Clamped to a range that is measured, not
    *  guessed: below the shipped value the loop is slower than the eleven seconds already reported as
@@ -1079,7 +1093,7 @@ export class AudioEngine {
   setSyncPhaseGain(k: number) {
     this.syncPhaseK = Number.isFinite(k) ? Math.max(0.02, Math.min(0.3, k)) : AudioEngine.SYNC_PHASE_K;
   }
-  private static readonly SYNC_INTEGRAL_K = 0.003; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
+  private static readonly SYNC_INTEGRAL_K = SYNC_INTEGRAL_K; // I-gain: nulls the residual steady-state offset a P-only loop leaves; slow + well-damped (ζ≈0.7) so it tightens inaudibly, no breathing
   private static readonly SYNC_FF_SMOOTH = 0.25; // one-pole smoothing on the rubato feed-forward (~0.28 s @ 80 ms tick) so the rate never STEPS as the beat window advances
   private syncIntegral = 0; // PI accumulator (reset on engage / track change / pause)
   private syncFF = 0; // smoothed rubato feed-forward (master local-tempo dev − slave's); reset with the integral
@@ -1161,6 +1175,16 @@ export class AudioEngine {
     const mg = master.beatgrid;
     if (!sg || !mg) {
       this.syncDiagState = this.idleSyncDiag(sid);
+      return;
+    }
+    // ★ MASTER FOLLOWS THE MUSIC. The follower playing on its own while the master has stopped is
+    // the normal shape of a mix: the outgoing track ended or was paused, and the deck now playing
+    // out is the follower. Leaving the master role on the stopped deck meant its next tempo move
+    // or its next track (reassertSync) re-tuned and re-seeked the LIVE deck. So the role passes to
+    // the deck that is playing, and the stopped one becomes the follower (its tempo matches the live
+    // deck; play() starts it in phase). A scratch or motor ramp on the master is not a stop.
+    if (slave.playing && !master.playing && !master.jogging && !this.commandedRamp) {
+      this.handMasterTo(sid);
       return;
     }
     if (!slave.playing || !master.playing) {
@@ -1261,6 +1285,34 @@ export class AudioEngine {
     this.writeRoles();
   }
 
+  /** Make `id` the MASTER of the pair (the other deck follows it), matching the follower's tempo
+   *  without moving either deck's position: the follower is stopped, and play() aligns its phase. */
+  private handMasterTo(id: DeckId) {
+    if (this.slaveId == null || this.masterId === id) return;
+    trace("sync.handoff", { master: id });
+    this.slaveId = other(id);
+    this.syncFoldFactor = null;
+    this.syncIntegral = 0;
+    this.syncFF = 0;
+    // The new master is the LIVE deck: fold its phase-lock trim into its tempo so its sounding rate
+    // does not move by a hair (dropping the trim alone would be an audible pitch blip).
+    const m = this.deck(id);
+    const eff = m.rate * (1 + m.syncTrim);
+    this.propagating = true;
+    m.setTempo((eff - 1) * 100);
+    m.setSyncTrim(0);
+    this.propagating = false;
+    this.matchSlaveTempo();
+    this.writeRoles();
+  }
+
+  /** Release the pair (both off) without touching either deck's tempo. */
+  releaseSync() {
+    if (this.slaveId == null) return;
+    this.slaveId = null;
+    this.writeRoles();
+  }
+
   /** Match only the slave's TEMPO to the master's effective BPM (half/double folded).
    *  Used both on engage and on every master tempo change (continuous follow). */
   private matchSlaveTempo() {
@@ -1295,6 +1347,27 @@ export class AudioEngine {
     this.propagating = false;
   }
 
+  /** Where deck `id` should start so it is in phase with the other deck of the SYNC pair (see
+   *  syncAlign.ts). Unchanged unless: SYNC is engaged, the OTHER deck is playing, both have grids,
+   *  and neither is in a loop (a loop deliberately offsets the phase, as in phaseCorrect). Applies to
+   *  either deck: the master started under a playing follower lines up with the follower. */
+  private syncedStart(id: DeckId, pos: number): number {
+    if (this.slaveId == null) return pos;
+    const me = this.deck(id);
+    const them = this.deck(other(id));
+    if (!them.playing || !me.beatgrid || !them.beatgrid) return pos;
+    if (me.loop?.active || them.loop?.active) return pos;
+    const next = phaseAlignedStart(
+      { grid: me.beatgrid, pos, rate: me.rate },
+      { grid: them.beatgrid, pos: them.position(), rate: them.rate },
+    );
+    if (next !== pos) {
+      this.syncIntegral = 0; // a fresh, already-aligned start: the PI starts from zero
+      trace("sync.start", { deck: id, from: +pos.toFixed(3), to: +next.toFixed(3) });
+    }
+    return next;
+  }
+
   /** Tempo-match + phase-align the slave to its master (on engage / re-sync). */
   private alignSlave() {
     const sid = this.slaveId;
@@ -1310,6 +1383,9 @@ export class AudioEngine {
     this.syncIntegral = 0; // fresh engage / re-align → start the PI integral from zero
     this.syncFF = 0; // …and the rubato feed-forward
 
+    // (A stopped follower is still placed here, bar-aligned: the auto-mixer and Smart Fader engage
+    // and press play in the same moment and rely on this for phrase alignment. play() then re-checks
+    // the BEAT phase at the real start, which is what a manual engage-then-play-later needs.)
     // Phase align: bar-level when both downbeats are known (the two "1"s land
     // together — a phrase-tight mix), else per-beat. Minimal move (wrap to nearest).
     if (sg.downbeat != null && mg.downbeat != null) {
@@ -1353,6 +1429,13 @@ export class AudioEngine {
   /** Re-assert the lock after a deck in the pair loads a new track (grid changed). */
   reassertSync(id: DeckId) {
     if (this.slaveId == null || (id !== this.slaveId && id !== this.masterId)) return;
+    // The MASTER deck took a new track while the follower plays out: the follower is the music now.
+    // Re-aligning the old way re-tuned and re-seeked the LIVE deck to a track nobody can hear yet.
+    // Pass the master role to the live deck; the new track follows it (see handMasterTo).
+    if (id === this.masterId && this.deck(this.slaveId).playing && !this.deck(id).playing && this.deck(this.slaveId).beatgrid && this.deck(id).beatgrid) {
+      this.handMasterTo(this.slaveId);
+      return;
+    }
     if (!this.deck(this.slaveId).beatgrid) {
       this.slaveId = null; // slave lost its grid → can't follow
     } else {
@@ -1460,10 +1543,10 @@ export class AudioEngine {
    *  to ~20Hz — see the room digest roll-up) glides instead of zippering. 15ms is below the
    *  perceptual threshold, so a local DJ's own fader feels instant. */
   setCrossfade(position: number) {
-    const x = (Math.max(-1, Math.min(1, position)) + 1) / 2; // -> [0,1]
+    const g = crossfadeGains(position);
     const t = this.ctx.currentTime;
-    this.xfadeA.gain.setTargetAtTime(Math.cos((x * Math.PI) / 2), t, 0.015);
-    this.xfadeB.gain.setTargetAtTime(Math.cos(((1 - x) * Math.PI) / 2), t, 0.015);
+    this.xfadeA.gain.setTargetAtTime(g.A, t, 0.015);
+    this.xfadeB.gain.setTargetAtTime(g.B, t, 0.015);
   }
 
   // Master output is two independent things multiplied: the DJ's own volume fader (_masterVol,

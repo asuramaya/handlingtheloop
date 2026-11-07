@@ -1,3 +1,4 @@
+import { scratchOffset, type ScratchKind } from "./scratchPatterns";
 import { lerp } from "../../util/math";
 
 // The transport surface the jog physics drives. Deck implements this with bound
@@ -110,6 +111,24 @@ export function brakeFriction(state: BrakeState, dt: number, tau: number): Brake
   return { v: next, z };
 }
 
+// --- The knob → time-constant mappings, exported so Settings ▸ Platter can draw the deck's own
+// curves with the deck's own numbers (servoStep/brakeFriction above + these). One definition; a
+// graph that re-derived them would be a second copy free to drift.
+export const platterTaus = {
+  /** Released while playing: the servo's settle time back up to play speed. */
+  catchUp: (weight: number) => lerp(0.025, 0.12, weight),
+  /** Released and settling to a stop (paused, or too gentle to catch up): friction time. */
+  glide: (weight: number, drag: number) => lerp(0.6, 0.1, drag) * lerp(0.7, 1.3, weight),
+  brake: (b: number) => lerp(0.02, 0.5, b),
+  start: (s: number) => lerp(0.02, 0.45, s),
+  backSpin: (b: number) => lerp(0.12, 0.6, b),
+  backSpinStrength: (b: number) => lerp(4, 14, b),
+};
+/** Settings ▸ Platter has ONE "mass" knob (operator, 2026-11-02: weight and drag merged). A heavier
+ *  platter both catches up slower AND glides longer, so drag falls as mass rises; 0.8 − mass keeps
+ *  the long-standing default (0.4 / 0.4) exactly where it was. */
+export const platterDrag = (mass: number) => Math.max(0, Math.min(1, 0.8 - mass));
+
 // --- Release classification (Phase B: extracted for its own sake, prep for Phase C) ---
 // What happens when the finger lifts is a real, bug-prone decision — three distinct outcomes
 // depending on how the platter was moving — but it lived inline inside scrubEnd(), entangled
@@ -147,7 +166,7 @@ export class JogEngine {
   private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
 
-  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
+  private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" | "pattern" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
   private jogVel = 0; // sounding velocity (track-sec / real-sec, signed)
   private handPos = 0; // where the finger says the platter is (accumulated)
@@ -271,16 +290,16 @@ export class JogEngine {
   }
   // Motor ramp time-constants / strength from the 0..1 knobs.
   private brakeTau() {
-    return lerp(0.02, 0.5, this._vinylBrake);
+    return platterTaus.brake(this._vinylBrake);
   }
   private startTau() {
-    return lerp(0.02, 0.45, this._vinylStart);
+    return platterTaus.start(this._vinylStart);
   }
   private backSpinTau() {
-    return lerp(0.12, 0.6, this._backSpin);
+    return platterTaus.backSpin(this._backSpin);
   }
   private backSpinStrength() {
-    return lerp(4, 14, this._backSpin);
+    return platterTaus.backSpinStrength(this._backSpin);
   }
 
   // --- state readers (Deck forwards these) ---
@@ -303,6 +322,16 @@ export class JogEngine {
   /** The in-flight motor ramp, if any — Deck's `get playing()` reads "start" as play intent. */
   get ramping() {
     return this._ramping;
+  }
+  /** The gripped platter's smoothed velocity in track-seconds per second (1 = play speed at
+   *  rate 1). Read by the MIDI layer to decide when a physically free-spinning jog has settled
+   *  enough to hand back to play (App/jogSpinFollow.ts). Meaningful only while grabbing. */
+  get handVelocity() {
+    return this.handVel;
+  }
+  /** Whether a release would spin back up to play (the deck was playing when gripped). */
+  get returnsToPlay() {
+    return this.jogReturnToPlay;
   }
 
   // --- scrubbing (jog-wheel / vinyl feel) ---
@@ -476,6 +505,76 @@ export class JogEngine {
     this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
   }
 
+  // ★ SLIP BRAKE (operator, 2026-11-07: "brake has to work like censor where it doesnt actually
+  // pause the track"). The pad brake is a momentary OVERLAY, like CENSOR: held, the platter powers
+  // down; released, playback snaps to where the track would be had it never braked (the slip
+  // shadow, armed regardless of the slip toggle) and carries on. The board's RELEASE FX brake
+  // (brakeNow) still stops the deck — that one is a stop.
+  // ★ FX2 MOVES RUN ON THESE TWO PRIMITIVES; the Deck's move stack owns the rest (operator,
+  // 2026-11-07: "gotta solve the interaction when one is held and another is triggered"). Start a
+  // move's platter motion from `pos` — where the AUDIO is, which after a hand-off is wherever the
+  // previous move left it, so the sound is continuous — and stop it again WITHOUT landing. Arming the
+  // slip shadow, handing over between moves and landing on the beat are the Deck's (moveDown/moveUp).
+  //   censor = reverse at the play rate · brake = a friction ramp to rest · spin = a backspin
+  //   winding down to rest (the old spinback rewound and PLAYED ON from there, landing early).
+  private _moveDriven = false;
+  /** A scratch pattern in flight: offsets come from scratchOffset(kind, beats since the press, plus
+   *  the beat phase it was pressed on), in track-seconds of `interval` per beat. */
+  private pattern: { kind: ScratchKind; anchor: number; t0: number; beatReal: number; interval: number; phase0: number; base: number } | null = null;
+  moveEnter(kind: "censor" | "brake" | "spin" | ScratchKind, pos: number, beat?: { interval: number; phase0: number }) {
+    if (!this.host.loaded()) return;
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    this.host.clearBend();
+    this.jogPos = pos;
+    this.host.setStartOffset(pos);
+    if (this.host.playing()) {
+      this.host.stopSource(); // hand the audio to the scratch resampler
+      this.host.setPlaying(false);
+    }
+    this._moveDriven = true;
+    if (kind === "censor") {
+      this.jogVel = 0;
+      this.handVel = 0;
+      this.jogInputAt = this.ctx.currentTime;
+      this.jogLast = this.ctx.currentTime;
+      this.jogPhase = "reverse";
+      this.scratchStart();
+      this.startJogLoop();
+    } else if (kind === "brake") {
+      this.enterMotorCoast(this.host.effRate(), false, this._vinylBrake > 0 ? this.brakeTau() : 0.3, "brake");
+    } else if (kind === "spin") {
+      this.enterMotorCoast(-this.backSpinStrength(), false, this.backSpinTau(), "spinback");
+    } else {
+      // A scratch pattern: phase-locked to the grid (it starts where the beat is, not at a fresh 0),
+      // continuous at the press (the curve is taken relative to its value at that phase).
+      const interval = beat?.interval ?? 0.5;
+      const phase0 = beat?.phase0 ?? 0;
+      this.pattern = { kind, anchor: pos, t0: this.ctx.currentTime, beatReal: interval / Math.max(0.05, this.host.rate()), interval, phase0, base: scratchOffset(kind, phase0) };
+      this.jogVel = 0;
+      this.handVel = 0;
+      this.jogInputAt = this.ctx.currentTime;
+      this.jogLast = this.ctx.currentTime;
+      this.jogPhase = "pattern";
+      this.scratchStart();
+      this.startJogLoop();
+    }
+  }
+  /** Stop a move's platter motion where it is, without landing. Returns where the audio got to. */
+  moveExit(): number {
+    this._moveDriven = false;
+    this.pattern = null;
+    if (this.jogRaf) {
+      if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.jogRaf);
+      this.jogRaf = 0;
+    }
+    this.jogPhase = "off";
+    this._ramping = null;
+    this._coastTau = 0;
+    this.jogVel = 0;
+    this.scratchStop();
+    return this.jogPos;
+  }
+
   /** Play with a turntable spin-up: ramp the audio from rest up to speed over the start
    *  time, then hand to normal playback. Falls back to instant play() when off. */
   softStart() {
@@ -552,6 +651,13 @@ export class JogEngine {
         dt = Math.min(dt, 0.05); // a tab-blur gap must not fling the platter
         if (phase === "grab") {
           this.grabTick(dt); // active motion posts in scrubMove(); this tracks fling + settles
+        } else if (phase === "pattern" && this.pattern) {
+          const pt = this.pattern;
+          const beats = (now - pt.t0) / pt.beatReal + pt.phase0;
+          this.jogPos = this.wrapLoop(pt.anchor + (scratchOffset(pt.kind, beats) - pt.base) * pt.interval);
+          this.clampJog();
+          this.host.setStartOffset(this.jogPos);
+          this.scratchMove();
         } else if (phase === "reverse") {
           // Drive the platter backward at the set tempo; voice it on the resampler.
           // Reverse only ever runs on a playing deck (reverseStart requires it), so an
@@ -561,7 +667,7 @@ export class JogEngine {
           this.clampJog();
           this.host.setStartOffset(this.jogPos);
           this.scratchMove();
-          if (this.jogPos <= 0) this.reverseStop(); // hit the start → catch back to forward
+          if (this.jogPos <= 0 && !this._moveDriven) this.reverseStop(); // hit the start → catch back to forward
         } else if (phase === "coast") {
           this.stepCoast(dt); // may settle the platter to "off"
           this.host.setStartOffset(this.jogPos);
@@ -577,6 +683,8 @@ export class JogEngine {
   // platter position is already mirrored into startOffset each tick, so a transport
   // action (play/pause/seek/cue) simply takes over from where it is.
   cancelJog() {
+    this._moveDriven = false; // a transport action ends any held FX2 move
+    this.pattern = null;
     if (this.jogPhase === "off") return;
     this.jogPhase = "off";
     if (this.jogRaf) {
@@ -628,7 +736,7 @@ export class JogEngine {
       // Catch back up to play speed (jog release, soft-start, or a spinback's recovery): a
       // motor servo, not friction — servoStep, not brakeFriction.
       const rate = this.host.rate();
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.025, 0.12, this._jogWeight);
+      const tau = this._coastTau > 0 ? this._coastTau : platterTaus.catchUp(this._jogWeight);
       const next = servoStep({ v: this.jogVel, a: this._servoA }, rate, dt, tau);
       this.jogVel = next.v;
       this._servoA = next.a;
@@ -649,7 +757,7 @@ export class JogEngine {
     } else {
       // Friction glide / brake: drag sets the strength, or _coastTau the motor brake time.
       // A hand (or the jog pad) gripping the platter to a stop — brakeFriction, not a servo.
-      const tau = this._coastTau > 0 ? this._coastTau : lerp(0.6, 0.1, this._jogDrag) * lerp(0.7, 1.3, this._jogWeight);
+      const tau = this._coastTau > 0 ? this._coastTau : platterTaus.glide(this._jogWeight, this._jogDrag);
       const next = brakeFriction({ v: this.jogVel, z: this._brakeZ }, dt, tau);
       this.jogVel = next.v;
       this._brakeZ = next.z;

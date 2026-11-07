@@ -1,11 +1,31 @@
 {
-  "when": "2026-09-23T05:03:03.912Z",
+  "when": "2026-10-31T14:48:32.632Z",
   "fired": false,
   "poToken": false,
   "requiresJs": false,
   "jsKeyPresent": true,
   "drift": [],
   "unreadable": [],
+  "rosterChanged": false,
+  "eligible": [
+    "visionos"
+  ],
+  "noJs": [
+    "android",
+    "android_vr",
+    "ios",
+    "visionos"
+  ],
+  "noPo": [
+    "tv",
+    "tv_downgraded",
+    "tv_samsung",
+    "visionos",
+    "web",
+    "web_embedded",
+    "web_safari"
+  ],
+  "clients": 14,
   "ours": {
     "version": "1.02",
     "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",

@@ -1,4 +1,6 @@
+import type { ScratchKind } from "./scratchPatterns";
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
+import { perfWork } from "../debug/perfCapture";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
@@ -8,9 +10,11 @@ import { stemLaneGeometryAgrees, type StemLane } from "./stemLaneGeometry";
 import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
-export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
+export { HOT_CUE_COUNT, HOT_CUE_BANK, type Loop } from "./LoopEngine";
+import { HOT_CUE_BANK } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
 import { pcmMark, pcmResident } from "./pcmMeter";
+import { ENGINE_RATE_MAX, ENGINE_RATE_MIN } from "./stretchWorklet";
 
 // Per-deck id for the PCM meter breadcrumbs (iOS OOM hunt) — "0"/"1" for A/B.
 let _deckMeterSeq = 0;
@@ -114,6 +118,7 @@ import { CrushFx } from "./CrushFx";
 import { ModFx } from "./ModFx";
 import { GateFx } from "./GateFx";
 import { NoiseFx } from "./NoiseFx";
+import { RING_BEND, stepBend } from "./bendPhysics";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -222,13 +227,18 @@ export type SyncRole = "off" | "master" | "slave";
 // ★ fx2 IS THE SECOND BANK: same 8 pads, aimed at the MASTER chain instead of the focused one —
 // see `padChain` below for why, and for the hardware it mirrors. It WAS an exact duplicate until
 // 2026-09-10, while three comments (this one included) described a latch-vs-throw split per bank
-// that the code never implemented. The latch/throw split is real but per-GESTURE (FX_HOLD_MS) and
-// per-PAD (FxPadDef.hold), so it applies identically in both banks and always did. Thread 9ee26ff4.
-export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2";
-// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). cue → cue = no
-// peer (the slot is blank); the UI shows no shifted label for CUE and shift+CUE stays in cue.
+// that the code never implemented. The latch/momentary split is per-GESTURE (plain press = hot while
+// held, SHIFT+press = toggle latch; fxPads.ts), so it applies identically in both banks.
+// ★ cue2 IS THE SECOND HOT-CUE BANK (operator, 2026-11-06: "a second layer to cue so shift cue / u
+// gives me cue 2 and 8 more cue points/pads 9-16"). The same 8 pads, aimed at hot cues 9–16
+// (HOT_CUE_BANK offset). SHIFT + HOT CUE on the board, SHIFT + U on the keyboard.
+export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2" | "cue2";
+/** First hot-cue slot a pad bank addresses: CUE pads are cues 1–8, CUE 2 pads are 9–16. */
+export const cueBankBase = (m: PadMode): number => (m === "cue2" ? HOT_CUE_BANK : 0);
+// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels).
 export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
-  cue: "cue", // no shift peer (blank slot)
+  cue: "cue2",
+  cue2: "cue",
   fx: "fx2",
   loop: "roll",
   sampler: "global",
@@ -240,10 +250,15 @@ export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
 // for the next reserved mode (was KEY, now retired).
 export const PAD_MODE_RESERVED = new Set<PadMode>();
 
+/** The FX2 deck moves that run on the move stack (see Deck.moveDown). */
+export type MoveKind = "censor" | "brake" | "spin" | "freeze" | ScratchKind;
+
 export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
   private readonly trimNode: GainNode;
+  private readonly cutNode: GainNode;
+  private _cut = false;
   private readonly eq: Eq3;
   readonly rack: FxRack; // the channel-strip device chain (EQ is dev0; effects splice in after)
   // Post-fader stereo meter: split L/R into two analysers (sinks). The UI reads
@@ -366,6 +381,9 @@ export class Deck {
   // mirrored here so the UI can light the SYNC button. "slave" follows the master.
   syncRole: SyncRole = "off";
   onTempoChange?: () => void; // AudioEngine hook, fired at the end of setTempo
+  /** AudioEngine hook: where this deck should really START (play, or a jump while playing) so a
+   *  SYNC pair starts in phase. Returns the position unchanged when not synced. See syncAlign.ts. */
+  startAlign?: (pos: number) => number;
   onRateChange?: () => void; // Sampler hook — region voices ride the deck tempo; fired at the end of setTempo
   keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
   onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
@@ -383,10 +401,11 @@ export class Deck {
   // eases home to the set tempo. NEVER a re-seek (that would glitch at the tick rate).
   private _bend = 0;
   private bendRaf = 0;
+  private _bendAcc = 0; // roll distance banked since the last physics frame (bendPhysics.ts)
+  private _ringVel = 0; // the ring's smoothed velocity (bendPhysics.ts)
   private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
-  private static readonly BEND_GAIN = 6; // ticks→push: how hard a turn bends the tempo
-  private static readonly BEND_DECAY = 0.18; // s, ease-back-to-tempo time constant
-  private static readonly BEND_MAX = 0.6; // cap the push at ±60% of the set tempo
+  // Gain / decay / clamp of the ring bend live in bendPhysics (RING_BEND), shared with the
+  // Settings ▸ Turntable graph so the curve drawn there is this deck's own.
   private static readonly BEND_SEARCH = 6; // paused: scale a bend nudge into a frame-search seek
   // --- continuous beat-sync phase-lock (driven by AudioEngine.phaseCorrect) ---
   // A tiny rate trim the SYNC slave rides to null residual beat-phase drift. Tempo-match
@@ -472,7 +491,11 @@ export class Deck {
     this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
     this.rack.output.connect(this.trimNode);
-    this.trimNode.connect(this.output);
+    // CUT (FX2): its own gain between trim and the channel fader, so the fader keeps working
+    // through a cut and the headphone cue (tapped off trim, below) still hears the track.
+    this.cutNode = ctx.createGain();
+    this.trimNode.connect(this.cutNode);
+    this.cutNode.connect(this.output);
     // Pre-fader headphone cue (PFL) tap: a parallel send off the trim node (post-EQ,
     // BEFORE the channel fader/crossfader) so a deck can be auditioned in the cue
     // device even while faded out of the master mix. Starts silent (gain 0);
@@ -871,6 +894,8 @@ export class Deck {
       this.bendRaf = 0;
     }
     this._bend = 0;
+    this._bendAcc = 0;
+    this._ringVel = 0;
     this.stems = null; // new track: drop stems until re-derived, reset mutes to all-on
     this.lastAppliedStemId = undefined; // INVALIDATION: the engine gets the plain mix
     this.stemsLoaded = false;
@@ -1262,6 +1287,7 @@ export class Deck {
       )
     )
       return;
+    const applyT0 = performance.now();
     this.lastAppliedStemId = stems ? stemApplyId(stems) : undefined;
     this.stems = stems;
     this.stemsLoaded = !!stems;
@@ -1291,6 +1317,9 @@ export class Deck {
     this.loadEnginePcm();
     for (const name of STEM_NAMES) this.rampStem(name); // re-assert current stem gains
     if (this._playing) this.spawnSource(this.position());
+    // Applying a set copies every stem to the engine on THIS thread (hundreds of MB on desktop):
+    // time it, so a capture can tell a stem landing from anything else that stalls a frame.
+    perfWork("stems.apply", performance.now() - applyT0);
     if (this.pendingStemBase) {
       // Mobile: loadEnginePcm already computed the base envelopes in its pack pass.
       // Build the (cheap, downsampled) LOD ladders from them, publish, and FREE the raw
@@ -1506,8 +1535,8 @@ export class Deck {
   private effRate(): number {
     // A follower runs at the ANCHOR's streamed rate (folds in the host's bend + sync-trim,
     // which never cross as intents) so audio + clock stay in lockstep instead of drifting.
-    if (this._followRate != null && this._followRate > 0) return this._followRate;
-    return this._rate * (1 + this._bend) * (1 + this._syncTrim);
+    if (this._followRate != null && this._followRate > 0) return clampEngineRate(this._followRate);
+    return clampEngineRate(this._rate * (1 + this._bend) * (1 + this._syncTrim));
   }
   /** The effective sounding rate (tempo·bend·sync-trim) — the anchor publishes this in its tick
    *  so followers can match it. */
@@ -1625,6 +1654,7 @@ export class Deck {
   }
 
   play() {
+    this.moveCancel();
     this.jog.cancelJog(); // a transport action wins over an in-flight platter coast
     this.clearBend();
     if (!this._loaded || this._playing) return;
@@ -1632,12 +1662,15 @@ export class Deck {
     // it. Scrub/needle-drop already do this, but tapping Play first does not — so a
     // fresh load + Play (no prior scrub) rendered silence. Resume on the Play gesture.
     if (this.ctx.state === "suspended") void this.ctx.resume();
+    // A synced deck starts in phase with the other (nearest in-phase point, ≤ half a beat away).
+    if (this.startAlign) this.startOffset = Math.max(0, Math.min(this._duration, this.startAlign(this.startOffset)));
     this.spawnSource(this.startOffset);
     this._playing = true;
   }
   pause() {
     this.jog.cancelJog();
     this.clearBend();
+    this.moveCancel();
     if (!this._playing) return;
     this.startOffset = this.position();
     this.stopSource();
@@ -1659,10 +1692,14 @@ export class Deck {
   }
 
   seek(seconds: number) {
+    this.moveCancel(); // a jump ends any held FX2 move (no-op on the move stack's own landing)
     this.jog.cancelJog();
     this.clearBend();
-    const target = Math.max(0, Math.min(this.duration, seconds));
+    let target = Math.max(0, Math.min(this.duration, seconds));
     if (this._playing) {
+      // A jump while playing lands in phase with a synced partner (paused, the exact spot is kept:
+      // a cue point must stay where it was set, and play() aligns when it starts).
+      if (this.startAlign) target = Math.max(0, Math.min(this.duration, this.startAlign(target)));
       // Declicked gapless re-seat. The old stopSource()+spawnSource() pair coalesced in
       // the worklet before any audio rendered, so the 5 ms fade never happened → a hard
       // click at the discontinuity on every cue/loop jump (worse on rapid fire). One
@@ -1714,10 +1751,18 @@ export class Deck {
   get jogging() {
     return this.jog.jogging;
   }
+  /** The gripped platter's smoothed velocity (track-sec per sec) — see JogEngine.handVelocity. */
+  get jogVelocity() {
+    return this.jog.handVelocity;
+  }
+  /** Whether releasing the platter would return to play — see JogEngine.returnsToPlay. */
+  get jogReturnsToPlay() {
+    return this.jog.returnsToPlay;
+  }
   /** True while a momentary pitch-bend is decaying — pauses the sync phase-lock so the
    *  corrector doesn't chase a transient ear-nudge. */
   get bending() {
-    return this._bend !== 0;
+    return this._bend !== 0 || this._ringVel !== 0; // a turning ring counts before its push builds
   }
 
   /** Apply the SYNC phase-lock rate trim (AudioEngine drives this each correction tick).
@@ -1767,6 +1812,116 @@ export class Deck {
   releaseBrake() {
     this.jog.brakeNow();
   }
+  // ★ FX2 MOVES ARE A STACK — LAST PRESSED WINS (operator, 2026-11-07: "gotta solve the interaction
+  // when one is held and another is triggered"). Before, a second move was ignored (they all needed
+  // a normally-playing deck, which mid-move it is not) or fought the first (FREEZE + CENSOR left a
+  // stuck layer). Now, like a monophonic synth's note priority:
+  //   • pressing a move while another is held HANDS OVER at once, starting from where the audio is
+  //     (continuous), and the earlier one waits underneath;
+  //   • releasing the sounding move falls back to the most recent one still held;
+  //   • releasing the last lands on the beat.
+  // There is ONE slip shadow for the whole run, armed on the first press, so however many moves
+  // were chained the landing is where the track would be. (CUT is not a move here: it only mutes, so
+  // it layers over anything.)
+  private moveStack: MoveKind[] = [];
+  private moveActive: MoveKind | null = null;
+  private _freezeAt: number | null = null; // FREEZE's frozen instant while it sounds
+  private static readonly FREEZE_SPRAY = 0.03; // s each grain may wander around the frozen instant
+
+  /** A move pad went down. */
+  moveDown(k: MoveKind) {
+    if (this.moveStack.includes(k)) return;
+    let from: number;
+    if (this.moveActive) from = this.moveStop(this.moveActive);
+    else {
+      if (!this._loaded || !this._playing || this.jogging) return;
+      this.slipArmForce(); // the one shadow for the whole run
+      from = this.position();
+    }
+    this.moveStack.push(k);
+    this.moveGo(k, from);
+  }
+  /** A move pad came up. */
+  moveUp(k: MoveKind) {
+    const i = this.moveStack.indexOf(k);
+    if (i < 0) return;
+    this.moveStack.splice(i, 1);
+    if (this.moveActive !== k) return; // it was waiting underneath: just forget it
+    const from = this.moveStop(k);
+    const back = this.moveStack[this.moveStack.length - 1];
+    if (back) this.moveGo(back, from);
+    else this.moveLand(from);
+  }
+  /** Is this move held (sounding or waiting)? */
+  moveHeld(k: MoveKind): boolean {
+    return this.moveActive === k;
+  }
+  private moveGo(k: MoveKind, from: number) {
+    this.moveActive = k;
+    if (k === "freeze") {
+      if (!this._playing) {
+        // Coming from a platter move: the engine voice restarts on the audio's point, frozen.
+        this.startOffset = from;
+        this.spawnSource(from);
+        this._playing = true;
+      }
+      this._freezeAt = from;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
+    } else {
+      // Scratch patterns lock to the grid: the track-seconds of a beat and where in the beat `from` is.
+      const g = this.beatgrid;
+      const interval = g?.interval || 0.5;
+      const phase0 = g ? (((from - g.firstBeat) / interval) % 1 + 1) % 1 : 0;
+      this.jog.moveEnter(k, from, { interval, phase0 });
+    }
+  }
+  /** Stop the sounding move WITHOUT landing; returns where its audio got to. */
+  private moveStop(k: MoveKind): number {
+    this.moveActive = null;
+    if (k === "freeze") {
+      const at = this._freezeAt ?? this.position();
+      this._freezeAt = null;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+      return at;
+    }
+    return this.jog.moveExit();
+  }
+  /** The run is over: land where the track would be, and play on. */
+  private moveLand(from: number) {
+    const pos = this.slipReleasePos() ?? from;
+    if (this._playing) this.seek(pos); // FREEZE: the voice is running — a declicked re-seat
+    else {
+      this.startOffset = pos;
+      this.spawnSource(pos);
+      this._playing = true;
+    }
+  }
+  /** Drop every held move at once (a transport action took over): no landing. */
+  private moveCancel() {
+    this.moveStack = [];
+    this.moveActive = null;
+    if (this._freezeAt != null) {
+      this._freezeAt = null;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+    }
+  }
+
+  /** The slip move in flight — a held FX2 move, or the keyboard / board CENSOR — or null. While it
+   *  runs the track is still going underneath; the waveform follows that, not the audio. */
+  get slipMove(): MoveKind | null {
+    if (this.moveActive) return this.moveActive;
+    return this.slipAnchor && this.jog.reversing ? "censor" : null;
+  }
+  /** Where the track would be now under a slip move (the shadow), WITHOUT consuming it. */
+  slipShadow(): number | null {
+    const a = this.slipAnchor;
+    return a ? this.shadowOf(a.pos, a.t) : null;
+  }
+  /** Where the AUDIO is during a slip move (the waveform's ghost): FREEZE's frozen instant, else
+   *  the platter's own position. */
+  slipGhost(): number {
+    return this._freezeAt ?? this.visualPosition();
+  }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.
   // (The viewport only grabs the platter once the finger actually moves, so a tap
@@ -1794,12 +1949,11 @@ export class Deck {
       this.needleDrop(deltaSec * Deck.BEND_SEARCH);
       return;
     }
-    // Convert the roll distance into a push relative to the set tempo (so it feels the
-    // same at any pitch-fader setting), accumulate, and clamp.
-    const push = (deltaSec / Math.max(0.05, this._rate)) * Deck.BEND_GAIN * this._bendScale;
-    this.reanchorClock(); // freeze position() at the OLD rate before the rate changes
-    this._bend = Math.max(-Deck.BEND_MAX, Math.min(Deck.BEND_MAX, this._bend + push));
-    this.pushRate();
+    // Bank the roll distance (relative to the set tempo, so it feels the same at any pitch-fader
+    // setting). The physics loop turns it into a velocity once per FRAME (bendPhysics.ts), so a
+    // burst of ticks is distance rather than a stack of instant pushes — the old per-tick push is
+    // what made a jog ring's bend move in steps with "missing physics".
+    this._bendAcc += deltaSec / Math.max(0.05, this._rate);
     this.startBendDecay();
   }
 
@@ -1831,14 +1985,23 @@ export class Deck {
       const now = this.ctx.currentTime;
       const dt = Math.min(0.05, Math.max(0, now - last));
       last = now;
-      const live = this._bend !== 0 && this._playing && !this.jog.jogging;
-      if (live) {
-        this.reanchorClock();
-        this._bend *= Math.exp(-dt / Deck.BEND_DECAY);
-        if (Math.abs(this._bend) < 1e-3) this._bend = 0;
-        this.pushRate();
+      const live = this._playing && !this.jog.jogging;
+      if (live && dt > 0) {
+        const next = stepBend({ bend: this._bend, ringVel: this._ringVel }, this._bendAcc, dt, {
+          gain: RING_BEND.gain * this._bendScale,
+          decay: RING_BEND.decay,
+          max: RING_BEND.max,
+        });
+        this._bendAcc = 0;
+        this._ringVel = next.ringVel;
+        if (next.bend !== this._bend) {
+          this.reanchorClock(); // freeze position() at the OLD rate before the rate changes
+          this._bend = next.bend;
+          this.pushRate();
+        }
       }
-      if (this._bend !== 0 && this._playing && !this.jog.jogging) {
+      const moving = this._bend !== 0 || this._ringVel !== 0 || this._bendAcc !== 0;
+      if (moving && this._playing && !this.jog.jogging) {
         this.bendRaf = requestAnimationFrame(tick);
       }
     };
@@ -1851,6 +2014,8 @@ export class Deck {
       if (typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.bendRaf);
       this.bendRaf = 0;
     }
+    this._bendAcc = 0;
+    this._ringVel = 0;
     if (this._bend !== 0) {
       this.reanchorClock();
       this._bend = 0;
@@ -1860,7 +2025,10 @@ export class Deck {
 
   setTempo(tempoPercent: number) {
     this.clearBend(); // a deliberate tempo move supersedes any momentary bend
-    const rate = 1 + tempoPercent / 100;
+    // Clamped to what the engine can play (ENGINE_RATE_MIN): at the bottom of a ±100% fader this is
+    // 0.25, not 0, so the BPM readout and every rate reader agree with what you hear. _tempo keeps
+    // the fader's own position.
+    const rate = clampEngineRate(1 + tempoPercent / 100);
     if (this._playing) {
       this.startOffset = this.position();
       this.startedAt = this.ctx.currentTime;
@@ -2065,6 +2233,20 @@ export class Deck {
   }
   get level() {
     return this._level;
+  }
+  /** CUT (the FX2 pad): silence the deck while held; the track plays on underneath, so release
+   *  drops straight back in where it is. A few-ms ramp each way, so neither edge clicks. */
+  setCut(on: boolean) {
+    if (on === this._cut) return;
+    this._cut = on;
+    const now = this.ctx.currentTime;
+    const g = this.cutNode.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(on ? 0 : 1, now + 0.004);
+  }
+  get cutting() {
+    return this._cut;
   }
   setLevel(gain: number) {
     this._level = gain;
@@ -2545,7 +2727,9 @@ export class Deck {
    *  When focus IS master — the default until you make a chain — both banks show the same devices,
    *  honestly: there is only one chain, so there is only one bank of effects to show. */
   get padChain(): string {
-    return this.padChainOverride ?? (this.padMode === "fx2" ? "master" : this.focusedChain);
+    // FX2 is the MOVES bank now (components/movePads.ts), not the master chain, so the pads' chain
+    // is simply the focused one.
+    return this.padChainOverride ?? this.focusedChain;
   }
 
   /** An EXPLICIT pad chain, winning over the padMode default. Set only while applying a pad
@@ -3080,4 +3264,11 @@ export class Deck {
     this.running = false;
     this.stretchNode?.port.postMessage({ type: "stop", fade: Deck.FADE });
   }
+}
+
+/** The rate the clock may run at = the rate the stretch engine will actually play (its clamp).
+ *  Exported for the test. See ENGINE_RATE_MIN. */
+export function clampEngineRate(r: number): number {
+  if (!Number.isFinite(r)) return 1;
+  return Math.max(ENGINE_RATE_MIN, Math.min(ENGINE_RATE_MAX, r));
 }

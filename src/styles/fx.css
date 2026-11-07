@@ -351,6 +351,12 @@
   max-width: 58%;
 }
 .fx-rack-bar > .fx-group.master.open .fx-tabs {
+  /* ★ THE ROW SHRINKS, THE ＋ DOES NOT (operator, 2026-11-06: "the plus button disappears").
+     `.fx-group .fx-tabs` sets `flex: 0 0 auto`, which this rule used to inherit: capped by the
+     master's max-width, the device row could not give up width, so it shoved the ＋ past the
+     body's `overflow: hidden` edge and the ＋ was clipped away. Shrinkable, the row scrolls inside
+     its share and the ＋ keeps its place at the end. */
+  flex: 0 1 auto;
   overflow-x: auto;
   scrollbar-width: none;
   min-width: 0;
@@ -3722,10 +3728,23 @@ body:not(.no-glow) .fx-mix-fill::after {
   .sat-styles button {
     min-width: 44px;
   }
+  /* ★ AND THE DIALS GROW TOO. This was `flex: 0 0 auto` — grow OFF — so on a phone-layout FX page
+     the dial tiles stopped at their 52px minimum and huddled on the left with the rest of the row
+     empty (operator, 2026-11-02: "the responsive growth of the dials ... looks bad"). Same reasoning
+     as the style row above: grow only spends POSITIVE free space, so a row of many dials still
+     overflows and slides exactly as before, while a row of six now shares the width evenly. The
+     cap keeps two-dial devices from turning each tile into a bar. */
   .sat-bands .vcell,
   .sat-shared .vcell {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     min-width: 52px;
+    max-width: 180px;
+  }
+  /* SAFE centre: a row that overflows falls back to start-aligned, so its first dial can still be
+     scrolled to (plain `center` clips the overflow on BOTH sides, unreachably). */
+  .sat-shared,
+  .sat-bands {
+    justify-content: safe center;
   }
 }
 

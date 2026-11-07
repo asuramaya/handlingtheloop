@@ -3,10 +3,11 @@
 // separator.worker.ts so the app never stalls; here we only resample the mix to the
 // model's 44.1 kHz, ship the PCM to the worker, and resample the returned stems back
 // to the deck's rate so they line up sample-for-sample with the mix buffer.
+import { event } from "../debug/trace";
 import { STEM_NAMES, type Stems } from "./index";
 import { type StemModel, isMobileDevice } from "./models";
 import { stemTrace } from "./trace";
-import { gpuRun } from "./gpuQueue";
+import { gpuHeld, gpuRun, onGpuHold, whenGpuClear } from "./gpuQueue";
 import { putStemBlobs, getStemBlobs, deleteStemBlobs, clearStemBlobsByPrefix } from "../persistence";
 
 // ~MB of a stereo float32 buffer set of `n` samples × `sets` (4 stems = 4).
@@ -47,11 +48,25 @@ export function onModelLoading(cb: (pct: number) => void): () => void {
   return () => modelLoadListeners.delete(cb);
 }
 
+// The quiet window, relayed to whichever worker exists (a new one is told on creation, above).
+onGpuHold((held) => worker?.postMessage({ type: "pause", on: held }));
+
 function getWorker(): Worker {
   if (!worker) {
+    // The worker keeps the ~170 MB model in the Cache API (modelCache.ts). Under "best-effort"
+    // storage the browser may evict an entry that size first, so ask for persistence. persist()
+    // exists only on Window (not in workers), hence here. A refusal just leaves it best-effort.
+    void navigator.storage?.persist?.().catch(() => {});
     worker = new Worker(new URL("./separator.worker.ts", import.meta.url), { type: "module" });
+    // Relay AUTO's quiet window: the worker pauses between segments while it is up.
+    if (gpuHeld()) worker.postMessage({ type: "pause", on: true });
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;
+      if (type === "modelCache") {
+        // Settings ▸ Debug: every model load says whether it came from the cache or the network.
+        event("stems.model", { hit: e.data.hit, mb: Math.round(e.data.bytes / 1e6), ms: e.data.ms, cacheApi: e.data.cacheApi, file: String(e.data.url).split("/").pop() });
+        return;
+      }
       const job = jobs.get(id);
       if (!job) return;
       if (type === "loading") {
@@ -166,6 +181,10 @@ async function separateInner(mix: AudioBuffer, model: StemModel, onProgress?: Se
   const L = m44.getChannelData(0).slice();
   const R = (m44.numberOfChannels > 1 ? m44.getChannelData(1) : m44.getChannelData(0)).slice();
   const raw = await runWorkerJob(L, R, model, separationThreads(), onProgress);
+  // A job that was already running when AUTO's quiet window went up finishes on its own clock —
+  // and the assembly below (four resamples, each landing a whole-track copy on the main thread,
+  // ~200 ms measured) used to land in the middle of the blend. Hold the result until it clears.
+  await whenGpuClear();
   // resample each stem back to the deck's rate/length
   const out = {} as Stems;
   for (const t of STEM_NAMES) {

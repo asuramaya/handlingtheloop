@@ -387,7 +387,8 @@
   /* Pinned exactly below the (also-sticky) toolbar. Driven by the SAME variable as
      the toolbar's height so the two can never drift apart and leak rows through a
      seam. */
-  top: var(--tt-toolbar-h, 30px);
+  /* Directly under the pinned head (toolbar + topSlot, measured: TrackTable --tt-head-h). */
+  top: var(--tt-head-h, var(--tt-toolbar-h, 30px));
   background: var(--panel);
   color: var(--muted);
   font-weight: 600;
@@ -440,22 +441,25 @@
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  height: 26px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 0 9px;
+  height: 28px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 10px;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 .tt-filter:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 .tt-filter-ico {
-  font-size: 11px;
-  opacity: 0.6;
+  width: 13px;
+  height: 13px;
   flex: none;
+  color: var(--muted);
 }
+.tt-filter-ico path,
+.tt-filter-ico circle { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.tt-filter:focus-within .tt-filter-ico { color: var(--text); }
 .tt-filter-input {
   flex: 1;
   min-width: 0;
@@ -463,7 +467,8 @@
   background: transparent;
   border: none;
   color: var(--text);
-  font-size: 13px;
+  font: inherit;
+  font-size: 12.5px;
   padding: 0;
 }
 .tt-filter-input:focus {
@@ -520,35 +525,41 @@
 
 /* Cache-state filter chips (Library / Community): toggle to narrow the view to pooled
    and/or stemmed tracks. The dot mirrors the row pip so the legend reads at a glance. */
+/* One segmented group, the same dress as the Queue's control bar (automix.css .mixq-group/.mixq-chip):
+   a soft fill, borderless chips, the active one lifted. */
 .tt-cache-chips {
   flex: none;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
 }
 .tt-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 24px;
-  padding: 0 9px;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  padding: 0 10px;
+  background: transparent;
+  border: 0;
   color: var(--muted);
-  border-radius: 12px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
 }
 .tt-chip:hover {
-  border-color: var(--accent);
   color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .tt-chip.on {
   color: var(--text);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
 }
 .tt-chip .pip {
   width: 7px;
@@ -639,8 +650,21 @@
   padding: 0;
   border: 0;
 }
+/* A loaded row reads in its deck's colour (--row-deck, set inline by TrackTable); the old fixed
+   green is only the fallback for a row loaded somewhere the table has no colour for. */
 .track-table tbody tr.loaded {
-  color: #6ee7a8;
+  color: var(--row-deck, #6ee7a8);
+}
+/* The cache-dot slot ahead of each title: a fixed width, so every title in the column starts at
+   the same x whether its row has zero, one or two dots. */
+.tt-marks {
+  display: inline-flex;
+  align-items: center;
+  width: 22px;
+  vertical-align: middle;
+}
+.tt-marks .cache-pips {
+  margin-right: 0;
 }
 .track-table td {
   padding: var(--tt-row-pad, 7px) 10px; /* row height scales with the −/＋ stepper */
@@ -659,7 +683,9 @@
 /* Optional trailing column (the Queue's per-pair transition badge). Fixed width so it
    doesn't eat the auto Title column; right-aligned to sit against the row edge. */
 .col-extra {
-  width: 84px;
+  /* em, not px: it scales with the row-size stepper, and holds the longest badge ("Harmonic 32",
+     which clipped to "Harmoni…" at 84px). */
+  width: 8em;
 }
 td.col-extra {
   text-align: right;
@@ -674,12 +700,24 @@ td.col-extra .mixq-badge {
   text-overflow: ellipsis;
   vertical-align: middle;
 }
-/* Search button living in the shared toolbar (Search context only). */
+/* Search button living in the shared toolbar (Search context only): the same chip as the filter's
+   neighbours (a soft fill, no outline), not the old raised .btn. */
+.tt-search-btn.btn,
 .tt-search-btn {
   flex: 0 0 auto;
-  padding: 3px 12px;
-  font-size: 12px;
+  height: 28px;
+  padding: 0 14px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 11%, var(--panel));
+  border: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  cursor: pointer;
 }
+.tt-search-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 16%, var(--panel)); }
+.tt-search-btn:disabled { opacity: 0.4; cursor: default; }
 /* Queue toolbar has no filter (curated order) — a label fills the left instead. It must
    be able to shrink (min-width:0) so it doesn't shove the Rows stepper off a narrow dock. */
 .tt-queue-label {
@@ -770,9 +808,19 @@ th.col-thumb {
 }
 /* Hardware browse cursor (FLX4 wheel) — a left accent bar + tint so the row the LOAD
    buttons will grab is unmistakable, distinct from click multi-selection. */
+/* ★ STRONGER (operator, 2026-11-03: library navigation from the board). A 7% white wash and a 3px
+   edge was readable at a desk and nearly invisible in a dark booth from a step back, and from the
+   board this row IS the interface: it is what LOAD will grab. Lime-tinted row, a 4px edge, an
+   outline, and the title at full brightness. */
 .track-table tbody tr.tt-cursor {
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 3px 0 0 0 var(--neon-lime);
+  background: color-mix(in srgb, var(--neon-lime) 16%, transparent);
+  box-shadow:
+    inset 4px 0 0 0 var(--neon-lime),
+    inset 0 0 0 1px color-mix(in srgb, var(--neon-lime) 55%, transparent);
+}
+.track-table tbody tr.tt-cursor .col-title {
+  color: #fff;
+  font-weight: 600;
 }
 .track-table tbody tr.tt-cursor.selected {
   background: rgba(0, 229, 255, 0.16);
@@ -799,6 +847,17 @@ th.col-thumb {
   .track-table .col-title {
     width: 58%;
   }
+  .track-table td.col-title .tt-deck-inline {
+    display: inline-grid;
+  }
+  /* Time keeps a fixed slot that fits "12:34" (it was 12% of the row: 16px of text, "4…"). With
+     table-layout: fixed the % columns share what is left. */
+  .track-table .col-time {
+    width: 3.6em;
+    padding-left: 4px;
+    padding-right: 8px;
+    text-overflow: clip;
+  }
   .track-table .col-artist {
     width: 30%;
   }
@@ -811,6 +870,56 @@ th.col-thumb {
      read on their own) so it can't shove the stepper off the right edge. */
   .tt-rows-label {
     display: none;
+  }
+}
+
+/* ★ THE MIDDLE WIDTH (441–680px of table): a docked Library at its default width. Every column
+   still fits in principle, but they were sized as PERCENTAGES of the table plus fixed #/artwork/
+   Mix columns, so Title — the one that matters — was what was left: ~45px, "Say…" "Nic…", next to
+   a roomy Artist column and a "SUGGESTED" tag (operator's queue, 2026-11-04). Here BPM/Key/Time
+   take what their text needs (em, so they follow the row-size stepper), Artist is capped, the
+   artwork goes, and Title keeps the rest. !important because the widths are inline styles on the
+   <col>s (the drag-to-resize model) — this tier deliberately overrides them, as the 440px one does
+   by hiding columns. */
+@container (min-width: 441px) and (max-width: 680px) {
+  .track-table .col-thumb {
+    display: none;
+  }
+  .track-table col.col-thumb {
+    width: 0 !important;
+  }
+  .track-table col.col-bpm {
+    width: 3.6em !important;
+  }
+  .track-table col.col-key {
+    width: 2.9em !important;
+  }
+  .track-table col.col-time {
+    width: 3.3em !important;
+  }
+  .track-table col.col-artist {
+    width: 22% !important;
+  }
+  .track-table col.col-extra {
+    width: 6.8em; /* "Harmonic 16", the longest badge, whole */
+  }
+  /* The narrow numeric cells lose their gutters: 12px a side was a third of a 3.6em column, which
+     is what clipped "130.0" to "13…" and "12A" to "1…". */
+  .track-table :is(th, td):is(.col-bpm, .col-key, .col-time) {
+    padding-left: 3px;
+    padding-right: 3px;
+    text-overflow: clip;
+  }
+  .track-table td.col-extra {
+    padding-left: 3px;
+    padding-right: 6px;
+  }
+  .track-table .mixq-src {
+    font-size: 8.5px;
+    letter-spacing: 0;
+  }
+  .track-table .col-resize {
+    display: none; /* the widths here are the tier's, not the drag model's */
   }
 }
 
@@ -896,3 +1005,221 @@ th.col-thumb {
   font-weight: 700;
 }
 
+/* The A/B deck badge sits in the # cell (TrackTable): no trailing margin, tighter side padding,
+   and clip rather than ellipsis so a badge a hair wider than the digits never prints "..". */
+td.col-num {
+  padding-left: 6px;
+  padding-right: 4px;
+  text-overflow: clip;
+}
+.col-num .tt-deck {
+  margin-right: 0;
+}
+
+/* Narrow-view copy of the deck badge (TrackTable): hidden while the # column carries it. */
+.track-table .tt-deck-inline {
+  display: none;
+}
+
+/* ★ The pinned head of every library table: toolbar + topSlot (the Queue's Now/AUTO/Tracks rows)
+   stay put; only the rows scroll beneath (TrackTable .tt-head). The toolbar inside is no longer
+   sticky on its own — the block is. */
+.tt-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.tt-head .tt-toolbar {
+  position: static;
+}
+
+/* Rows −/＋ in the Library's title row (LibraryPanel), pinned to its right end. */
+.lib-head-rows {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.lib-head-rows .tt-rows-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+/* ★ THE TOOLBAR IN THE TITLE ROW (lib/toolbarHost.ts): the filter / search field and its chips sit
+   between the library's title and Rows −/＋, so there is no separate toolbar row of dead space. */
+.settings-head.lib-head-row { container-type: inline-size; }
+.lib-head-tools {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 12px;
+}
+.lib-head-tools:empty { display: none; }
+.lib-head-tools .tt-filter { flex: 1 1 auto; max-width: 720px; }
+.lib-head-tools .tt-cache-chips { margin-left: auto; }
+.tt-searching { flex: none; font-size: 11px; color: var(--muted); }
+@container (max-width: 700px) {
+  .lib-head-from,
+  .lib-head-rows .tt-rows-label { display: none; }
+  .tt-chip .tt-chip-label { display: none; }
+  .tt-chip { padding: 0 8px; }
+  .lib-head-tools { margin: 0 8px; }
+}
+
+/* ★ LINEWORK (operator, 2026-11-05: "lets clean up this linework"). The table drew a rule on every
+   side of every cell, in the theme's line colour — a grid. Rows are what you read, so rows keep a
+   whisper of a separator and columns keep none (the resize handle still shows on hover); the
+   header keeps one soft rule under it. */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 0;
+}
+.track-table thead th {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  background: var(--bg);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.track-table tbody tr {
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 4%, transparent);
+}
+/* Numbers read as numbers: tabular, right-aligned under right-aligned headings. */
+.track-table :is(th, td):is(.col-bpm, .col-key, .col-time) { text-align: right; padding-left: 4px; padding-right: 12px; }
+.track-table td.col-num { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.track-table th.col-extra { text-align: right; padding-right: 12px; }
+
+/* The title takes exactly the sidebar's width while the sidebar is open (the same variable its
+   resizer drives, on <html>), so the field starts just past the sidebar's divider instead of
+   running over it. Head padding 10 + the toggle's −6 inset = it starts 4 px in. */
+.settings-head.lib-head-row.nav-open .lib-head-toggle {
+  flex: 0 0 calc(clamp(var(--lib-side-min, 150px), var(--lib-side-w, 200px), var(--lib-side-max, 340px)) - 14px);
+  margin-right: 0;
+  min-width: 0;
+}
+.settings-head.lib-head-row.nav-open .lib-head-tools { margin-left: 10px; }
+
+/* Column rules, but faint: none at all read as a list with nothing holding its columns. */
+.track-table th:not(:last-child),
+.track-table td:not(:last-child) {
+  border-right: 1px solid color-mix(in srgb, var(--text) 5%, transparent);
+}
+.track-table tbody tr.tt-spacer td { border-right: 0; }
+
+/* Rows −/＋: square, the glyph drawn dead centre. */
+.lib-head-rows .tt-step {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 6%, var(--panel));
+  color: var(--muted);
+}
+.lib-head-rows .tt-step:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 11%, var(--panel)); }
+.lib-head-rows .tt-step svg { width: 10px; height: 10px; display: block; }
+.lib-head-rows .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+
+/* ★ THE FIELD CARRIES ITS OWN FILTERS (TrackTable .tt-filter-trail): one box, the same width and
+   place in every view, with Cached / Stemmed (or Search's status) inside its right end. Taller
+   than before so the toggles sit inside with room around them. */
+.tt-filter,
+.lib-head-tools .tt-filter {
+  flex: 1 1 auto;
+  max-width: none;
+  height: 32px;
+  padding: 0 3px 0 11px;
+  gap: 8px;
+}
+.tt-filter-trail {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.tt-filter-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tt-filter-count:empty { display: none; }
+.tt-filter .tt-cache-chips,
+.lib-head-tools .tt-filter .tt-cache-chips {
+  margin-left: 0;
+  padding: 0;
+  gap: 2px;
+  background: transparent;
+}
+.tt-filter .tt-chip { height: 26px; border-radius: 6px; padding: 0 10px; }
+.tt-filter-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+}
+.tt-filter-clear svg { width: 9px; height: 9px; }
+.tt-filter-clear path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.tt-filter-clear:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+
+/* Rows −/＋: one joined pair, the field's height and fill, so it reads as the field's neighbour
+   rather than two loose boxes; the glyphs are drawn, centred in square cells. */
+.lib-head-rows {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  height: 32px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+}
+.lib-head-rows .tt-step {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: transparent;
+}
+.lib-head-rows .tt-step:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.lib-head-rows .tt-step svg { width: 11px; height: 11px; }
+.lib-head-tools:empty + .lib-head-rows { margin-left: auto; }
+
+/* −/＋ INSIDE the field (RowsStepper inField): the bar is one piece. A hairline sets the view
+   control apart from the filters before it. The title row's own stepper only shows where no table
+   field exists (the Queue). */
+.tt-rows-in {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 7px;
+  margin-left: 1px;
+  border-left: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.tt-rows-in .tt-step {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tt-rows-in .tt-step:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.tt-rows-in .tt-step:disabled { opacity: 0.35; cursor: default; }
+.tt-rows-in .tt-step svg { width: 11px; height: 11px; display: block; }
+.tt-rows-in .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
+.lib-head-tools:not(:empty) + .lib-head-rows { display: none; }

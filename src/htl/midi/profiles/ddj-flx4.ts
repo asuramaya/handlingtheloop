@@ -75,6 +75,11 @@ function padBanks(): MidiBinding[] {
     for (let i = 0; i < 8; i++) {
       out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "A", status: PAD_A, data: base + i, type: "note" });
       out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "B", status: PAD_B, data: base + i, type: "note" });
+      // SHIFT + pad: Pioneer's DDJ family sends the shifted pads on the NEXT status (deck A 0x98,
+      // deck B 0x9A), same notes. Bound with shift forced ON, so SHIFT+pad reaches the pad's
+      // shifted gesture (FX: toggle the latch; CUE: clear) even though no other binding sees it.
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "A", status: PAD_A + 1, data: base + i, type: "note", shift: true });
+      out.push({ control: { kind: "action", action: `hotcue${i + 1}`, padBank: bank }, deck: "B", status: PAD_B + 1, data: base + i, type: "note", shift: true });
     }
   return out;
 }
@@ -115,6 +120,10 @@ export const DDJ_FLX4: DeviceProfile = {
     // so force shift:false or the held SHIFT would suppress it.
     { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x60, type: "note", shift: false },
     { control: { kind: "action", action: "keyMatch" }, deck: "B", status: NOTE_B, data: 0x60, type: "note", shift: false },
+    // ★ SHIFT + BEAT SYNC on the DDJ-400 family sends 0x5C (Mixxx maps it to tempo-range); the 0x60
+    // above was never seen in a capture. Both → KEY until a capture settles which one this unit sends.
+    { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x5c, type: "note", shift: false },
+    { control: { kind: "action", action: "keyMatch" }, deck: "B", status: NOTE_B, data: 0x5c, type: "note", shift: false },
     // Performance-pad MODE buttons → HTL pad banks. The FLX4's four UNSHIFTED bank-select
     // buttons (note status, deck A 0x90 / deck B 0x91) switch which pad mode that DECK shows,
     // positionally 1:1 with our on-screen CUE · FX · LOOP · SMP row. Notes from the Mixxx map:
@@ -128,7 +137,8 @@ export const DDJ_FLX4: DeviceProfile = {
     // Shifted bank buttons → the peer pad modes. Captured live on the unit with SHIFT held
     // (notes climb by 2: HOT CUE 0x69, PAD FX1 0x6b, BEAT JUMP 0x6d, SAMPLER 0x6f). The App
     // padMode* handlers already route the shift flag to the peer (fx→fx2, loop→roll,
-    // sampler→global); CUE's 0x69 has no peer since KEY was retired, so it's left unbound.
+    // sampler→global, cue→cue2 = hot cues 9–16).
+    ...shiftedBtn("padModeCue", 0x69),
     ...shiftedBtn("padModeFx", 0x6b),
     ...shiftedBtn("padModeLoop", 0x6d),
     ...shiftedBtn("padModeSampler", 0x6f),
@@ -167,8 +177,9 @@ export const DDJ_FLX4: DeviceProfile = {
     // SMART CFX (0x96/0x00) → toggle the HI/MID/LOW knobs between EQ and STEM volume.
     // SMART FADER (0x96/0x01) → arm/disarm OUR Smart Fader (crossfader-driven auto-transition).
     //   SHIFT + SMART FADER (0x96/0x09) → enable/disable the crossfader entirely (the old toggle).
-    // (We always force the HW Smart-CFX/Fader features OFF — see App's force-off — so these
-    //  buttons drive our software versions, never Pioneer's.)
+    // (These buttons drive our software versions. The SMART CFX lamp is lit for stem mode, and the
+    //  hardware feature that comes with it is neutralised by the echoLamp filter below the bindings;
+    //  the SMART FADER hardware feature is still forced OFF — see App's feedback push.)
     { control: { kind: "action", action: "eqStemToggle" }, status: 0x96, data: 0x00, type: "note" },
     { control: { kind: "action", action: "smartFaderToggle" }, status: 0x96, data: 0x01, type: "note" },
     { control: { kind: "action", action: "xfaderToggle" }, status: 0x96, data: 0x09, type: "note", shift: true },
@@ -176,7 +187,7 @@ export const DDJ_FLX4: DeviceProfile = {
     // permanent pad-FX bank — no add/remove), so the section is a SINGLE-EFFECT unit over the
     // focused deck's chain. The 1·2 switch moves focus. LEVEL/DEPTH (14-bit, MSB 0x02 / LSB 0x22
     // — also mirrored on 0xB5, which we ignore) → selected-FX wet/dry. BEAT ◀▶ select the effect
-    // tab (SHIFT → reorder it); ON/OFF engage/bypass it (SHIFT → reset); FX SELECT latch the
+    // tab (SHIFT → step the focused chain); ON/OFF engage/bypass it (SHIFT → reset); FX SELECT latch the
     // selected effect's throw (SHIFT → clear the latch); SMART CFX resets.
     { control: { kind: "fader", target: "fxWetDry" }, status: 0xb4, data: 0x02, type: "cc14" },
     { control: { kind: "action", action: "fxBypassCur" }, status: 0x94, data: 0x47, type: "note" },
@@ -190,8 +201,11 @@ export const DDJ_FLX4: DeviceProfile = {
     // SHIFTED layer — the FLX sends its OWN notes when SHIFT is held (verified), so they carry
     // shift:true and hit the shifted branch of the same handlers: clear-latch / reorder / reset.
     { control: { kind: "action", action: "fxSelectPress" }, status: 0x94, data: 0x64, type: "note", shift: true },
-    { control: { kind: "action", action: "fxSelPrev" }, status: 0x94, data: 0x66, type: "note", shift: true },
-    { control: { kind: "action", action: "fxSelNext" }, status: 0x94, data: 0x6b, type: "note", shift: true },
+    // ★ SHIFT + BEAT ◀▶ STEPS THE FOCUSED CHAIN (operator, 2026-11-06: "repurpose shift + … left
+    // right between focused effects to change focused chains"). It reordered the selected effect,
+    // which nobody does mid-set; the chain is what aims the FX pads and the whole BEAT FX section.
+    { control: { kind: "action", action: "chainPrev" }, status: 0x94, data: 0x66, type: "note", shift: true },
+    { control: { kind: "action", action: "chainNext" }, status: 0x94, data: 0x6b, type: "note", shift: true },
     // SHIFT + ON/OFF is the RELEASE FX trigger on real Pioneer gear (confirmed via the DDJ-400
     // — "hold SHIFT and press the Beat FX ON/OFF button"), not a second bypass. Bound on both
     // firmware lamp-channel states, matching the unshifted pair above.
@@ -246,6 +260,24 @@ export const DDJ_FLX4: DeviceProfile = {
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —
     // IF the unit accepts incoming note-on for these (verify with the Debug output prober).
     padModes: { cue: 0x1b, fx: 0x1e, loop: 0x20, sampler: 0x22 },
+  },
+  // Channel LEVEL METERS: CC 0x02 on each deck's channel (0xB0 / 0xB1), 0–127 lights the column
+  // bottom-up — the same message rekordbox / Mixxx drive them with. Fed from the deck's post-fader
+  // peak (App: the meter loop), so the board shows what the app is actually playing.
+  meter: { status: { A: 0xb0, B: 0xb1 }, data: 0x02 },
+  // SMART CFX lamp (0x96/0x00). Lighting it engages Pioneer's hardware Smart CFX, which makes the
+  // COLOR knob ALSO send that deck's TRIM CC (and an unbound B4/B5 0x03). Captured 2026-11-06,
+  // deck A: 95/95 echoed trim messages landed within 6 ms of a COLOR message (92 within 2 ms,
+  // a few arrive just BEFORE it); 0/794 real TRIM messages had a COLOR message within 15 ms.
+  // So the echo is separable by timing. Deck B is assumed to mirror deck A (COLOR 0x18, trim B1).
+  echoLamp: {
+    lamp: [0x96, 0x00],
+    source: { A: [[0xb6, 0x17], [0xb6, 0x37]], B: [[0xb6, 0x18], [0xb6, 0x38]] },
+    echoes: {
+      A: [[0xb0, 0x04], [0xb0, 0x24], [0xb4, 0x03], [0xb4, 0x23]],
+      B: [[0xb1, 0x04], [0xb1, 0x24], [0xb5, 0x03], [0xb5, 0x23]],
+    },
+    windowMs: 12,
   },
   initSysex: FLX4_HANDSHAKE,
   keepAliveMs: 200,

@@ -11,7 +11,7 @@
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.node.json && tsc -p tsconfig.scripts.json",
     "worker": "vite build && rm -rf dist/models && wrangler dev",
     "worker:lan": "vite build && rm -rf dist/models && wrangler dev --ip 0.0.0.0",
-    "worker:lan:https": "vite build && rm -rf dist/models && wrangler dev --ip 0.0.0.0 --local-protocol https",
+    "worker:lan:https": "vite build && rm -rf dist/models && node scripts/lanproxy.mjs --spawn-worker",
     "deploy": "vite build && wrangler deploy",
     "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
     "test": "vitest run",

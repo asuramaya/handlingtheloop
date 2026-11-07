@@ -29,10 +29,27 @@ interface Setup {
   duration: number;
   bpm: number;
   hasStems: boolean;
+  phrases?: number[]; // section starts (s) and their labels — song structure, for planning
+  labels?: string[];
 }
 
 class FakeDeck {
   playing = false;
+  // The platter: a hand on it stops the transport (playing=false) while jogReturnsToPlay says the
+  // deck plays again on release — the state the mixer must not mistake for a stop.
+  rate = 1;
+  jogging = false;
+  jogReturnsToPlay = false;
+  grab(): void {
+    this.jogReturnsToPlay = this.playing;
+    this.jogging = true;
+    this.playing = false;
+  }
+  release(): void {
+    this.jogging = false;
+    if (this.jogReturnsToPlay) this.playing = true;
+    this.jogReturnsToPlay = false;
+  }
   duration = 0;
   hasStems = false;
   keylock = true;
@@ -250,14 +267,30 @@ class FakeQueue {
   getCurrent(): TrackMeta | null {
     return this.current;
   }
-  setCurrent(t: TrackMeta | null): void {
+  setCurrent(t: TrackMeta | null): boolean {
     this.current = t;
+    const queued = !!t && this.upcoming.some((x) => x.videoId === t.videoId);
+    if (queued) this.upcoming = this.upcoming.filter((x) => x.videoId !== t!.videoId);
+    return queued;
+  }
+  // A real ensureNext can be a network round trip; >0 makes it one, to expose re-entrancy.
+  ensureDelayMs = 0;
+  playlistEnded = false;
+  filling = false;
+  isFilling(): boolean {
+    return this.filling;
   }
   async ensureNext(): Promise<TrackMeta | null> {
+    if (this.ensureDelayMs) await new Promise((r) => setTimeout(r, this.ensureDelayMs));
     return this.upcoming[0] ?? null;
   }
   reseedRadio(): void {
     this.reseeds++;
+  }
+  enqueued: string[] = []; // videoIds put at the front by enqueueNext (the user's own picks)
+  enqueueNext(t: TrackMeta): void {
+    this.enqueued.push(t.videoId);
+    this.upcoming = [t, ...this.upcoming.filter((x) => x.videoId !== t.videoId)];
   }
   remove(videoId: string): void {
     this.removed.push(videoId);
@@ -335,6 +368,10 @@ class Rig {
     d.hasStems = s.hasStems;
     d.effectiveBpm = s.bpm;
     d.beatgrid = mkGrid(s.bpm, s.duration);
+    if (s.phrases) {
+      d.beatgrid.phrases = s.phrases;
+      d.beatgrid.phraseLabels = s.labels ?? [];
+    }
   }
 
   setup(videoId: string, s: Setup): void {
@@ -1076,11 +1113,11 @@ describe("AutoMixer — the separation schedule", () => {
   // ★ THE LAG FIX. The hold must be up for the whole visible part of the transition and DOWN
   // again by the time the mixer is armed on the new deck — a leaked hold starves separation for
   // the rest of the session, which is worse than the jank it was fixing.
-  test("holds the GPU across the transition and releases it at settle", async () => {
+  test("holds the GPU across the transition and releases it after the landing", async () => {
     const r = new Rig();
     const t2 = mkTrack("t2");
-    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
-    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 120, hasStems: false });
     r.loadAndPlay("A", mkTrack("t1"));
     r.queue.upcoming = [t2];
     r.autoAdvance = true;
@@ -1098,7 +1135,12 @@ describe("AutoMixer — the separation schedule", () => {
       .filter((x) => x.p === "cueing" || x.p === "mixing");
     expect(heldDuring.length).toBeGreaterThan(0);
     expect(heldDuring.every((x) => x.held)).toBe(true);
-    // …and released by the time we are armed again on the new deck.
+    // …still held through the LANDING (the next load must not stall the transition's last bars)…
+    expect(gpuHeld()).toBe(true);
+    for (let i = 0; i < 18; i++) await r.tick(500); // 9 s
+    expect(gpuHeld()).toBe(true);
+    // …and released once it is over, armed on the new deck.
+    for (let i = 0; i < 4; i++) await r.tick(500);
     expect(gpuHeld()).toBe(false);
   });
 
@@ -1224,5 +1266,611 @@ describe("AutoMixer machine — the AUTO chain engages on the outgoing deck alon
     expect(degraded).toBe(true);
     expect(routedAfterDegrade).toBe(true); // the outgoing tail kept playing
     expect(autoChain(r, "A")!.stems).toBe(0); // …and was still released at settle
+  });
+});
+
+// ── THE AUDIT SCENARIOS (P1–P7) ──────────────────────────────────────────────────────────────────
+// Each of these reproduced a user-visible fault before the fix: AUTO doing nothing from stopped
+// decks, the queue wiped on the AUTO press, Skip/Hold/Mix now not doing what they say, overlapping
+// ticks double-advancing, and settle popping the wrong track.
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// t1 (60 s / 120 bpm) playing on A + a queue, driven until the mixer reaches `phase`.
+async function driveTo(r: Rig, phase: AutoMixPhase, queue: string[] = ["q1", "q2", "q3"]): Promise<void> {
+  for (const id of ["t1", ...queue]) r.setup(id, { duration: 60, bpm: 120, hasStems: false });
+  r.loadAndPlay("A", mkTrack("t1"));
+  r.queue.upcoming = queue.map(mkTrack);
+  r.autoAdvance = true;
+  r.mixer.enable();
+  for (let i = 0; i < 600 && r.phase !== phase; i++) await r.tick(500);
+  expect(r.phase).toBe(phase);
+}
+
+describe("AutoMixer machine — AUTO from stopped decks (P1)", () => {
+  test("a loaded, stopped deck is STARTED by the AUTO press, and the queue is left alone", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.deckTracks.A = mkTrack("t1"); // loaded, not playing
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2"), mkTrack("q3"), mkTrack("q4")];
+    r.mixer.enable();
+    await r.tick();
+    expect(r.engine.A.playing).toBe(true);
+    expect(r.live).toBe("A");
+    expect(r.phase).toBe("armed");
+    expect(r.queue.reseeds).toBe(0); // enabling never wipes the queue
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["q1", "q2", "q3", "q4"]);
+    expect(r.queue.current?.videoId).toBe("t1");
+  });
+
+  test("prefers the deck the crossfader lets through", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 100, bpm: 120, hasStems: false });
+    r.deckTracks.A = mkTrack("t1");
+    r.deckTracks.B = mkTrack("t2");
+    r.xfade = 0.8; // B side
+    r.mixer.enable();
+    await r.tick();
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.engine.A.playing).toBe(false);
+    expect(r.live).toBe("B");
+  });
+
+  test("the OTHER loaded deck is the user's track: it is queued next, not loaded over (#12)", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.setup("mine", { duration: 100, bpm: 120, hasStems: false });
+    r.deckTracks.A = mkTrack("t1");
+    r.deckTracks.B = mkTrack("mine");
+    r.queue.upcoming = [mkTrack("q1")];
+    r.mixer.enable();
+    for (let i = 0; i < 4; i++) await r.tick();
+    expect(r.engine.A.playing).toBe(true);
+    expect(r.deckTracks.B?.videoId).toBe("mine"); // still there
+    expect(r.queue.enqueued).toEqual(["mine"]);
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["mine", "q1"]);
+    expect(r.mixer.getStatus().nextOnDeck).toEqual({ deck: "B", videoId: "mine" });
+  });
+
+  test("a later pause is never force-restarted; status says press-play", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.deckTracks.A = mkTrack("t1");
+    r.mixer.enable();
+    await r.tick();
+    r.pause("A");
+    r.setPos("A", 10);
+    for (let i = 0; i < 3; i++) await r.tick();
+    expect(r.engine.A.playing).toBe(false);
+    expect(r.mixer.getStatus().waitReason).toBe("press-play");
+  });
+
+  test("a REAL change of live track still reseeds the radio", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.mixer.enable();
+    await r.tick();
+    expect(r.queue.reseeds).toBe(0);
+    r.loadAndPlay("B", mkTrack("t2"));
+    await r.tick();
+    expect(r.queue.reseeds).toBe(1);
+  });
+
+  // Operator, 2026-11-05: loading a song that was IN the suggestions threw the whole list away.
+  test("playing a track picked FROM the list keeps the rest of the list", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2", "q3"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2"), mkTrack("q3")];
+    r.mixer.enable();
+    await r.tick();
+    r.engine.A.pause();
+    r.loadAndPlay("B", mkTrack("q2"));
+    await r.tick();
+    expect(r.queue.reseeds).toBe(0);
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["q1", "q3"]);
+  });
+});
+
+describe("AutoMixer machine — re-entrancy (P2)", () => {
+  test("ticks fired every 150 ms over a slow ensureNext advance ONCE, onto one deck", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2", "q3"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2"), mkTrack("q3")];
+    r.queue.ensureDelayMs = 400;
+    r.mixer.enable();
+    r.pause("A");
+    r.setPos("A", 99); // ended
+    const ps: Promise<void>[] = [];
+    for (let i = 0; i < 6; i++) {
+      ps.push(r.mixer.tick()); // NOT awaited — exactly what the app's setInterval does
+      await sleep(150);
+    }
+    await Promise.all(ps);
+    await sleep(600);
+    expect(r.deckTracks.B?.videoId).toBe("q1");
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.engine.A.playing).toBe(false); // q2 was NOT also started on A
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["q2", "q3"]);
+    expect(r.queue.current?.videoId).toBe("q1");
+  });
+});
+
+describe("AutoMixer machine — settle removes what played (P3)", () => {
+  test("a play-next queued during cueing survives the transition; the mixed track leaves the queue", async () => {
+    const r = new Rig();
+    await driveTo(r, "cueing", ["q1", "q2"]);
+    r.queue.upcoming.unshift(mkTrack("USERPICK"));
+    for (let i = 0; i < 600 && !(r.phase === "armed" && r.live === "B"); i++) await r.tick(500);
+    expect(r.live).toBe("B");
+    expect(r.deckTracks.B?.videoId).toBe("q1");
+    expect(r.queue.current?.videoId).toBe("q1");
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["USERPICK", "q2"]);
+  });
+});
+
+describe("AutoMixer machine — Skip (P4, P6)", () => {
+  test("Skip while armed drops the preloaded next track and preloads the new head", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2")];
+    r.mixer.enable();
+    for (let i = 0; i < 3; i++) await r.tick();
+    expect(r.deckTracks.B?.videoId).toBe("q1");
+    r.mixer.skip();
+    for (let i = 0; i < 3; i++) await r.tick();
+    expect(r.queue.upcoming.map((t) => t.videoId)).toEqual(["q2"]);
+    expect(r.deckTracks.B?.videoId).toBe("q2");
+  });
+
+  test("Skip mid-mix aborts cleanly: incoming paused, fader back on the live deck, locks off", async () => {
+    const r = new Rig();
+    await driveTo(r, "mixing");
+    r.mixer.skip();
+    expect(r.engine.B.playing).toBe(false);
+    expect(r.xfade).toBe(-1);
+    expect(r.engine.syncRole("B")).toBe("off");
+    expect(r.engine.keyRole("B")).toBe("off");
+    expect(r.queue.removed).toContain("q1");
+    expect(r.phase).toBe("armed");
+    expect(r.live).toBe("A");
+  });
+});
+
+describe("AutoMixer machine — Hold (P5)", () => {
+  test("Hold mid-mix aborts and STAYS held — no immediate re-mix; the track stays queued", async () => {
+    const r = new Rig();
+    await driveTo(r, "mixing");
+    r.mixer.hold();
+    expect(r.mixer.getStatus().held).toBe(true);
+    expect(r.engine.B.playing).toBe(false);
+    r.autoAdvance = false; // freeze the outgoing short of its end so only the hold is under test
+    for (let i = 0; i < 20; i++) await r.tick(500);
+    expect(r.phase).toBe("armed");
+    expect(r.engine.B.playing).toBe(false);
+    expect(r.queue.upcoming[0]?.videoId).toBe("q1");
+    // Released → the old mix point is behind us, so it re-plans one just ahead of the playhead
+    // (never behind it) and goes as soon as playback reaches it.
+    r.mixer.hold();
+    expect(r.mixer.getStatus().held).toBe(false);
+    r.autoAdvance = true;
+    for (let i = 0; i < 10 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+  });
+
+  test("held: a natural end still continues onto the next track, and the hold clears", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1")];
+    r.mixer.enable();
+    await r.tick();
+    r.mixer.hold();
+    r.setPos("A", 90); // well past the mix point: held, so no transition
+    for (let i = 0; i < 4; i++) await r.tick();
+    expect(r.phase).toBe("armed");
+    r.pause("A");
+    r.setPos("A", 99);
+    await r.tick();
+    expect(r.live).toBe("B");
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.mixer.getStatus().held).toBe(false);
+  });
+});
+
+describe("AutoMixer machine — Mix now (P7)", () => {
+  test("from armed early in the track it MIXES NOW, not at the structural exit", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.setPos("A", 10);
+    r.queue.upcoming = [mkTrack("q1")];
+    r.mixer.enable();
+    await r.tick();
+    r.mixer.mixNow();
+    for (let i = 0; i < 6 && r.phase !== "mixing"; i++) await r.tick();
+    expect(r.phase).toBe("mixing");
+    expect(r.engine.A.position()).toBeLessThan(12);
+    const s = r.mixer.getStatus();
+    expect(s.planResolved).toBe(true);
+    expect(s.planLabel).toBeTruthy();
+    expect(s.forced).toBe(false); // delivered
+  });
+
+  test("Mix now clears Hold", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("q1")];
+    r.mixer.enable();
+    await r.tick();
+    r.mixer.hold();
+    r.mixer.mixNow();
+    expect(r.mixer.getStatus().held).toBe(false);
+    for (let i = 0; i < 6 && r.phase !== "mixing"; i++) await r.tick();
+    expect(r.phase).toBe("mixing");
+  });
+});
+
+describe("AutoMixer machine — status for the UI", () => {
+  test("countdown and progress are reported DURING the mix", async () => {
+    const r = new Rig();
+    await driveTo(r, "mixing");
+    await r.tick(500);
+    const s = r.mixer.getStatus();
+    expect(s.mixProgress).toBeGreaterThan(0);
+    expect(s.mixProgress).toBeLessThanOrEqual(1);
+    expect(s.countdownSec).not.toBeNull();
+    expect(s.liveDuration).toBe(60);
+    expect(s.mixOutTime).not.toBeNull();
+    expect(s.waitReason).toBeNull();
+  });
+
+  test("waitReason: queue-empty / radio-filling / playlist-ended", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.mixer.enable();
+    await r.tick();
+    expect(r.mixer.getStatus().waitReason).toBe("queue-empty");
+    r.queue.filling = true;
+    expect(r.mixer.getStatus().waitReason).toBe("radio-filling");
+    r.queue.filling = false;
+    r.queue.playlistEnded = true;
+    expect(r.mixer.getStatus().waitReason).toBe("playlist-ended");
+  });
+
+  test("tick() is not re-entrant", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 100, bpm: 120, hasStems: false });
+    r.queue.upcoming = [mkTrack("t1")];
+    let loads = 0;
+    const deps = (r.mixer as unknown as { deps: AutoMixerDeps }).deps;
+    const inner = deps.loadDeck;
+    deps.loadDeck = async (id, t) => {
+      loads++;
+      await sleep(50);
+      await inner(id, t);
+    };
+    r.mixer.enable();
+    await Promise.all([r.mixer.tick(), r.mixer.tick(), r.mixer.tick()]);
+    expect(loads).toBe(1);
+    expect(r.engine.A.playing).toBe(true);
+  });
+});
+
+// ── the jog under AUTO (operator, 2026-11-04: "if i mess with the jog while its on, the timing for
+// next song does not respond properly") ──
+describe("AutoMixer machine — the jog under AUTO", () => {
+  // Walk the live deck to `to` in steps playback explains (≤ 0.5 s per 150 ms tick is a
+  // jump-free walk: the mixer caps dt at 0.5 s), ticking as it goes.
+  async function walk(r: Rig, id: DeckId, to: number, until?: () => boolean) {
+    const d = r.engine.deck(id);
+    while (d.position() < to && !(until && until())) {
+      d.setPos(Math.min(to, d.position() + 0.4));
+      await r.tick(500);
+    }
+  }
+  function rig() {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.mixer.enable();
+    return r;
+  }
+
+  test("searching PAST the planned exit re-plans it ahead of the playhead, with a blend that fits", async () => {
+    const r = rig();
+    r.setPos("A", 10);
+    await r.tick();
+    const planned = r.mixer.getStatus().mixOutTime!;
+    expect(planned).toBeGreaterThan(100);
+    r.setPos("A", planned + 15); // SHIFT-search well past it
+    for (let i = 0; i < 6 && r.phase !== "cueing"; i++) await r.tick();
+    expect(r.phase).toBe("cueing");
+    const exit = r.mixer.getStatus().mixOutTime!;
+    expect(exit).toBeGreaterThanOrEqual(planned + 15); // was: the old exit, already behind us
+  });
+
+  test("searching BACK while armed moves the countdown back too", async () => {
+    const r = rig();
+    r.setPos("A", 100);
+    await r.tick();
+    const before = r.mixer.getStatus().countdownSec!;
+    r.setPos("A", 40);
+    await r.tick();
+    expect(r.mixer.getStatus().countdownSec!).toBeGreaterThan(before + 50);
+  });
+
+  test("a hand on the outgoing platter at the exit holds the mix until it lets go", async () => {
+    const r = rig();
+    r.setPos("A", 120);
+    await walk(r, "A", 190, () => r.phase === "cueing");
+    expect(r.phase).toBe("cueing");
+    const exit = r.mixer.getStatus().mixOutTime!;
+    await walk(r, "A", exit - 0.5);
+    expect(r.phase).toBe("cueing");
+    r.engine.A.grab();
+    r.setPos("A", exit + 0.5); // scratched across the exit
+    await r.tick();
+    await r.tick();
+    expect(r.phase).toBe("cueing"); // was: the incoming started under the hand
+    expect(r.engine.B.playing).toBe(false);
+    r.engine.A.release();
+    await r.tick();
+    expect(r.phase).toBe("mixing");
+  });
+
+  test("touching the incoming deck's jog mid-blend does not hand the mix to manual", async () => {
+    const r = rig();
+    r.setPos("A", 120);
+    await walk(r, "A", 199, () => r.phase === "mixing");
+    expect(r.phase).toBe("mixing");
+    r.engine.B.grab();
+    await r.tick();
+    expect(r.phase).toBe("mixing"); // was: "manual"
+    r.engine.B.release();
+    await r.tick();
+    expect(r.phase).toBe("mixing");
+  });
+});
+
+describe("AutoMixer machine — a pair too far apart to beat-match", () => {
+  test("88 → 130 BPM: no SYNC, no tempo glide, and not a long blend", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.engine.syncRole("B")).toBe("off"); // was: slaved — B played ~30 % slow
+    expect(r.engine.commandedRamp).toBe(false); // no glide dragging A toward 130
+    const label = (r.mixer.getStatus().planLabel ?? "").toLowerCase();
+    expect(label.startsWith("blend") || label.startsWith("stem")).toBe(false);
+  });
+
+  test("88 → 130 BPM: the incoming starts AT the cut, on the one — silent and stopped before it", async () => {
+    const r = new Rig("showy");
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.mixer.getStatus().plan?.bars).toBe(4); // one short gesture
+    expect(r.engine.B.playing).toBe(false); // not yet: it would run unsynced under A
+    expect(r.xfade).toBe(-1); // fader still all on A
+    // The cut is a BAR LINE of A (half-way through an echo/wash, the last bar otherwise).
+    const st = r.mixer.getStatus();
+    const k = st.plan!.style === "echoOut" || st.plan!.style === "washOut" ? 2 : 3;
+    const line = st.mixOutTime! + k * ((4 * 60) / 88);
+    let startedAtPos: number | null = null;
+    for (let i = 0; i < 40 && r.phase === "mixing"; i++) {
+      await r.tick(500);
+      if (startedAtPos == null && r.engine.B.playing) startedAtPos = r.engine.A.position();
+    }
+    expect(startedAtPos).not.toBeNull();
+    expect(startedAtPos!).toBeGreaterThanOrEqual(line - 0.005); // never before the bar line
+    expect(startedAtPos!).toBeLessThan(line + 0.51); // and on the first tick at/after it (0.5 s steps here)
+    expect(r.phase).not.toBe("manual"); // a deliberately stopped incoming is not a user stop
+  });
+});
+
+// ── the audio clock (2026-11-04): discrete moments are BAR LINES of the live track, read off its
+// playhead, not fractions of a progress counter polled every 150 ms ──
+describe("AutoMixer machine — moments land on the live track's bar lines", () => {
+  async function toMixing(r: Rig) {
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    r.autoAdvance = false;
+  }
+
+  test("an unmatched pair's cut fires when the PLAYHEAD reaches the bar line, whatever the counter says", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 88, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 130, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    await toMixing(r);
+    const st = r.mixer.getStatus();
+    const bar = (4 * 60) / 88;
+    const plan = st.plan!;
+    const k = plan.style === "echoOut" || plan.style === "washOut" ? 2 : 3;
+    const line = st.mixOutTime! + k * bar;
+    r.setPos("A", line - 0.03);
+    await r.tick(1);
+    expect(r.engine.B.playing).toBe(false); // 30 ms early: not yet
+    r.setPos("A", line + 0.002);
+    await r.tick(1); // 1 ms of counter: the progress fraction has barely moved
+    expect(r.engine.B.playing).toBe(true); // …but the bar line is here, so the new track is in
+  });
+
+  test("progress counts the live track's own time (tempo), so bar k of the blend is bar k of the music", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 122, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    await toMixing(r);
+    const p0 = r.mixer.getStatus().mixProgress ?? 0;
+    r.engine.A.rate = 1.1; // the deck running 10 % fast
+    for (let i = 0; i < 10; i++) await r.tick(500);
+    const p1 = r.mixer.getStatus().mixProgress ?? 0;
+    const bars = r.mixer.getStatus().plan!.bars;
+    const barsSeconds = (bars * 4 * 60) / 120;
+    expect(p1 - p0).toBeCloseTo((5 * 1.1) / barsSeconds, 3); // 5 s of wall clock = 5.5 s of track
+  });
+});
+
+describe("AutoMixer machine — the tempo bridge (124 → 145 BPM: 17 % apart)", () => {
+  test("catches A in a loop, rides it to 145 with key-lock on, drops B on bar 6, gives everything back", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 124, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 145, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.engine.A.keylock = false; // the user's own setting, to be handed back
+    r.queue.upcoming = [mkTrack("t2")];
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 800 && r.phase !== "mixing"; i++) await r.tick(500);
+    expect(r.phase).toBe("mixing");
+    expect(r.mixer.getStatus().plan?.style).toBe("tempoBridge");
+    expect(r.mixer.getStatus().plan?.bars).toBe(8);
+    expect(r.engine.A.loopBeats).toBe(4); // caught: a one-bar loop
+    expect(r.engine.A.keylock).toBe(true); // rides in tempo, not in pitch
+    expect(r.engine.B.playing).toBe(false);
+    expect(r.engine.syncRole("B")).toBe("off");
+
+    let tempoAt4: number | null = null;
+    let droppedAtBar: number | null = null;
+    let loopMin = 4;
+    for (let i = 0; i < 200 && r.phase === "mixing"; i++) {
+      await r.tick(250);
+      const bars = (r.mixer.getStatus().mixProgress ?? 0) * 8;
+      if (r.engine.A.loopBeats > 0) loopMin = Math.min(loopMin, r.engine.A.loopBeats);
+      if (tempoAt4 == null && bars >= 4.05) tempoAt4 = r.engine.A.tempo;
+      if (droppedAtBar == null && r.engine.B.playing) droppedAtBar = bars;
+    }
+    expect(tempoAt4!).toBeCloseTo((145 / 124 - 1) * 100, 0); // A is AT B's tempo before the build
+    expect(loopMin).toBe(0.5); // the roll went all the way down
+    expect(droppedAtBar!).toBeGreaterThanOrEqual(6); // B lands on the drop bar
+    expect(droppedAtBar!).toBeLessThan(6.2); // …on it, not bars later
+    // settled onto B; A paused, its tempo and the user's key-lock back, nothing looping
+    expect(r.live).toBe("B");
+    expect(r.engine.A.tempo).toBe(0);
+    expect(r.engine.A.keylock).toBe(false);
+    expect(r.engine.A.loopBeats).toBe(0);
+  });
+});
+
+describe("AutoMixer machine — the double drop", () => {
+  test("plans while armed, starts the build eight bars before A's last hook, lands B's drop ON it", async () => {
+    const r = new Rig();
+    const bar = 240 / 128;
+    // A: hook "C" last at 90 s (8 bars long); B: its body (first recurring label) at 30 s.
+    r.setup("t1", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75, 90, 105], labels: ["I", "V", "C", "V", "C", "V", "C", "O"] });
+    r.setup("t2", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75], labels: ["I", "J", "V", "C", "V", "C"] });
+    r.loadAndPlay("A", { ...mkTrack("t1"), key: "8A", energy: 0.8 });
+    r.queue.upcoming = [{ ...mkTrack("t2"), key: "9A", energy: 0.85 }];
+    r.queue.arc = "build";
+    r.setPos("A", 20);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 400 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.phase).toBe("mixing");
+    const st = r.mixer.getStatus();
+    expect(st.plan?.style).toBe("doubleDrop");
+    expect(st.plan?.bars).toBe(16);
+    expect(st.mixOutTime!).toBeCloseTo(90 - 8 * bar, 1); // the build starts eight bars before the hook
+    expect(r.engine.B.playing).toBe(true); // B's build runs under A from the top
+    expect(r.engine.syncRole("B")).toBe("slave"); // beat-matched: it is a lockable pair
+    // B was cued eight of its own bars before its drop, so after eight bars its drop is playing.
+    let bAtDrop: number | null = null;
+    for (let i = 0; i < 400 && r.phase === "mixing"; i++) {
+      await r.tick(100);
+      if (bAtDrop == null && r.engine.A.position() >= 90) bAtDrop = r.engine.B.position();
+    }
+    expect(bAtDrop!).toBeGreaterThanOrEqual(30 - 0.2);
+    expect(bAtDrop!).toBeLessThan(30 + 0.3); // B is AT its drop when A hits its hook
+    expect(r.live).toBe("B");
+  });
+
+  test("a pair that does not qualify (keys two steps apart) just mixes normally", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75, 90, 105], labels: ["I", "V", "C", "V", "C", "V", "C", "O"] });
+    r.setup("t2", { duration: 125, bpm: 128, hasStems: false, phrases: [0, 15, 30, 45, 60, 75], labels: ["I", "J", "V", "C", "V", "C"] });
+    r.loadAndPlay("A", { ...mkTrack("t1"), key: "8A", energy: 0.8 });
+    r.queue.upcoming = [{ ...mkTrack("t2"), key: "10A", energy: 0.85 }];
+    r.queue.arc = "build";
+    r.setPos("A", 20);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 400 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.mixer.getStatus().plan?.style).not.toBe("doubleDrop");
+  });
+});
+
+describe("AutoMixer machine — a bridge started with Mix now", () => {
+  test("the incoming is playing, and live, when the bridge settles", async () => {
+    const r = new Rig();
+    r.setup("t1", { duration: 200, bpm: 124, hasStems: false });
+    r.setup("t2", { duration: 200, bpm: 145, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [mkTrack("t2")];
+    r.setPos("A", 30);
+    r.autoAdvance = true;
+    r.mixer.enable();
+    for (let i = 0; i < 20; i++) await r.tick(250);
+    r.mixer.mixNow();
+    for (let i = 0; i < 40 && r.phase !== "mixing"; i++) await r.tick(250);
+    expect(r.mixer.getStatus().plan?.style).toBe("tempoBridge");
+    for (let i = 0; i < 400 && r.phase === "mixing"; i++) await r.tick(250);
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.live).toBe("B");
+    expect(r.mixer.getStatus().waitReason).not.toBe("press-play");
+  });
+});
+
+describe("AutoMixer machine — a transition that throws still lands", () => {
+  // Operator, 2026-11-04: the header sat on "Mixes into … in 0s" and the next track never came in.
+  // An exception in startMix used to leave the machine cueing past its mix point, rethrowing on
+  // every tick. It must cut to the incoming deck instead.
+  test("startMix throwing → a clean cut onto the next track, then armed again", async () => {
+    const r = new Rig();
+    for (const id of ["t1", "q1", "q2"]) r.setup(id, { duration: 100, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.setPos("A", 10);
+    r.queue.upcoming = [mkTrack("q1"), mkTrack("q2")];
+    r.mixer.enable();
+    await r.tick();
+    (r.mixer as unknown as { armGesture: () => void }).armGesture = () => {
+      throw new Error("worklet unavailable");
+    };
+    const err = console.error;
+    console.error = () => {};
+    try {
+      r.mixer.mixNow();
+      for (let i = 0; i < 8; i++) await r.tick();
+    } finally {
+      console.error = err;
+    }
+    expect(r.engine.B.playing).toBe(true);
+    expect(r.engine.A.playing).toBe(false);
+    expect(r.mixer.getStatus().liveDeck).toBe("B");
+    expect(["armed", "preload", "cueing"]).toContain(r.phase);
   });
 });

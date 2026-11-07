@@ -1,4 +1,5 @@
 import type { TrackMeta } from "@htl/library";
+import { displayTrack } from "../../util/format";
 
 // Drag payload: JSON array of videoIds (or full metas). Sidebar playlists are drop targets.
 export const TRACK_DND_MIME = "application/x-htl-tracks";
@@ -25,9 +26,9 @@ export interface MenuState {
 // falls under TITLE_MIN.
 export const RESIZABLE: { id: SortKey; min: number; def: number }[] = [
   { id: "artist", min: 70, def: 0.22 },
-  { id: "bpm", min: 44, def: 0.09 },
-  { id: "key", min: 40, def: 0.08 },
-  { id: "time", min: 48, def: 0.1 },
+  { id: "bpm", min: 44, def: 0.07 },
+  { id: "key", min: 40, def: 0.06 },
+  { id: "time", min: 48, def: 0.07 },
 ];
 export const TITLE_MIN = 120; // px — Title never collapses below this; caps how wide the others grow
 
@@ -81,10 +82,12 @@ export function loadScale(): number {
 // Compare two tracks by a sort key (stable-ish; missing values sort last/low).
 export function compareBy(a: TrackMeta, b: TrackMeta, key: SortKey): number {
   switch (key) {
+    // Sorted by what the columns SHOW (displayTrack), so A–Z reads A–Z: by raw title, every
+    // "Katy Perry - …" upload sorted under K while the cell said "Last Friday Night".
     case "title":
-      return (a.title || "").localeCompare(b.title || "");
+      return displayTrack(a.title, a.artist).title.localeCompare(displayTrack(b.title, b.artist).title);
     case "artist":
-      return (a.artist || "").localeCompare(b.artist || "");
+      return displayTrack(a.title, a.artist).artist.localeCompare(displayTrack(b.title, b.artist).artist);
     case "bpm":
       return (a.bpm ?? -1) - (b.bpm ?? -1);
     case "key":
@@ -94,4 +97,38 @@ export function compareBy(a: TrackMeta, b: TrackMeta, key: SortKey): number {
     default:
       return 0;
   }
+}
+
+// ★ ONE ROW SIZE FOR THE WHOLE LIBRARY, owned here rather than by each table. The −/＋ stepper moved
+// from every table's toolbar to the Library's title row (operator, 2026-11-04: "move rows + - to the
+// topmost on the same line as the title of the library"), so the tables and that header share one
+// value: a tiny store every table subscribes to (useColumnLayout) and the header writes.
+let rowScale: number | null = null;
+const rowScaleSubs = new Set<() => void>();
+export function getRowScale(): number {
+  if (rowScale == null) {
+    try {
+      rowScale = loadScale();
+    } catch {
+      rowScale = 1;
+    }
+  }
+  return rowScale;
+}
+export function setRowScale(v: number): void {
+  const next = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, v)) * 10) / 10;
+  if (next === rowScale) return;
+  rowScale = next;
+  try {
+    localStorage.setItem(SCALE_KEY, String(next));
+  } catch {
+    /* ignore */
+  }
+  for (const f of rowScaleSubs) f();
+}
+export function subscribeRowScale(f: () => void): () => void {
+  rowScaleSubs.add(f);
+  return () => {
+    rowScaleSubs.delete(f);
+  };
 }

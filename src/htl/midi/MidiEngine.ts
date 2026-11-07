@@ -29,6 +29,7 @@ interface MidiAccess {
 type RequestMIDIAccess = (opts?: { sysex?: boolean }) => Promise<MidiAccess>;
 
 const addr = (status: number, data: number) => (status << 8) | data;
+const nowMs = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 // OS loopback / virtual MIDI ports that aren't a real controller — skip them when
 // auto-picking the device and when sending output (they echo back as fake input).
@@ -83,6 +84,8 @@ export class MidiEngine {
   private msb = new Map<number, number>(); // cc14 MSB store, keyed by addr(status,msbData)
   private lsb = new Map<number, number>();
   private shiftHeld: Record<DeckId, boolean> = { A: false, B: false }; // each deck's SHIFT button
+  private selectorTimer: ReturnType<typeof setTimeout> | null = null; // pending browse-press HOLD (see dispatchNote)
+  static readonly SELECTOR_HOLD_MS = 500;
   private keepAlive: ReturnType<typeof setInterval> | null = null;
   private learnArmed = false;
   private lastFb: Partial<Record<DeckId, DeckFeedback>> = {};
@@ -191,6 +194,9 @@ export class MidiEngine {
 
   stop(): void {
     if (this.keepAlive) clearInterval(this.keepAlive);
+    if (this.echoTimer != null) clearTimeout(this.echoTimer);
+    this.echoTimer = null;
+    this.echoPending = [];
     this.keepAlive = null;
     if (this.access) {
       for (const input of this.access.inputs.values()) input.onmidimessage = null;
@@ -228,6 +234,9 @@ export class MidiEngine {
     // port would loop our LED messages straight back in as fake button presses.
     this.outputs = Array.from(this.access.outputs.values()).filter((o) => !isVirtualPort(o.name));
     this.profile = profile;
+    this.lastMeter = { A: -1, B: -1 }; // a (re)connected board starts dark — resend whatever is current
+    this.lampSent = null; // the board's lamp state is unknown after a (re)connect — resend it
+    this.echoPending = [];
     this.buildIndex();
     this.startKeepAlive();
     this.opts.onStatus({ state: "connected", device: chosen?.name ?? null, profile: profile?.name ?? null });
@@ -396,6 +405,13 @@ export class MidiEngine {
       return;
     }
 
+    if (isCC && this.echoFilter(status, d1, d2)) return;
+    const lamp = this.profile?.echoLamp?.lamp;
+    if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
+      this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
+      this.lampChangedAt = nowMs(); // and the echo filter stays armed through the flip
+    }
+
     if (isNote) {
       const pressed = hi === 0x90 && d2 > 0;
       this.dispatchNote(addr(status, d1), pressed, d2);
@@ -428,10 +444,29 @@ export class MidiEngine {
       // can be MOMENTARY — ROLL snaps back and FX2 throws off on key-up. Latching actions
       // (every other button) just ignore the release downstream, so this is safe for all.
       // (deck omitted → App drives the focused deck, e.g. Starrypad pads.)
-      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank });
+      this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank, ...(entry.shiftOverride != null ? { shiftFixed: true } : {}) });
       return;
     }
-    if (!pressed) return; // the remaining note controls (focus / beatjump / load / selector) act on press only
+    // ★ THE BROWSE ENCODER'S PRESS HAS A HOLD (operator, 2026-11-03: board-only library navigation
+    // had "no way to exit it", "maybe a hold or double press?"). A tap still acts on the press, as
+    // before (tracks ↔ sources). Held for SELECTOR_HOLD_MS it also sends selectorHold, which closes
+    // the library. The release only cancels the pending hold, so a controller that never sends a
+    // note-off would turn every press into a hold: the FLX4 does send one (note-on, velocity 0).
+    if (c.kind === "selector") {
+      if (pressed) {
+        this.opts.onEvent({ type: "selector" });
+        if (this.selectorTimer != null) clearTimeout(this.selectorTimer);
+        this.selectorTimer = setTimeout(() => {
+          this.selectorTimer = null;
+          this.opts.onEvent({ type: "selectorHold" });
+        }, MidiEngine.SELECTOR_HOLD_MS);
+      } else if (this.selectorTimer != null) {
+        clearTimeout(this.selectorTimer);
+        this.selectorTimer = null;
+      }
+      return;
+    }
+    if (!pressed) return; // the remaining note controls (focus / beatjump / load) act on press only
     if (c.kind === "focus") {
       this.opts.onEvent({ type: "focus", deck: c.deck });
       return;
@@ -440,8 +475,6 @@ export class MidiEngine {
       this.opts.onEvent({ type: "beatjump", deck: b.deck, beats: c.beats, shift });
     } else if (c.kind === "load" && b.deck) {
       this.opts.onEvent({ type: "load", deck: b.deck });
-    } else if (c.kind === "selector") {
-      this.opts.onEvent({ type: "selector" });
     }
   }
 
@@ -495,11 +528,15 @@ export class MidiEngine {
       }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
-      // The FLX4's outer ring idles on 0x40 but JITTERS ±1 (0x3F/0x41) at rest — touching
-      // the unit (e.g. a SHIFT press) shakes out a stream of those. Deadzone ±1 so resting
-      // noise never bends; a real ring turn easily clears it.
+      // ★ EVERY RING TICK, AT ONCE (operator, 2026-11-06). There used to be a flat ±1 deadzone
+      // against rest jitter. A slow turn is nothing but ±1s (2026-11-02 capture: 1563 of 2321 ring
+      // messages), so it ate two thirds of every careful nudge. A run filter replaced it, holding
+      // a ±1 until a same-direction tick followed. But a micro back-and-forth is single REVERSING
+      // ±1s (41 3F 41 on the monitor), so that filter left "dead spots … like it gets stuck". No
+      // filter now: rest jitter alternates ±1 and nets to zero travel, and the bend's own inertia
+      // (bendPhysics RING_TAU) averages it away.
       const delta = centeredDelta(val);
-      if (Math.abs(delta) > 1) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
+      if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
       const delta = centeredDelta(val);
@@ -519,7 +556,8 @@ export class MidiEngine {
   private emitFader(c: ControlSpec, deck: DeckId | undefined, v01: number, pickup?: boolean): void {
     if (c.kind !== "fader") return;
     const value = c.invert ? 1 - v01 : v01;
-    this.opts.onEvent({ type: "fader", target: c.target, deck, value, pickup });
+    const shift = deck ? this.shiftHeld[deck] : false;
+    this.opts.onEvent({ type: "fader", target: c.target, deck, value, pickup, ...(shift ? { shift } : {}) });
   }
 
   // Raw relative step for an encoder reported as ABSOLUTE 0..127 that WRAPS (127→0): a
@@ -585,6 +623,90 @@ export class MidiEngine {
     }
   }
 
+  // --- Echo lamp (FLX4 SMART CFX) ---
+  // Lit, the hardware feature makes the COLOR knob ALSO send TRIM. Every echo lands within a few ms
+  // of a COLOR message, a hair before or after it; real TRIM turns never do. So while the lamp is lit
+  // (and briefly after it changes, in case the firmware lags), a TRIM-address message within
+  // windowMs AFTER a COLOR message is dropped at once, and one with no COLOR message yet is held for
+  // windowMs and dropped if one arrives. Trim gains ≤ windowMs of latency, only while lit.
+  private lampSent: boolean | null = null;
+  private lampChangedAt = -Infinity;
+  private lastSourceAt: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
+  private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
+  private echoTimer: ReturnType<typeof setTimeout> | null = null;
+  static readonly LAMP_GRACE_MS = 600;
+  // The lamp's own button: the firmware flips the lamp itself on press/release, after (or around)
+  // our send, so for a while after any press/release every setEchoLamp call re-asserts the state.
+  private lampReassertUntil = -Infinity;
+  static readonly LAMP_REASSERT_MS = 900;
+
+  /** Light or darken the profile's echo lamp. Diffed (and reset on connect), so it is safe to call
+   *  every feedback tick. No-op on a board without one. */
+  setEchoLamp(on: boolean): void {
+    const l = this.profile?.echoLamp;
+    if (!l || !this.outputs.length) return;
+    if (on === this.lampSent && nowMs() > this.lampReassertUntil) return;
+    if (on !== this.lampSent) this.lampChangedAt = nowMs();
+    this.lampSent = on;
+    this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
+  }
+
+  private echoDeck(kind: "source" | "echoes", status: number, d1: number): DeckId | null {
+    const l = this.profile?.echoLamp;
+    if (!l) return null;
+    for (const d of ["A", "B"] as const) if (l[kind][d].some(([s, c]) => s === status && c === d1)) return d;
+    return null;
+  }
+
+  /** true = the message was consumed (dropped as an echo, or held to decide). */
+  private echoFilter(status: number, d1: number, d2: number): boolean {
+    const l = this.profile?.echoLamp;
+    if (!l) return false;
+    const t = nowMs();
+    const active = this.lampSent === true || t - this.lampChangedAt < MidiEngine.LAMP_GRACE_MS;
+    if (!active) return false;
+    const src = this.echoDeck("source", status, d1);
+    if (src) {
+      this.lastSourceAt[src] = t;
+      // anything held for this deck arrived just before its COLOR message: an echo
+      this.echoPending = this.echoPending.filter((p) => p.deck !== src || t - p.t > l.windowMs);
+      return false; // the COLOR message itself is real
+    }
+    const deck = this.echoDeck("echoes", status, d1);
+    if (!deck) return false;
+    if (t - this.lastSourceAt[deck] <= l.windowMs) return true; // right after COLOR: an echo
+    this.echoPending.push({ deck, status, d1, d2, t });
+    this.scheduleEchoFlush(l.windowMs);
+    return true;
+  }
+
+  private scheduleEchoFlush(windowMs: number): void {
+    if (this.echoTimer != null) return;
+    this.echoTimer = setTimeout(() => {
+      this.echoTimer = null;
+      const cut = nowMs() - windowMs;
+      const due = this.echoPending.filter((p) => p.t <= cut);
+      this.echoPending = this.echoPending.filter((p) => p.t > cut);
+      for (const p of due) this.dispatchCC(p.status, p.d1, p.d2);
+      if (this.echoPending.length) this.scheduleEchoFlush(windowMs);
+    }, windowMs + 1);
+  }
+
+  // --- Level meters ---
+  private lastMeter: Record<DeckId, number> = { A: -1, B: -1 };
+  /** Drive a deck's channel level meter (0–127). Diffed, so a steady level costs nothing on the wire. */
+  setMeter(deck: DeckId, value: number): void {
+    const m = this.profile?.meter;
+    if (!m || !this.outputs.length) return;
+    const v = Math.max(0, Math.min(127, Math.round(value)));
+    if (v === this.lastMeter[deck]) return;
+    this.lastMeter[deck] = v;
+    this.send([m.status[deck], m.data, v], false); // ~50 msg/s: kept out of the Debug log, which holds 32
+  }
+  hasMeter(): boolean {
+    return !!this.profile?.meter;
+  }
+
   // --- LED feedback ---
   /** Light the controller from app state. Diffs against the last frame so only
    *  changed lamps are sent. No-op without a profile feedback map / outputs. */
@@ -624,9 +746,11 @@ export class MidiEngine {
     this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues] };
   }
 
-  private send(bytes: number[]): void {
-    this.outMon.push({ bytes: bytes.slice(0, 16), seq: ++this.outSeq });
-    if (this.outMon.length > MON_MAX) this.outMon.shift();
+  private send(bytes: number[], log = true): void {
+    if (log) {
+      this.outMon.push({ bytes: bytes.slice(0, 16), seq: ++this.outSeq });
+      if (this.outMon.length > MON_MAX) this.outMon.shift();
+    }
     for (const out of this.outputs) {
       try {
         out.send(bytes);

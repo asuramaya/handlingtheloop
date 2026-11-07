@@ -28,7 +28,10 @@ export function InfoDot({ text, label }: { text: string; label?: string }) {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+        setOpen(false);
+      }
     };
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
@@ -135,6 +138,7 @@ export function InfoDot({ text, label }: { text: string; label?: string }) {
     <span
       className="info-wrap"
       ref={wrap}
+      data-search={text} /* Settings search matches explanations too (the bubble is not in the DOM until opened) */
       onPointerEnter={(e) => {
         if (e.pointerType === "mouse") show();
       }}

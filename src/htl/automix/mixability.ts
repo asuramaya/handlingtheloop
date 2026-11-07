@@ -1,5 +1,42 @@
 import type { TrackMeta } from "../library/types";
 import type { EnergyArc, StyleCapabilities, TransitionEntry, TransitionPlan, TransitionStyle } from "./types";
+import { foldTempoOctave, tempoLockable } from "../analysis";
+
+/** The widest tempo gap (folded, from the slower side) the tempoBridge will ride on a loop. Past
+ *  ~30 % a looped bar stretched that far stops sounding like the same record (DJ TechTools'
+ *  loop-out move; forum consensus caps a ramp at 10-15 % per phrase, which the bridge doubles by
+ *  giving it four bars of a loop rather than a moving track). */
+export const BRIDGE_MAX = 0.3;
+
+/** WHAT THE QUEUE SHOULD PROMISE for a pair: the plan pickTransition proposes, corrected by the two
+ *  rules the mixer applies before it ever mixes — a pair too far apart to beat-match is bridged on
+ *  a loop (≤ BRIDGE_MAX) or echoed out (beyond), never blended or "cut" as the score alone would
+ *  say; and the length is banded by tempo. `why` is the sentence for the badge's tooltip. */
+export function previewPlan(a: TrackMeta, b: TrackMeta): { plan: TransitionPlan; why: string } {
+  const plan = pickTransition(a, b);
+  const pct = Math.round(plan.score * 100);
+  if (a.bpm && b.bpm && !tempoLockable(a.bpm, b.bpm)) {
+    const f = foldTempoOctave(b.bpm, a.bpm) ?? b.bpm;
+    const gap = Math.round((Math.max(f / a.bpm, a.bpm / f) - 1) * 100);
+    const tempos = `${Math.round(a.bpm)} → ${Math.round(b.bpm)} BPM (${gap}% apart)`;
+    if (tempoLockable(a.bpm, b.bpm, BRIDGE_MAX)) {
+      return { plan: { ...plan, style: "tempoBridge", bars: 8, bassSwapBar: 0 }, why: `${tempos}: too far to beat-match, so AUTO catches the outgoing in a loop, rides it to the new tempo and drops the next track on the one.` };
+    }
+    return { plan: { ...plan, style: "echoOut", bars: 4, bassSwapBar: 0 }, why: `${tempos}: too far to beat-match or bridge, so the outgoing leaves through an echo and the next track comes in on the one.` };
+  }
+  const bars = bandBars(a.bpm, plan.bars);
+  const shaped = bars === plan.bars ? plan : { ...plan, bars, bassSwapBar: plan.bassSwapBar ? phraseSwapBar(bars) : 0 };
+  // Run the SAME chooser the mixer runs at mix time, with what a desktop deck can normally do (no
+  // stems assumed — they are a bonus that may land later). A clash is never a plain "Cut" there.
+  const style = resolveStyle(shaped, { stems: false, fx: true, incomingBody: false, grid: !!(a.bpm && b.bpm), lock: true }, null);
+  const clash = plan.score < 0.38;
+  return {
+    plan: { ...shaped, style },
+    why: clash
+      ? `Mixability ${pct}% — a clash, so AUTO makes the change deliberate (a gate or loop chop, or a spinback) instead of blending it.`
+      : `Mixability ${pct}% — the exact gesture is chosen at the mix, from what the decks can do then.`,
+  };
+}
 
 // How well does track B mix after track A? Pure functions over the metadata the
 // app already stores on a TrackMeta (Camelot `key` + analyzed `bpm`). Used to
@@ -159,11 +196,38 @@ export function pickTransition(a: TrackMeta, b: TrackMeta): TransitionPlan {
   //   unknown/low → FILTER sweep: the cheap one-knob filter masks an unproven pair
   //                 and still rides tempo/key sync — sounds intentional, not a guess
   //   clash       → quick cut
-  if (!confident) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
-  if (score >= 0.75) return { style: "blend", bars: 24, bassSwapBar: 8, keyMatch, score, keyKnown, confident };
-  if (score >= 0.55) return { style: "blend", bars: 16, bassSwapBar: 6, keyMatch, score, keyKnown, confident };
-  if (score >= 0.38) return { style: "filter", bars: 12, bassSwapBar: 4, keyMatch, score, keyKnown, confident };
-  return { style: "cut", bars: 6, bassSwapBar: 0, keyMatch: false, score, keyKnown, confident };
+  // Lengths are whole PHRASES (4/8/16/32 bars) and the bass swaps on a 4-bar boundary — see
+  // phraseSwapBar and mixPoints BLEND_STEPS for the evidence. Was 24/16/12/6 with swaps at bar 6 or 8.
+  const plan = (style: TransitionPlan["style"], bars: number, km = keyMatch): TransitionPlan => ({
+    style, bars, bassSwapBar: phraseSwapBar(bars), keyMatch: km, score, keyKnown, confident,
+  });
+  if (!confident) return plan("filter", 8);
+  if (score >= 0.75) return plan("blend", 32);
+  if (score >= 0.55) return plan("blend", 16);
+  if (score >= 0.38) return plan("filter", 8);
+  return { ...plan("cut", 4, false), bassSwapBar: 0 };
+}
+
+/** WHERE THE BASS SWAPS: on a phrase line inside the blend, never "bar 6". A swap mid-phrase sounds
+ *  like an edit (practitioner consensus; the measured EQ curves in Kim, Yang & Nam, DAFx 2022 step
+ *  at phrase boundaries). Half-way through a 16/32-bar blend, one 4-bar phrase before the end of an
+ *  8-bar one, and at the middle of anything shorter. Always a multiple of 4 from 8 bars up. */
+export function phraseSwapBar(bars: number): number {
+  if (bars >= 16) return Math.round(bars / 2 / 4) * 4;
+  if (bars >= 8) return bars - 4;
+  return Math.max(0, Math.floor(bars / 2));
+}
+
+/** LENGTH BY TEMPO BAND. Without genre tags, the tempo is the best proxy for the room: a 32-bar
+ *  blend is a minute of house at 124 but over a minute and a half of R&B at 85, and hip-hop and
+ *  open-format DJs cut in 4-8 bars "on the one" while house and techno DJs ride 16-32. Drum & bass
+ *  at 174 runs 32 bars in 44 s, so it is capped at 16 the way its DJs phrase it. Never lengthens. */
+export function bandBars(bpm: number | null | undefined, bars: number): number {
+  if (!bpm || bpm <= 0) return bars;
+  if (bpm < 100) return Math.min(bars, 8);
+  if (bpm < 118) return Math.min(bars, 16);
+  if (bpm < 155) return bars;
+  return Math.min(bars, 16);
 }
 
 /** Short human label for a transition badge in the queue UI. Only claims "Harmonic"
@@ -171,9 +235,11 @@ export function pickTransition(a: TrackMeta, b: TrackMeta): TransitionPlan {
 export function transitionLabel(p: TransitionPlan): string {
   // Compact: these sit in a narrow fixed-width "Mix" column, so no "· N bar" tail
   // (it spilled the cell). The full mixability % rides the badge's title tooltip.
-  if (p.style === "stemswap") return `Stems ${p.bars}`;
+  if (p.style === "stemswap") return p.bars >= 8 ? `Mashup ${p.bars}` : `Stems ${p.bars}`;
   if (p.style === "cut") return "Cut";
   if (p.style === "spinOut") return "Spin";
+  if (p.style === "tempoBridge") return "Bridge";
+  if (p.style === "doubleDrop") return "Double";
   if (p.style === "echoOut") return `Echo ${p.bars}`;
   if (p.style === "washOut") return `Wash ${p.bars}`;
   if (p.style === "gateChop") return "Gate";
@@ -207,11 +273,29 @@ function stylePreference(score: number, confident: boolean): TransitionStyle[] {
   return ["gateChop", "loopChop", "dropSwap", "spinOut", "cut"];
 }
 
+/** The gestures that never put two unsynced beats on top of each other: the outgoing leaves through
+ *  its own tail (echo, wash, spin) or collapses, and the incoming starts ON THE ONE at a single cut.
+ *  The only honest moves for a pair too far apart to beat-match (the echo-out / cut-on-the-one that
+ *  hip-hop and open-format DJs use; Vande Veire & De Bie's auto-DJ cues on whole phrases for the
+ *  same reason). Everything else overlaps the two rhythms for bars. */
+export const UNLOCKED_STYLES: readonly TransitionStyle[] = ["tempoBridge", "echoOut", "washOut", "spinOut", "dropSwap", "cut"];
+
 /** Is this style possible right now? */
 function styleAvailable(style: TransitionStyle, caps: StyleCapabilities): boolean {
+  if (caps.lock === false && !UNLOCKED_STYLES.includes(style)) return false;
   switch (style) {
+    case "doubleDrop":
+      // Planned ahead (doubleDrop.ts), never picked off a preference row: it needs its own cue
+      // points. Here only so a pair that stopped qualifying before the mix falls back.
+      return caps.lock !== false && caps.grid && caps.incomingBody;
+    case "tempoBridge":
+      // Only for a pair that is NOT beat-matchable as it stands but can be ridden there (a locked
+      // pair just blends), and only on a grid: the whole move is bar-counted.
+      return caps.lock === false && !!caps.bridge && caps.grid;
     case "stemswap":
-      return caps.stems; // the only gesture that needs separation
+      return caps.stems && caps.lock !== false; // needs separation AND two rhythms that can lock
+    case "blend":
+      return caps.lock !== false; // 12-24 bars of both rhythms at once: only for a matchable pair
     case "echoOut":
     case "washOut":
       return caps.fx;
@@ -322,7 +406,17 @@ export function resolveStyle(
   const { shape } = opts;
   // "journey" means keep it moving, so it gets a wider net to dodge a repeat into.
   const tolerance = opts.tolerance ?? (shape?.arc === "journey" ? 2 : 1);
-  const available = stylePreference(plan.score, plan.confident).filter((s) => styleAvailable(s, caps));
+  // A pair that cannot be beat-matched gets the echo-out / cut-on-the-one family in THAT order,
+  // whatever its score: the research's first answer for mismatched tempos is the echo out.
+  // ★ STEMS FIRST. When both decks are separated and the pair can lock, the mashup (mashup.ts) is
+  // the strongest thing AUTO can do with any pair that is not an outright clash — it was ranked
+  // first only for near-perfect pairs, so most transitions never touched the stems at all
+  // (operator, 2026-11-05: "lean more into the mixing ... using the power of the stems"). Its
+  // choreography takes the key into account itself, so a modest score is no reason to skip it,
+  // and it is not rotated away for variety: the variety is inside it.
+  if (caps.stems && caps.lock !== false && caps.grid && plan.score >= 0.38) return "stemswap";
+  const ranked = caps.lock === false ? [...UNLOCKED_STYLES] : stylePreference(plan.score, plan.confident);
+  const available = ranked.filter((s) => styleAvailable(s, caps));
   if (!available.length) return "cut"; // always possible, and an honest answer for a hopeless pair
   // Stable re-rank: equal adjusted ranks keep preference order, so with no shape this is identity.
   const prefs = shape

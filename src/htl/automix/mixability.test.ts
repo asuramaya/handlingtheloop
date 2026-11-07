@@ -14,6 +14,8 @@ import {
   songCore,
   transitionLabel,
   resolveStyle,
+  bandBars,
+  phraseSwapBar,
 } from "./mixability";
 
 function track(p: Partial<TrackMeta>): TrackMeta {
@@ -236,7 +238,15 @@ describe("resolveStyle", () => {
 
   // The anti-repetition rule, and its limit.
   test("does not repeat the last gesture when a comparable alternative exists", () => {
-    expect(resolveStyle(plan(0.9), caps({ stems: true }), "stemswap")).toBe("blend");
+    expect(resolveStyle(plan(0.9), caps(), "blend")).not.toBe("blend");
+  });
+
+  test("a stem pair that can lock gets the mashup, even twice running (its variety is inside it)", () => {
+    expect(resolveStyle(plan(0.9), caps({ stems: true }), "stemswap")).toBe("stemswap");
+    expect(resolveStyle(plan(0.45), caps({ stems: true }), null)).toBe("stemswap");
+    // …but not for a clash, and never without a lock.
+    expect(resolveStyle(plan(0.2), caps({ stems: true }), null)).not.toBe("stemswap");
+    expect(resolveStyle(plan(0.9), caps({ stems: true, lock: false }), null)).not.toBe("stemswap");
   });
 
   test("but DOES repeat rather than pick something clearly worse", () => {
@@ -458,5 +468,21 @@ describe("resolveEntry — the incoming gesture", () => {
         expect(resolveEntry(s, caps(), { arc, lift: 0.5 })).not.toBe("dropIn");
       }
     }
+  });
+});
+
+describe("phrase-shaped plans", () => {
+  test("every swap bar sits on a 4-bar line from 8 bars up", () => {
+    for (const bars of [8, 16, 32]) expect(phraseSwapBar(bars) % 4).toBe(0);
+    expect(phraseSwapBar(32)).toBe(16);
+    expect(phraseSwapBar(8)).toBe(4);
+  });
+  test("tempo bands shorten, never lengthen", () => {
+    expect(bandBars(90, 32)).toBe(8); // hip-hop / R&B
+    expect(bandBars(110, 32)).toBe(16); // open format
+    expect(bandBars(124, 32)).toBe(32); // house
+    expect(bandBars(174, 32)).toBe(16); // drum & bass
+    expect(bandBars(124, 8)).toBe(8);
+    expect(bandBars(null, 32)).toBe(32);
   });
 });

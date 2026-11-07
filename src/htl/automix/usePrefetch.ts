@@ -5,6 +5,7 @@ import { fetchFeaturesByIsrc, fetchYouTubeAudio, identifyTrack, postAnalysis } f
 import { fingerprintBuffer } from "../fingerprint";
 import type { TrackMeta } from "../library/types";
 import type { MixQueue } from "./queue";
+import { whenGpuClear } from "../stems/gpuQueue";
 
 // Background pre-compute for the auto-mix queue: quietly fetch + decode + analyze the
 // NEXT couple of queued tracks that have no key/BPM yet, so harmonic matching engages
@@ -13,25 +14,49 @@ import type { MixQueue } from "./queue";
 // and abortable — never competes with the live mix for more than one decode.
 
 const GAP_MS = 2000; // pause between precompute jobs
-const LOOKAHEAD = 3; // only precompute within the first N upcoming tracks
+const LOOKAHEAD = 3; // DECODE + analyse only within the first N upcoming tracks (the expensive pass)
+// ★ THE CHEAP PASS REACHES FURTHER (operator, 2026-11-04, the queue redesign: most rows read "—"
+// for BPM and Key, which also means AUTO plans their transitions blind). An identity probe plus
+// the free features DB costs a couple of requests and no decode, so it runs over this many rows.
+const ID_LOOKAHEAD = 10;
 
 export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, enabled: boolean): void {
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const busy = useRef(false);
+  const idTried = useRef(new Set<string>()); // rows the cheap identity/features pass already asked about
 
   useEffect(() => {
     if (!enabled || !ctx) return;
     let cancelled = false;
     const ctrl = new AbortController();
 
-    const pick = (): TrackMeta | null => {
-      const up = queueRef.current.upcoming.slice(0, LOOKAHEAD);
-      for (const t of up) {
+    // A track analysed this session (a deck load, an earlier prefetch) is written straight onto its
+    // row. It used to be SKIPPED as "already done" and never patched, so a queued track that had
+    // been on a deck kept reading "—".
+    const patchFromCache = (t: TrackMeta): boolean => {
+      const a = getCachedTrack(t.videoId)?.analysis;
+      if (!a) return false;
+      // only when it ADDS something, so a cached analysis without a key does not re-patch every tick
+      if ((t.bpm == null && a.bpm != null) || (t.key == null && a.key?.camelot != null)) {
+        queueRef.current.patchAnalysis(t.videoId, { bpm: a.bpm, key: a.key?.camelot ?? null, energy: a.energy });
+      }
+      return true;
+    };
+    // Next job: the cheapest useful one. A full decode for the first LOOKAHEAD rows; else the
+    // identity/features probe for anything up to ID_LOOKAHEAD rows that has not been asked yet.
+    const pick = (): { t: TrackMeta; full: boolean } | null => {
+      const up = queueRef.current.upcoming.slice(0, ID_LOOKAHEAD);
+      for (let i = 0; i < up.length; i++) {
+        const t = up[i];
         if (!t.videoId) continue;
         if (t.bpm != null && t.key != null) continue; // already known
-        if (getCachedTrack(t.videoId)) continue; // already analyzed this session
-        return t;
+        if (patchFromCache(t)) continue;
+        if (i < LOOKAHEAD) return { t, full: true };
+      }
+      for (const t of up) {
+        if (!t.videoId || (t.bpm != null && t.key != null) || idTried.current.has(t.videoId)) continue;
+        return { t, full: false };
       }
       return null;
     };
@@ -49,8 +74,9 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
 
     const run = async () => {
       if (busy.current || cancelled) return;
-      const target = pick();
-      if (!target) return;
+      const job = pick();
+      if (!job) return;
+      const target = job.t;
       const videoId = target.videoId;
       busy.current = true;
       try {
@@ -62,27 +88,46 @@ export function useQueuePrefetch(queue: MixQueue, ctx: BaseAudioContext | null, 
 
         // 2) With an ISRC, the global track id, pull key/BPM from the free DB — done.
         if (isrc && (await tryFeatures(videoId, isrc))) return;
+        // The cheap pass stops here: no decode for rows beyond LOOKAHEAD.
+        idTried.current.add(videoId);
+        if (!job.full) return;
 
+        // ★ NOT DURING A TRANSITION. Everything below is heavy MAIN-THREAD work — decoding a whole
+        // track, a 2-minute chromaprint (~250 ms in one block, measured in a real AUTO mix), a full
+        // analysis — and this loop used to run it whenever a row was due, mid-blend included: one of
+        // the lag spikes at the time of auto mixing (operator, 2026-11-04). AUTO holds the quiet
+        // window from cueing to settle; the prefetch waits it out like stem separation already does.
+        await whenGpuClear();
+        if (cancelled) return;
         // 3) Novel track: decode once. (Also warms the deck load + shares to D1.)
         const data = await fetchYouTubeAudio(videoId, undefined, ctrl.signal);
+        if (cancelled) return;
+        await whenGpuClear(); // the download can outlast the gap between two transitions
         if (cancelled) return;
         const buffer = await decodeAudio(ctx, data);
         if (cancelled) return;
 
         // 4) Fingerprint → AcoustID → ISRC (the global id), when not yet identified.
         if (!isrc && probe?.needsFingerprint !== false) {
+          await whenGpuClear();
+          if (cancelled) return;
           const fp = await fingerprintBuffer(buffer);
           if (!cancelled) {
             const id = await identifyTrack(videoId, fp, Math.round(buffer.duration));
             if (id.identity?.isrc) {
               isrc = id.identity.isrc;
-              setCachedTrack(videoId, { buffer, analysis: await analyzeTrackAsync(buffer) });
-              if (await tryFeatures(videoId, isrc)) return;
+              if (await tryFeatures(videoId, isrc)) {
+                setCachedTrack(videoId, { buffer, analysis: await analyzeTrackAsync(buffer) }); // warm the deck load
+                return;
+              }
+              // no features entry: fall through to the ONE local analysis below (it used to analyse twice)
             }
           }
         }
 
         // 5) Fallback: local analysis for key/BPM (and keep the ISRC if we got one).
+        await whenGpuClear();
+        if (cancelled) return;
         const analysis = await analyzeTrackAsync(buffer);
         if (cancelled) return;
         setCachedTrack(videoId, { buffer, analysis });

@@ -1,4 +1,5 @@
 import { InfoDot } from "./InfoDot";
+import { RangeInput } from "./RangeInput";
 
 // A labelled range row used across the settings tabs (Controls, Audio). Shared so the
 // tab components can each import it instead of re-declaring it in SettingsPanel.
@@ -39,15 +40,7 @@ export function Slider({
           slider rows lining up with toggle rows. */}
       <span className="settings-control">
         <span className="settings-value">{hint}</span>
-        <input
-          type="range"
-          className="settings-slider"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
+        <RangeInput label={label} min={min} max={max} step={step} value={value} onChange={onChange} />
       </span>
     </div>
   );

@@ -68,9 +68,13 @@ export function dominantLabel(s: Sections): string | null {
  *
  *  A candidate is only accepted if the whole blend fits before `lastSound` and it is not so early
  *  that the track is cut off — a 24-bar blend leaving at 35 % is a skip, not a mix. */
-export function chooseMixOut(s: Sections, barsSeconds: number, endGuard: number): number {
+export function chooseMixOut(s: Sections, barsSeconds: number, endGuard: number, notBefore = 0): number {
   const latest = s.lastSound - barsSeconds; // the blend must COMPLETE by the musical end
-  const earliest = Math.max(s.firstSound, s.duration * 0.35);
+  // `notBefore`: where the playhead is (plus the time a cue needs). An exit behind it is not an
+  // exit — after the user searched past the planned one, the mixer used to keep it and mix the
+  // instant the deck got there, i.e. at once. When nothing usable is left the fallback below
+  // returns this, and the caller shortens the blend to the room that remains.
+  const earliest = Math.max(s.firstSound, s.duration * 0.35, notBefore);
   const arithmetic = s.lastSound - barsSeconds - endGuard;
   const usable = (t: number) => t <= latest && t >= earliest;
 
@@ -139,7 +143,18 @@ export function chooseMixIn(s: Sections, barsSeconds: number, floor: number): nu
 // Phrase-length blends. A blend that straddles a section boundary sounds like an accident; one
 // that fills the section it lives in sounds intended. Real phrases are 4/8/16/32 bars, so the
 // fitted length is quantised to those rather than used raw.
-const BLEND_STEPS = [4, 8, 12, 16, 24, 32];
+// ★ PHRASE LENGTHS ONLY. Kim et al. (ISMIR 2020, 20,765 transitions from 1,557 real mixes): the
+// distribution of transition lengths "has peaks at every phrase" — every 32 beats, i.e. 8 bars. 12
+// and 24 were here too, and a 24-bar blend started on a 32-bar boundary ends in the middle of the
+// next phrase. 4 stays for the short gestures.
+const BLEND_STEPS = [4, 8, 16, 32];
+
+/** The longest phrase length (4/8/16/32 bars) that fits in `n` bars; below 4, whole bars (≥ 1). */
+export function phraseBars(n: number): number {
+  let best = 0;
+  for (const b of BLEND_STEPS) if (b <= n) best = b;
+  return best || Math.max(1, Math.floor(n));
+}
 
 /** Fit the blend to the section it will actually happen in, capped by the planner's request.
  *  Returns bars. Falls back to `requested` when there is no section to measure. */

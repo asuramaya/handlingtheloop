@@ -42,7 +42,10 @@ export function PromptModal({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") submit();
-            if (e.key === "Escape") onClose();
+            if (e.key === "Escape") {
+              e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+              onClose();
+            }
           }}
         />
         <div className="dialog-actions">
@@ -75,7 +78,10 @@ export function ConfirmModal({
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+        onClose();
+      }
       if (e.key === "Enter") {
         onConfirm();
         onClose();

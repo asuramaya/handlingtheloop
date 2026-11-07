@@ -1,5 +1,22 @@
 import { describe, test, expect } from "vitest";
-import { gpuRun, holdGpu, gpuHeld } from "./gpuQueue";
+import { gpuRun, holdGpu, gpuHeld, onGpuHold } from "./gpuQueue";
+
+describe("onGpuHold — the separator worker pauses on these edges", () => {
+  test("told once when the window opens and once when the last hold releases", () => {
+    const seen: boolean[] = [];
+    const off = onGpuHold((h) => seen.push(h));
+    const a = holdGpu();
+    const b = holdGpu(); // a second raiser is not a second edge
+    a();
+    expect(seen).toEqual([true]);
+    b();
+    expect(seen).toEqual([true, false]);
+    b(); // idempotent release: no spurious edge
+    expect(seen).toEqual([true, false]);
+    off();
+    expect(gpuHeld()).toBe(false);
+  });
+});
 
 const defer = <T,>() => {
   let resolve!: (v: T) => void;

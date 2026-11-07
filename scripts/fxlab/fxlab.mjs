@@ -81,6 +81,7 @@ function parseArgs(argv) {
       case "--resident": a.resident = true; break;
       case "--live-comp-prune": a.liveCompPrune = true; break;
       case "--sync-drift": a.syncDrift = true; break;
+      case "--sync-start": a.syncStart = true; break;
       case "--stem-taps": a.stemTaps = true; break;
       case "--noise-audit": a.noiseAudit = true; break;
       case "--throw": a.throwPreset = v; i++; break;
@@ -398,6 +399,21 @@ async function main() {
       );
       if (!fixed.lossless.length) console.log("   note: this browser offers no lossless capture, so the shipped row IS the control \u2014 a take here is lossy by necessity and bufferToWav's \u00b11 clamp still applies.\n");
       process.exitCode = controlOvershoots && fixedClean ? 0 : 1;
+      return;
+    }
+
+    if (args.syncStart) {
+      // A synced deck STARTING: engage while parked then play, a hot cue on the follower, the master
+      // restarted under it. Phase from the audio onsets, in beats (0 = on the beat, 0.5 = worst).
+      console.log("\n  SYNC START — |phase error| in beats, from the AUDIO, after each fresh start\n");
+      for (const sc of ["engage-paused", "cue-jump", "master-restart", "master-stops", "master-loads"]) {
+        for (const align of [false, true]) {
+          const r = await page.evaluate(([s, a]) => globalThis.fxlabSyncStart(s, a), [sc, align]);
+          const { scenario, align: al, ...m } = r;
+          console.log(`   ${String(scenario).padEnd(15)} ${al ? "aligned " : "before  "} ${Object.entries(m).map(([k, v]) => `${k} ${v == null ? "--" : Number(v).toFixed(3)}`).join("   ")}`);
+        }
+      }
+      console.log("");
       return;
     }
 

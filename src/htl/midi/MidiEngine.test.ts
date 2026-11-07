@@ -71,15 +71,46 @@ describe("MidiEngine — FLX4 jog layers decode through the real profile", () =>
     expect(events).toEqual([{ type: "jogTurn", deck: "A", delta: 2, scratch: false }]);
   });
 
-  it("OUTER RING (CC 0x21) → jogBend, with the ±1 rest-jitter deadzone", async () => {
+  it("OUTER RING (CC 0x21) → jogBend: every tick at once, including a micro back-and-forth of single ±1s", async () => {
     const { events, send } = await flx();
-    send(CC_A, 0x21, 0x41); // +1 → swallowed by the deadzone (|delta| must exceed 1)
-    send(CC_A, 0x21, 0x42); // +2 → passes
-    send(CC_A, 0x21, 0x3d); // −3 → passes
+    send(CC_A, 0x21, 0x41); // +1
+    send(CC_A, 0x21, 0x3f); // −1 (reverses: a micro back-and-forth, not jitter to drop)
+    send(CC_A, 0x21, 0x41); // +1
+    send(CC_A, 0x21, 0x3d); // −3
     expect(events).toEqual([
-      { type: "jogBend", deck: "A", delta: 2 },
+      { type: "jogBend", deck: "A", delta: 1 },
+      { type: "jogBend", deck: "A", delta: -1 },
+      { type: "jogBend", deck: "A", delta: 1 },
       { type: "jogBend", deck: "A", delta: -3 },
     ]);
+  });
+
+  it("SHIFT+SYNC (0x60, shift fixed OFF) → keyMatch with shift:false and shiftFixed, though SHIFT is held", async () => {
+    const { events, send } = await flx();
+    send(NOTE_B, 0x3f, 0x7f); // SHIFT B down
+    send(NOTE_B, 0x60, 0x7f); // SHIFT+SYNC
+    expect(events).toContainEqual(expect.objectContaining({ type: "button", action: "keyMatch", deck: "B", pressed: true, shift: false, shiftFixed: true }));
+  });
+
+  it("OUTER RING on the real 2026-11-02 capture: all of the ring's travel survives (the old deadzone kept ~40%)", async () => {
+    const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-jog-real-2026-11-02.json", import.meta.url), "utf8")) as MidiCapture;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+    try {
+      const { events, send } = await flx();
+      const t0 = performance.now() - cap.events[0].t;
+      let raw = 0;
+      for (const e of cap.events) {
+        const due = t0 + e.t - performance.now();
+        if (due > 0) vi.advanceTimersByTime(due);
+        if ((e.s & 0xf0) === 0xb0 && e.d1 === 0x21) raw += Math.abs(e.d2 - 64);
+        send(e.s, e.d1, e.d2);
+      }
+      const got = events.reduce((a, ev) => a + (ev.type === "jogBend" ? Math.abs(ev.delta) : 0), 0);
+      expect(raw).toBeGreaterThan(1000);
+      expect(got / raw).toBeGreaterThan(0.99);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("SHIFT + jog (CC 0x29) → jogSearch", async () => {
@@ -127,5 +158,118 @@ describe("MidiEngine — replay a captured fixture", () => {
       { type: "jogTouch", deck: "A", down: false },
       expect.objectContaining({ type: "button", action: "play", deck: "A", pressed: true }),
     ]);
+  });
+});
+
+describe("MidiEngine — FLX4 channel level meters", () => {
+  it("setMeter drives CC 0x02 on each deck's channel, clamped, and only on change", async () => {
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    sent.length = 0; // drop the handshake / keep-alive
+    engine.setMeter("A", 64);
+    engine.setMeter("A", 64.2); // same LED step: nothing sent
+    engine.setMeter("B", 300); // clamped
+    engine.setMeter("A", -5); // clamped
+    const meters = sent.filter((b) => (b[0] === 0xb0 || b[0] === 0xb1) && b[1] === 0x02);
+    expect(meters).toEqual([
+      [0xb0, 0x02, 64],
+      [0xb1, 0x02, 127],
+      [0xb0, 0x02, 0],
+    ]);
+  });
+});
+
+// ★ THE SMART CFX LAMP, LIT (operator, 2026-11-06). Lit, Pioneer's hardware Smart CFX makes the
+// COLOR knob ALSO send TRIM. The fixture is the real capture: a COLOR sweep (52.8–55.6 s) whose
+// echoes land on B0 04/24, then a TRIM-only sweep (55.8–59.2 s). Replayed on its own clock.
+describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => {
+  async function flxOut() {
+    const events: { e: MidiEvent; t: number }[] = [];
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null as null | ((e: { data: Uint8Array }) => void) };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: (e) => events.push({ e, t: performance.now() }), onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    return { engine, events, sent, send: (...b: number[]) => input.onmidimessage!({ data: new Uint8Array(b) }) };
+  }
+  const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-cfx-lamp-lit-2026-11-06.json", import.meta.url), "utf8")) as MidiCapture;
+  async function replay(lit: boolean) {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+    try {
+      const rig = await flxOut();
+      rig.engine.setEchoLamp(lit);
+      vi.advanceTimersByTime(2000); // past the post-change grace window
+      const t0 = performance.now() - cap.events[0].t;
+      for (const e of cap.events) {
+        const due = t0 + e.t - performance.now();
+        if (due > 0) vi.advanceTimersByTime(due);
+        rig.send(e.s, e.d1, e.d2);
+      }
+      vi.advanceTimersByTime(100); // flush anything still held
+      const trim = rig.events
+        .filter(({ e }) => e.type === "fader" && e.target === "trim" && e.deck === "A")
+        .map(({ e, t }) => ({ t: t - t0, v: (e as { value: number }).value }));
+      return { ...rig, trim };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+  const inColor = (t: number) => t >= 52_800 && t <= 55_650;
+  const inTrim = (t: number) => t >= 55_800;
+
+  it("lit: the COLOR sweep's trim echoes are dropped; the real TRIM sweep still drives trim end to end", async () => {
+    const { trim, sent } = await replay(true);
+    expect(sent).toContainEqual([0x96, 0x00, 0x7f]);
+    expect(trim.filter((x) => inColor(x.t))).toEqual([]);
+    const real = trim.filter((x) => inTrim(x.t)).map((x) => x.v);
+    expect(real.length).toBeGreaterThan(100);
+    expect(Math.min(...real)).toBeLessThan(0.02);
+    expect(Math.max(...real)).toBeGreaterThan(0.98);
+  });
+
+  it("dark: the same bytes DO move trim during the COLOR sweep (so the filter is what removes them)", async () => {
+    const { trim, sent } = await replay(false);
+    expect(sent).not.toContainEqual([0x96, 0x00, 0x7f]);
+    expect(trim.filter((x) => inColor(x.t)).length).toBeGreaterThan(20);
+  });
+
+  it("setEchoLamp is diffed and resent after a reconnect", async () => {
+    const { engine, sent } = await flxOut();
+    sent.length = 0;
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(false);
+    expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x00]]);
+  });
+
+  it("after a SMART CFX press/release the lamp state is re-asserted (the firmware flips the lamp itself)", async () => {
+    const { engine, sent, send } = await flxOut();
+    engine.setEchoLamp(true);
+    sent.length = 0;
+    send(0x96, 0x00, 0x7f); // press
+    send(0x96, 0x00, 0x00); // release
+    engine.setEchoLamp(true);
+    engine.setEchoLamp(true);
+    expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x7f]]);
+  });
+});
+
+describe("MidiEngine — FLX4 second hot-cue bank", () => {
+  it("SHIFT + HOT CUE (0x69) → padModeCue with shift (App: CUE 2, hot cues 9–16)", async () => {
+    const { events, send } = await flx();
+    send(NOTE_A, 0x3f, 0x7f); // SHIFT A
+    send(NOTE_A, 0x69, 0x7f); // shifted HOT CUE
+    expect(events).toContainEqual(expect.objectContaining({ type: "button", action: "padModeCue", deck: "A", pressed: true, shift: true }));
   });
 });

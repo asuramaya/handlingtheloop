@@ -438,6 +438,20 @@ export function barAnchor(g: Beatgrid, t: number): { start: number; length: numb
   return { start: g.firstBeat + k * barLen, length: barLen };
 }
 
+/** The bar line (downbeat) nearest `t`; with `notBefore`, the nearest one at or after it. A
+ *  transition that starts on beat 3 is heard as late, however right the moment was: the AutoMixer
+ *  snaps its exits here instead of to any beat (2026-11-04). */
+export function nearestDownbeat(g: Beatgrid, t: number, notBefore = -Infinity): number {
+  const { start, length } = barAnchor(g, t);
+  let best = t - start <= start + length - t ? start : start + length;
+  // The bar's own downbeat or the next one may still sit before the floor — step bar by bar.
+  for (let i = 0; i < 4 && best < notBefore - 1e-3; i++) {
+    const nb = barAnchor(g, best + length * 0.5);
+    best = nb.start + nb.length;
+  }
+  return best;
+}
+
 /** Fractional position within the current bar, 0..1 (0 = on the downbeat). Lets
  *  sync align bars, not just beats — so the two tracks' "1"s land together. */
 export function barPhase(g: Beatgrid, t: number): number {
@@ -507,6 +521,38 @@ export function foldTempoOctave(target: number, ref: number): number | null {
   for (let i = 0; i < 32 && t / ref > Math.SQRT2; i++) t /= 2;
   for (let i = 0; i < 32 && t / ref < 1 / Math.SQRT2; i++) t *= 2;
   return t;
+}
+
+/** The widest tempo move (as a fraction, after octave folding) that a beat-matched transition may
+ *  ask of a deck. Beyond it the pair is not beat-matched at all.
+ *
+ *  ★ WHY A LIMIT (operator, 2026-11-04: the smart fader "sometimes works completely against it
+ *  because it cannot sync tempo/bpm so it ends up being counter productive"). Folding alone always
+ *  finds an octave within √2, so every pair "matched": 120 → 174 morphed the outgoing down 27.5 %
+ *  to 87 BPM, 124 → 174 dragged it UP 40 %, and the incoming started 30 % slow under SYNC and
+ *  snapped to its own tempo at the end. A DJ's pitch fader is ±8 %; past ~10 % the stretch is
+ *  audible and the result is two records fighting, which is worse than an honest crossfade. */
+export const BEATLOCK_MAX = 0.1;
+/** At or above this the setting means "any pair" — every pair folds to within √2 (41.4 %). */
+export const BEATLOCK_ANY = Math.SQRT2 - 1;
+let beatlockMax = BEATLOCK_MAX;
+/** The user's Beat-match range (Settings ▸ Controls ▸ Auto-DJ), as a fraction. Process-wide like
+ *  the sync gain: AUTO and the Smart Fader both ask tempoLockable, so one setter covers both. */
+export function setBeatlockMax(fraction: number): void {
+  beatlockMax = Number.isFinite(fraction) && fraction > 0 ? fraction : BEATLOCK_MAX;
+}
+export function getBeatlockMax(): number {
+  return beatlockMax;
+}
+
+/** Can two tempos be beat-matched musically — within BEATLOCK_MAX of each other once folded into
+ *  the same octave? False on a missing/degenerate tempo (nothing to lock to). */
+export function tempoLockable(a: number | null | undefined, b: number | null | undefined, max = beatlockMax): boolean {
+  if (!(a && b && a > 0 && b > 0)) return false;
+  const folded = foldTempoOctave(b, a);
+  // Compared on the octave-folded RATIO both ways round, with a hair of slack, so "any pair" at
+  // the top of the range really admits the worst case (exactly √2 apart).
+  return folded != null && Math.max(folded / a, a / folded) - 1 <= max + 1e-9;
 }
 
 /** The SYNC slave's tempo target (BPM) that keeps it beat-density-locked to a master running at

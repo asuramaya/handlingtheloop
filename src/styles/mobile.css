@@ -242,6 +242,35 @@
   .stage .decks-row .bank-main .fx-strip {
     flex-shrink: 0;
   }
+  /* ★ THE OVERVIEW RAILS ARE PHONE-WIDTH HERE TOO. Their 128px desktop width is gated on
+     (min-width: 769px), which a phone in landscape (844 wide) passes, so the two rails took 256px of
+     the 419px waveform half and left the lanes 159px: the deck header text ran into itself ("DECK A"
+     over "120.4 BPM") and deck B's empty rail read as a dead column. Measured at 844x390. */
+  /* `.stage`-scoped: board.css's desktop 128px rule comes LATER in the bundle with the same
+     specificity, and a plain `.song-overview` here lost to it silently (measured: still 128px). */
+  .stage .song-overview {
+    flex-basis: 40px;
+    width: 40px;
+  }
+  /* And the deck header wraps like a phone's: its wrap rule is gated on (max-width: 768px), so in
+     landscape the DECK id, title, time, BPM and key were squeezed onto one row and printed over
+     each other ("DECK A" across "90.5 BPM", the time broken over two lines, the title gone). */
+  .lane-info {
+    flex-wrap: wrap;
+    row-gap: 1px;
+    column-gap: 10px;
+  }
+  /* scoped for the same bundle-order reason as the rails: board.css's `.lane-head { flex: 1 }`
+     comes later and won, leaving the title a 0px box (measured). */
+  .stage .lane-info .lane-head {
+    flex: 1 1 100%;
+  }
+  .lane-bpm,
+  .lane-time {
+    white-space: nowrap;
+  }
+  /* (SYNC in the ~181px pitch row is handled by board.css's pitchrow container query: initials
+     below 300px of row, rather than shrinking the text until it fits one label and not the other.) */
   /* The chin is a fixed cost on a screen with 390px to spend — tighten it, do not remove it:
      it is the only way back to Library and Settings. */
   .chin {

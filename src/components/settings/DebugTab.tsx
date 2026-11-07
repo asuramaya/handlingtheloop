@@ -20,6 +20,7 @@ import { dumpRing, clearRing, formatEvent } from "@htl/debug/trace";
 import type { UseMidi } from "@htl/midi";
 import type { DebugSection } from "../../App";
 import { MidiDebug } from "../MidiDebug";
+import { PerfCaptureSection } from "../PerfCaptureControl";
 import { InfoDot } from "./InfoDot";
 
 export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugSection[] }) {
@@ -216,6 +217,8 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
       {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
           and reverse-engineering LED / RGB protocols. */}
       {midi && <MidiDebug midi={midi} />}
+
+      <PerfCaptureSection />
 
       {diag.length > 0 && (
         <div className="settings-section">

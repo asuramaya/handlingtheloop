@@ -88,3 +88,15 @@ export function useOnePanel(): boolean {
 export function isOnePanelViewport(): boolean {
   return typeof window !== "undefined" && window.matchMedia(ONE_PANEL_QUERY).matches;
 }
+
+/**
+ * Does ANY input on this device point precisely: a mouse, a trackpad, an iPad's keyboard case?
+ * `any-pointer`, not `pointer`: an iPad with a trackpad attached reports a coarse PRIMARY pointer
+ * but should still be offered the mouse-wheel and keyboard settings. A phone with nothing attached
+ * is the case this is false for, and there those settings can do nothing.
+ */
+export const FINE_POINTER_QUERY = "(any-pointer: fine)";
+
+export function useFinePointer(): boolean {
+  return useMediaQuery(FINE_POINTER_QUERY);
+}

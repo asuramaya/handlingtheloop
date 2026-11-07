@@ -1,5 +1,6 @@
 import type { Deck, FxKind } from "@htl/audio";
 import { registerBoardAction } from "@htl/board/boardActions";
+import { MOVE_PADS } from "./movePads";
 
 // The deck's FX pad-mode bank ("Pad-FX") — 8 fixed performance effects over the one 8-pad
 // bank (and the keyboard 1-8 when padMode === "fx"). The "Throws + Motion" shape:
@@ -21,6 +22,10 @@ export interface FxPadDef {
   off?: (d: Deck) => void;
   active?: (d: Deck) => boolean; // lights the pad while sounding
   hint: string;
+  /** SHIFT's own layer for this pad, replacing the latch: `on` at the press, `off` (if any) at the
+   *  release. A one-shot has no `off` (FX2 SPIN: a real backspin); a held alternate has both (the
+   *  scratch pads: SHIFT plays the pair's other pattern while held). */
+  shift?: { on: (d: Deck) => void; off?: (d: Deck) => void; active?: (d: Deck) => boolean };
 }
 
 export const FX_PADS: FxPadDef[] = [
@@ -75,6 +80,7 @@ function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
  *  focused chain in FX, the master chain in FX2. A null slot is an empty slot — it is not a broken
  *  pad, it is a chain with room in it. */
 export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
+  if (deck.padMode === "fx2") return MOVE_PADS; // FX2 = the deck-moves bank (movePads.ts), not a chain
   const chain = deck.fxChain(deck.padChain) ?? deck.fxChain("master");
   const pads: (FxPadDef | null)[] = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? genericPad(deck, d.kind, d.kind.toUpperCase()));
   while (pads.length < 8) pads.push(null);
@@ -85,7 +91,6 @@ export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
 // press/release rule lives HERE, once, keyed by deck+slot rather than by input device. That also
 // makes the transports interoperable: press with a finger, release with the key, and the pad
 // behaves — because the held state belongs to the PAD, not to whoever pushed it.
-export const FX_HOLD_MS = 220;
 
 /** The device a pad points at, in the chain the pads are aimed at. */
 function padDevice(deck: Deck, pad: FxPadDef) {
@@ -95,59 +100,77 @@ function padDevice(deck: Deck, pad: FxPadDef) {
  *  latching it at the user's own mix: mid-throw (the device's own `throwing` flag) or simply
  *  un-bypassed. Reading only the first left a latched pad dark while its effect was running. */
 export function fxPadIsOn(deck: Deck, pad: FxPadDef): boolean {
-  if (pad.active?.(deck)) return true;
+  if (pad.active?.(deck) || pad.shift?.active?.(deck)) return true;
   const d = padDevice(deck, pad);
   return !!d && pad.kind !== "eq" && !d.bypassed; // the EQ is always in circuit; its pad is a curve throw
-} // the single tunable the whole gesture rests on — tune by ear
-// What is physically down, and whether it was ALREADY lit when it went down — the second half is
-// what makes a tap a TOGGLE rather than a one-way switch.
-const heldPads = new Map<string, { t: number; wasOn: boolean }>();
+}
+// ★ HOT BY DEFAULT, SHIFT LATCHES (operator, 2026-11-06: "im not too happy about … the hold/latch/
+// toggle mechanic, i think letting them be hot by default and toggle on shifted mode may make more
+// sense"). It used to hang on timing: a press under FX_HOLD_MS latched, a longer one was momentary,
+// so the same finger did two different things depending on a fifth of a second. Now the gesture
+// decides, not the clock:
+//   • plain press  → the effect is ON while the pad is down, OFF on release. Always.
+//     (A pad already latched stays on while held and goes OFF on release: a plain press is how
+//     you take a latched effect out, momentarily or for good.)
+//   • SHIFT+press  → TOGGLE the latch at once: dark → on (at your own dialled settings, not the
+//     throw's slam), lit → off. The release does nothing.
+// What is physically down: whether it was already lit (a latched pad being played through), or
+// whether it was a SHIFT latch press (its release is inert).
+const heldPads = new Map<string, { wasOn: boolean; latch: boolean; alt?: boolean }>();
 
-/** Press. Engages if the pad is not already live, and reports whether it fired (so the caller can
- *  emit the intent) and which device to reveal. Repeats are ignored — a held keyboard key
- *  auto-repeats forty times a second, and each one would re-fire the throw. */
-export function fxPadPress(deck: Deck, deckId: string, slot: number): { fired: boolean; repeat?: boolean; kind?: FxKind } {
+/** Press. Plain: engage while held. SHIFT: toggle the latch now. Reports whether the effect went
+ *  ON (`fired`, so the caller emits a down) or OFF (`off`, emit an up), and which device to reveal.
+ *  Repeats are ignored — a held keyboard key auto-repeats forty times a second. */
+export function fxPadPress(deck: Deck, deckId: string, slot: number, shift = false): { fired: boolean; off?: boolean; repeat?: boolean; kind?: FxKind; alt?: boolean } {
   const pad = padsForDeck(deck)[slot];
   if (!pad) return { fired: false };
   const key = `${deckId}${slot}`;
-  // Already down: a keyboard auto-repeat, forty a second. Say so, so the caller can skip the
-  // reveal and the re-render too — swallowing only the throw still left the panel re-selecting
-  // and the deck re-rendering for as long as the key was held.
   if (heldPads.has(key)) return { fired: false, repeat: true, kind: pad.kind };
   const wasOn = fxPadIsOn(deck, pad);
-  heldPads.set(key, { t: performance.now(), wasOn });
-  if (wasOn) return { fired: false, kind: pad.kind }; // already lit — the release decides its fate
+  if (shift && pad.shift) {
+    heldPads.set(key, { wasOn, latch: !pad.shift.off, alt: true }); // a one-shot's release is inert
+    pad.shift.on(deck);
+    return { fired: true, alt: true, kind: pad.kind };
+  }
+  heldPads.set(key, { wasOn, latch: shift });
+  if (shift) {
+    if (wasOn) {
+      padOff(deck, pad, true);
+      return { fired: false, off: true, kind: pad.kind };
+    }
+    pad.on(deck);
+    // A latch is the effect AS DIALLED: the throw's boost and mix floor are right for a momentary
+    // slam but would leave a latched effect stuck at the throw's percentage, over the wet you set.
+    padDevice(deck, pad)?.latchThrow?.();
+    return { fired: true, kind: pad.kind };
+  }
+  if (wasOn) return { fired: false, kind: pad.kind }; // latched: already sounding; the release takes it out
   pad.on(deck);
   return { fired: true, kind: pad.kind };
 }
 
-/** Release. A quick tap LATCHES (leave it on); a hold past the threshold lets go — which is also
- *  how a lit pad is turned off: press it, hold, release. Returns whether it actually released. */
-export function fxPadRelease(deck: Deck, deckId: string, slot: number): boolean {
+/** Take a pad's effect out: end the throw and, for a LATCHED device (not thrown, just un-bypassed),
+ *  bypass it. Never the EQ's bypass: that is the channel EQ, and its pad throws a curve. */
+function padOff(deck: Deck, pad: FxPadDef, latched: boolean) {
+  pad.off?.(deck);
+  const dev = padDevice(deck, pad);
+  if (latched && dev && pad.kind !== "eq" && !dev.bypassed) dev.setBypass(true);
+}
+
+/** Release. Plain press → the effect goes off (a latched one too). SHIFT latch press → nothing.
+ *  Returns whether it actually released (so the caller emits an up): `true`, or `"alt"` when it was
+ *  the pad's SHIFT layer that let go (the up must carry the same alt mark as its down). */
+export function fxPadRelease(deck: Deck, deckId: string, slot: number): boolean | "alt" {
   const key = `${deckId}${slot}`;
   const rec = heldPads.get(key);
   heldPads.delete(key);
   const pad = padsForDeck(deck)[slot];
-  if (!rec || !pad) return false;
-  // ★ A TAP IS A TOGGLE. Tapping a dark pad lights it; tapping a LIT one puts it out. It used to
-  // only engage, so a second tap did nothing and the pad could be turned off only by holding it —
-  // which reads as a stuck effect, because every other latching control in the world toggles.
-  // A HOLD is momentary either way: past the threshold, release always lets go.
-  const held = performance.now() - rec.t >= FX_HOLD_MS;
-  const dev = padDevice(deck, pad);
-  if (!held && !rec.wasOn) {
-    // ★ TAP TO LATCH — and settle to what the DJ dialled. The press fired a throw (boost + a mix
-    // floor that guarantees you hear it), which is right for a hold; for a latch it would leave
-    // the effect stuck at the throw's percentage forever, overwriting the wet you set. So the
-    // moment a press turns out to be a tap, the throw becomes a plain engagement at your own
-    // settings. Hold = slam. Tap = bring it in as it is.
-    dev?.latchThrow?.();
-    return false;
+  if (!rec || !pad || rec.latch) return false;
+  if (rec.alt) {
+    pad.shift?.off?.(deck);
+    return "alt";
   }
-  pad.off?.(deck);
-  // A LATCHED device is not "thrown", so releasing the throw does not put it away — take it out
-  // of circuit explicitly. Never the EQ: that is the channel EQ and its pad throws a curve.
-  if (!held && rec.wasOn && dev && pad.kind !== "eq" && !dev.bypassed) dev.setBypass(true);
+  padOff(deck, pad, rec.wasOn);
   return true;
 }
 
@@ -174,7 +197,12 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
 // effect. Chains DO sync now (DeckState.fxChains), and applyFxChainSnapshot rebuilds them by
 // NAME for exactly this reason: "what a DJ recognises is the name". So the wire carries the
 // name. The slot is still parsed off the LAST colon, so a name may contain one.
-export function fxPadArg(deck: Deck, slot: number): string {
+/** The wire name of the FX2 moves bank (a chain can never be called this: chain names are user
+ *  text, upper-cased, and this is lower case with a sigil). */
+const MOVES = "@moves";
+export function fxPadArg(deck: Deck, slot: number, alt = false): string {
+  // A move, not a device: the same on any receiver. `!` marks the pad's SHIFT layer (FxPadDef.shift).
+  if (deck.padMode === "fx2") return `${MOVES}:${slot}${alt ? "!" : ""}`;
   // The chain the press ACTUALLY hit, not the one in focus — in FX2 those differ, and sending the
   // focused one would make the far side fire a different effect from the one you just heard.
   const c = deck.fxChain(deck.padChain);
@@ -188,8 +216,21 @@ export function chainRef(deck: Deck, ref: string) {
 export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): void {
   const raw = String(arg);
   const cut = raw.lastIndexOf(":");
-  const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
+  const tail = cut >= 0 ? raw.slice(cut + 1) : raw;
+  const alt = tail.endsWith("!");
+  const slot = Number(alt ? tail.slice(0, -1) : tail);
   const chain = cut >= 0 ? raw.slice(0, cut) : "";
+  if (chain === MOVES) {
+    // A move fires on the receiver whatever bank it is sitting in.
+    const pad = MOVE_PADS[slot];
+    if (!pad) return;
+    if (alt) {
+      if (on) pad.shift?.on(deck);
+      else pad.shift?.off?.(deck);
+    } else if (on) pad.on(deck);
+    else pad.off?.(deck);
+    return;
+  }
   const back = deck.padChainOverride;
   const known = chain ? chainRef(deck, chain) : undefined;
   // Override rather than setFxFocus: the sender NAMED its chain, so that name must win over the

@@ -24,6 +24,8 @@ export interface UseMidi {
   armLearn: (controlId: string | null) => void;
   clearLearn: (controlId: string) => void;
   setFeedback: (deck: DeckId, fb: DeckFeedback) => void;
+  setMeter: (deck: DeckId, value: number) => void; // channel VU LEDs, 0–127 (no-op without a meter map)
+  setEchoLamp: (on: boolean) => void; // the SMART CFX lamp (diffed; echo-filtered while lit)
   info: () => { error: string; permMidi: string; permSysex: string; crossOriginIsolated: boolean | string };
   monitor: () => MonMsg[];
   describe: (status: number, d1: number) => string | null;
@@ -114,6 +116,8 @@ export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs)
   }, []);
 
   const setFeedback = useCallback((deck: DeckId, fb: DeckFeedback) => engineRef.current?.setFeedback(deck, fb), []);
+  const setMeter = useCallback((deck: DeckId, value: number) => engineRef.current?.setMeter(deck, value), []);
+  const setEchoLamp = useCallback((on: boolean) => engineRef.current?.setEchoLamp(on), []);
   const info = useCallback(() => engineRef.current!.info(), []);
   const monitor = useCallback(() => engineRef.current!.monitor(), []);
   const describe = useCallback((status: number, d1: number) => engineRef.current!.describe(status, d1), []);
@@ -124,5 +128,7 @@ export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs)
   const startCapture = useCallback(() => engineRef.current?.startCapture(), []);
   const stopCapture = useCallback(() => engineRef.current?.stopCapture() ?? null, []);
 
-  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback, info, monitor, describe, jogCadence, send, outMonitor, outputs, startCapture, stopCapture };
+  return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback,
+    setMeter,
+    setEchoLamp, info, monitor, describe, jogCadence, send, outMonitor, outputs, startCapture, stopCapture };
 }

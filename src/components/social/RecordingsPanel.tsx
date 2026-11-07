@@ -82,7 +82,10 @@ export function RecordingsPanel({
                     onBlur={() => saveName(s.id)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") saveName(s.id);
-                      else if (e.key === "Escape") setEditing(null);
+                      else if (e.key === "Escape") {
+                        e.preventDefault(); /* claimed: the board's Escape (App/escapeKey.ts) leaves it alone */ 
+                        setEditing(null);
+                      }
                     }}
                   />
                 ) : (

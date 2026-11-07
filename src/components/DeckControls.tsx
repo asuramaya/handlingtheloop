@@ -653,7 +653,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               className={`pad fx ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing latched" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
-              title={pad ? `${pad.label} — tap to latch, hold for momentary · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
+              title={pad ? `${pad.label} — hold = live, SHIFT = latch · ${pad.hint} · right-click to tweak` : "Empty slot — add an effect to this chain in the rack below"}
               onPointerDown={(e) => fxPadDown(e, i)}
               onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
               onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
@@ -675,19 +675,20 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             not follow it — the one place the two can disagree, and an unlabelled disagreement is
             how this bank accumulated three contradictory comments in the first place (9ee26ff4).
             Until 2026-09-10 this was an exact duplicate of the bank above. */}
+        {/* FX2 = THE MOVES BANK (movePads.ts): eight deck moves, not effects. SPIN · CENSOR · BRAKE ·
+            ECHO OUT over FILTER OUT · BASS CUT · STUTTER · WASH. Same gesture as the FX bank. */}
         {deck.padMode === "fx2" && (
-        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef} data-bank="MASTER">
+        <div className="hotcues fx-bank fx2-bank" ref={fxBankRef} data-bank="MOVES">
           {padsForDeck(deck).map((pad, i) => (
             <button
               key={pad?.label ?? `e${i}`}
               className={`pad fx fx2 ${pad ? "" : "empty"} ${pad && fxPadIsOn(deck, pad) ? "playing" : ""}`}
               data-cue={i + 1}
               disabled={!pad}
-              title={pad ? `${pad.label} — MASTER chain · tap to latch, hold for momentary · ${pad.hint}` : "Empty slot on the MASTER chain — add an effect to it in the rack below"}
+              title={pad ? `${pad.label} — ${pad.hint} · hold = live, SHIFT = latch` : ""}
               onPointerDown={(e) => fxPadDown(e, i)}
               onPointerUp={(e) => fxPadUp(i, e.currentTarget)}
               onPointerCancel={(e) => fxPadUp(i, e.currentTarget)}
-              onContextMenu={(e) => fxReveal(e, i)}
             >
               {pad?.label ?? "—"}
               <span className="kbd">{i + 1}</span>

@@ -2590,7 +2590,9 @@ export class Deck {
    *  When focus IS master — the default until you make a chain — both banks show the same devices,
    *  honestly: there is only one chain, so there is only one bank of effects to show. */
   get padChain(): string {
-    return this.padChainOverride ?? (this.padMode === "fx2" ? "master" : this.focusedChain);
+    // FX2 is the MOVES bank now (components/movePads.ts), not the master chain, so the pads' chain
+    // is simply the focused one.
+    return this.padChainOverride ?? this.focusedChain;
   }
 
   /** An EXPLICIT pad chain, winning over the padMode default. Set only while applying a pad

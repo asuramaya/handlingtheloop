@@ -1,5 +1,6 @@
 import type { Deck, FxKind } from "@htl/audio";
 import { registerBoardAction } from "@htl/board/boardActions";
+import { MOVE_PADS } from "./movePads";
 
 // The deck's FX pad-mode bank ("Pad-FX") — 8 fixed performance effects over the one 8-pad
 // bank (and the keyboard 1-8 when padMode === "fx"). The "Throws + Motion" shape:
@@ -75,6 +76,7 @@ function genericPad(deck: Deck, kind: FxKind, label: string): FxPadDef {
  *  focused chain in FX, the master chain in FX2. A null slot is an empty slot — it is not a broken
  *  pad, it is a chain with room in it. */
 export function padsForDeck(deck: Deck): (FxPadDef | null)[] {
+  if (deck.padMode === "fx2") return MOVE_PADS; // FX2 = the moves bank (movePads.ts), not a chain
   const chain = deck.fxChain(deck.padChain) ?? deck.fxChain("master");
   const pads: (FxPadDef | null)[] = (chain?.devices ?? []).map((d) => BY_KIND.get(d.kind) ?? genericPad(deck, d.kind, d.kind.toUpperCase()));
   while (pads.length < 8) pads.push(null);
@@ -181,7 +183,11 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
 // effect. Chains DO sync now (DeckState.fxChains), and applyFxChainSnapshot rebuilds them by
 // NAME for exactly this reason: "what a DJ recognises is the name". So the wire carries the
 // name. The slot is still parsed off the LAST colon, so a name may contain one.
+/** The wire name of the FX2 moves bank (a chain can never be called this: chain names are user
+ *  text, upper-cased, and this is lower case with a sigil). */
+const MOVES = "@moves";
 export function fxPadArg(deck: Deck, slot: number): string {
+  if (deck.padMode === "fx2") return `${MOVES}:${slot}`; // a move, not a device: same on any receiver
   // The chain the press ACTUALLY hit, not the one in focus — in FX2 those differ, and sending the
   // focused one would make the far side fire a different effect from the one you just heard.
   const c = deck.fxChain(deck.padChain);
@@ -197,6 +203,12 @@ export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): voi
   const cut = raw.lastIndexOf(":");
   const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
   const chain = cut >= 0 ? raw.slice(0, cut) : "";
+  if (chain === MOVES) {
+    // A move fires on the receiver whatever bank it is sitting in.
+    const pad = MOVE_PADS[slot];
+    if (pad) on ? pad.on(deck) : pad.off?.(deck);
+    return;
+  }
   const back = deck.padChainOverride;
   const known = chain ? chainRef(deck, chain) : undefined;
   // Override rather than setFxFocus: the sender NAMED its chain, so that name must win over the

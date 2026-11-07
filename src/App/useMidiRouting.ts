@@ -15,8 +15,6 @@ import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
 
-/** SHIFT + tempo fader: semitones across the fader's full throw (≈ 4% of travel per semitone). */
-const KEY_FADER_SEMIS = 24;
 /** Quantized loop-edge adjust on the jog: platter roll (track-seconds at 0.0025 s/tick) per beat
  *  step. 0.15 s = 60 ticks ≈ 30° of platter. */
 const LOOP_ADJ_ROLL = 0.15;
@@ -169,8 +167,6 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     [],
   );
   const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
-  // SHIFT + tempo fader = KEY: where the fader and the key were when this shifted gesture began.
-  const keyFader = useRef<Partial<Record<DeckId, { anchor: number; base: number }>>>({});
   const knobAcc = useRef<Record<string, number>>({});
 
   const onMidiEvent = useCallback(
@@ -219,7 +215,6 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // moves to whichever deck is focused while it's on. Scoped per deck, never both.
           if (ev.deck) {
             const d = ev.deck;
-            if (!ev.down) keyFader.current[d] = undefined; // the next shifted tempo gesture re-anchors
             setMidiShift((m) => (m[d] === ev.down ? m : { ...m, [d]: ev.down }));
           } else {
             setFocusShift(ev.down);
@@ -380,14 +375,16 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const deck = engine.deck(id);
           const ctl = emitRef.current;
           // ★ SHIFT + TEMPO FADER = KEY SHIFT (operator, 2026-11-06: "find a way to do key shifting,
-          // possibly by using the same tempo slider during shift mode"). Relative to where the fader
-          // was when the shifted gesture began, in whole semitones, KEY_FADER_SEMIS over the full
-          // throw. The tempo does not move during the gesture; see the absolute slider below for after.
+          // possibly by using the same tempo slider during shift mode"), and ABSOLUTE like the tempo
+          // (operator: "the same fix where it jumps so there is no dead zone and the mid point is dead
+          // accurate where the groove is on the physical controller"). Held SHIFT, the slider position
+          // IS the key: the centre groove = 0 semitones (a whole semitone of travel rounds to it), the
+          // ends = ±the KEY range, same span as the on-screen KEY. The first shifted move snaps.
+          // The tempo does not move during the gesture.
           if (ev.target === "tempo" && ev.shift) {
             if (!ev.deck) break;
-            const g = keyFader.current[id] ?? (keyFader.current[id] = { anchor: ev.value, base: deck.pitch });
             const r = settings.pitchRange;
-            const semis = Math.max(-r, Math.min(r, g.base + Math.round((ev.value - g.anchor) * KEY_FADER_SEMIS)));
+            const semis = Math.max(-r, Math.min(r, Math.round((ev.value - 0.5) * 2 * r)));
             if (semis !== deck.pitch) {
               deck.setPitch(semis);
               ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
@@ -396,7 +393,6 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             break;
           }
           if (ev.target === "tempo") {
-            keyFader.current[id] = undefined;
             // ★ A SYNCED FOLLOWER IGNORES ITS HARDWARE TEMPO SLIDER (operator, 2026-11-03: "sync
             // problems when using sync/master"). SYNC moves the follower's tempo; the FLX4's slider
             // does not move with it, and any reading (a brush, the fader's own noise) would release

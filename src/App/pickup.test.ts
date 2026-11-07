@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickupStep, scaledTakeover, type PickupState } from "./pickup";
+import { pickupStep, type PickupState } from "./pickup";
 
 const run = (cur: number, values: number[], relatch = false, st?: PickupState) => {
   const caughtAt: boolean[] = [];
@@ -45,41 +45,5 @@ describe("pickupStep: soft takeover", () => {
     let st = run(0.5, [0.5, 0.6]).st;
     st = pickupStep(st, 0.9, 0.62);
     expect(st.caught).toBe(true);
-  });
-});
-
-describe("scaledTakeover — a tempo slider with no dead zone and a true midpoint", () => {
-  it("an out-of-step slider answers at once, in its own direction, never jumps", () => {
-    // slider at 0.7, tempo at 0.5 (a key shift moved the slider, not the tempo)
-    let st = scaledTakeover(undefined, 0.5, 0.7);
-    expect(st.apply).toBeNull(); // first reading: no jump
-    st = scaledTakeover(st, 0.5, 0.68); // down a little, toward the tempo
-    expect(st.apply!).toBeLessThan(0.5); // answered, same direction
-    expect(st.apply!).toBeCloseTo(0.49, 6); // at half speed while closing in
-    st = scaledTakeover(undefined, 0.5, 0.7);
-    st = scaledTakeover(st, 0.5, 0.72); // up, away from the tempo
-    expect(st.apply!).toBeCloseTo(0.53, 6); // at 1.5× while pulling away
-  });
-
-  it("the gap closes after ~2× its width of travel, then the CENTRE is 0 % again", () => {
-    let cur = 0.5;
-    let st = scaledTakeover(undefined, cur, 0.7); // 0.2 apart
-    for (let v = 0.69; v >= 0.25; v -= 0.01) {
-      st = scaledTakeover(st, cur, v);
-      cur = st.apply ?? cur;
-    }
-    expect(st.caught).toBe(true);
-    for (let v = 0.26; v <= 0.5 + 1e-9; v += 0.01) {
-      st = scaledTakeover(st, cur, Math.min(0.5, v));
-      cur = st.apply ?? cur;
-    }
-    expect(cur).toBeCloseTo(0.5, 6); // slider at the middle → tempo at 0 %
-  });
-
-  it("a slider resting on the value is caught and tracks 1:1", () => {
-    let st = scaledTakeover(undefined, 0.5, 0.5);
-    expect(st.caught).toBe(true);
-    st = scaledTakeover(st, 0.5, 0.52);
-    expect(st.apply).toBe(0.52);
   });
 });

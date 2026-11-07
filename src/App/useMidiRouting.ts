@@ -10,7 +10,7 @@ import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
-import { pickupStep, scaledTakeover } from "./pickup";
+import { pickupStep } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
@@ -379,18 +379,10 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
           const ctl = emitRef.current;
-          // ★ A SYNCED FOLLOWER IGNORES ITS HARDWARE TEMPO SLIDER (operator, 2026-11-03: "sync
-          // problems when using sync/master"). SYNC moves the follower's tempo; the FLX4's slider does
-          // not move with it. Any reading from that slider (a brush, or the fader's own noise) went
-          // straight to setTempo, which RELEASES the lock (onDeckTempo: the user took the follower
-          // off the leash) and jumped the tempo to wherever the slider sat. A CDJ ignores a synced
-          // deck's tempo slider; so does this. Press SYNC to let go. The pickup state is reset, so
-          // after release the slider has to come to the deck's tempo before it takes over.
           // ★ SHIFT + TEMPO FADER = KEY SHIFT (operator, 2026-11-06: "find a way to do key shifting,
           // possibly by using the same tempo slider during shift mode"). Relative to where the fader
           // was when the shifted gesture began, in whole semitones, KEY_FADER_SEMIS over the full
-          // throw. The tempo does not move; the slider then has to come back to the deck's tempo
-          // before it drives tempo again (its pickup is reset), so letting go of SHIFT never jumps.
+          // throw. The tempo does not move during the gesture; see the absolute slider below for after.
           if (ev.target === "tempo" && ev.shift) {
             if (!ev.deck) break;
             const g = keyFader.current[id] ?? (keyFader.current[id] = { anchor: ev.value, base: deck.pitch });
@@ -401,28 +393,22 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
               ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
               refresh();
             }
-            knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
             break;
           }
-          if (ev.target === "tempo") keyFader.current[id] = undefined;
-          if (ev.target === "tempo" && engine.syncRole(id) === "slave") {
-            knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
-            break;
-          }
-          // ★ THE TEMPO SLIDER TAKES OVER SCALED, NOT BY PICKUP (operator, 2026-11-06: "a dead zone in
-          // the midi when moving the tempo slider physically"). Pickup ignored the slider until it swept
-          // through the deck's tempo; whenever something else had moved one of them (SYNC, the screen,
-          // the auto-mixer, SHIFT+tempo key shift) that ignored stretch was a dead zone. scaledTakeover
-          // answers every move without a jump and closes the gap as it goes, so the centre is 0 % again
-          // after a short sweep (pickup.ts).
           if (ev.target === "tempo") {
-            const key = `${id}:tempo`;
-            const r = settings.tempoRange;
-            const cur01 = Math.max(0, Math.min(1, deck.tempo / r / 2 + 0.5));
-            const next = scaledTakeover(knobPickup.current[key], cur01, ev.value);
-            knobPickup.current[key] = { caught: next.caught, last: next.last };
-            if (next.apply == null) break;
-            deck.setTempo((next.apply - 0.5) * 2 * r);
+            keyFader.current[id] = undefined;
+            // ★ A SYNCED FOLLOWER IGNORES ITS HARDWARE TEMPO SLIDER (operator, 2026-11-03: "sync
+            // problems when using sync/master"). SYNC moves the follower's tempo; the FLX4's slider
+            // does not move with it, and any reading (a brush, the fader's own noise) would release
+            // the lock and jump the tempo. A CDJ ignores a synced deck's slider; so does this.
+            if (engine.syncRole(id) === "slave") break;
+            // ★ THE TEMPO SLIDER IS ABSOLUTE: IT JUMPS (operator, 2026-11-06, choosing between the
+            // three that cannot all hold while slider and tempo disagree, no dead zone, no jump, a true
+            // midpoint: "let it jump so we dont have a dead zone and we keep the true mid point").
+            // Pickup made a dead zone; end-stop scaling and catch-up each broke the midpoint. Now the
+            // slider position IS the tempo (centre = 0 %): after SYNC, the screen, the auto-mixer or a
+            // SHIFT+tempo key shift, the first move snaps the tempo to the slider.
+            deck.setTempo((ev.value - 0.5) * 2 * settings.tempoRange);
             ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
             refresh();
             break;

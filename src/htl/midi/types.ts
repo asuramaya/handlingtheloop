@@ -125,7 +125,7 @@ export type MidiEvent =
   | { type: "shift"; deck?: DeckId; down: boolean } // the SHIFT button → drives HTL's shift mode (deck omitted = focused)
   | { type: "focus"; deck: DeckId } // a focus button → make this deck the one the controller drives
   | { type: "beatjump"; deck: DeckId; beats: number; shift: boolean }
-  | { type: "fader"; target: FaderTarget; deck?: DeckId; value: number; pickup?: boolean } // value 0..1 (invert applied). pickup = apply soft-takeover in App
+  | { type: "fader"; target: FaderTarget; deck?: DeckId; value: number; pickup?: boolean; shift?: boolean } // value 0..1 (invert applied). pickup = apply soft-takeover in App. shift = that deck's SHIFT is held
   | { type: "knob"; target: FaderTarget; deck?: DeckId; delta: number } // relative encoder nudge (signed fraction of full range)
   | { type: "jogTouch"; deck: DeckId; down: boolean }
   | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean } // delta = signed ticks

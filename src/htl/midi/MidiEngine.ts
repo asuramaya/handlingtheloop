@@ -528,11 +528,32 @@ export class MidiEngine {
       }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
-      // The FLX4's outer ring idles on 0x40 but JITTERS ±1 (0x3F/0x41) at rest — touching
-      // the unit (e.g. a SHIFT press) shakes out a stream of those. Deadzone ±1 so resting
-      // noise never bends; a real ring turn easily clears it.
+      // ★ NO FLAT ±1 DEADZONE (operator, 2026-11-06: the ring "feels a bit unprecise and small micro
+      // movements and adjustments on it have some lag"). The ring can jitter ±1 at rest, so every ±1
+      // used to be dropped, but a SLOW turn is nothing but ±1s: in the 2026-11-02 capture 1563 of
+      // 2321 ring messages were ±1, and 1560 of those sat in same-direction runs. The deadzone ate
+      // two thirds of every careful nudge, and all of a slow one. Now a ±1 is held until a second
+      // tick in the SAME direction follows within RING_RUN_MS, then both go out; a lone tick, or one
+      // that reverses, is the jitter and is dropped. A |delta| ≥ 2 is unmistakably a turn: at once.
       const delta = centeredDelta(val);
-      if (Math.abs(delta) > 1) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
+      if (delta === 0) return;
+      const st = this.ringRun[b.deck];
+      const t = nowMs();
+      const sgn = Math.sign(delta);
+      if (st.sign !== sgn || t - st.t > MidiEngine.RING_RUN_MS) {
+        st.sign = sgn;
+        st.count = 0;
+        st.held = 0;
+      }
+      st.t = t;
+      st.count++;
+      if (Math.abs(delta) >= 2 || st.count >= 2) {
+        const d = delta + st.held;
+        st.held = 0;
+        this.opts.onEvent({ type: "jogBend", deck: b.deck, delta: d });
+      } else {
+        st.held += delta;
+      }
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
       const delta = centeredDelta(val);
@@ -552,7 +573,8 @@ export class MidiEngine {
   private emitFader(c: ControlSpec, deck: DeckId | undefined, v01: number, pickup?: boolean): void {
     if (c.kind !== "fader") return;
     const value = c.invert ? 1 - v01 : v01;
-    this.opts.onEvent({ type: "fader", target: c.target, deck, value, pickup });
+    const shift = deck ? this.shiftHeld[deck] : false;
+    this.opts.onEvent({ type: "fader", target: c.target, deck, value, pickup, ...(shift ? { shift } : {}) });
   }
 
   // Raw relative step for an encoder reported as ABSOLUTE 0..127 that WRAPS (127→0): a
@@ -617,6 +639,13 @@ export class MidiEngine {
       }
     }
   }
+
+  // Outer-ring run detector (see dispatchCC's jogBend): direction, run length, last tick, held ±1.
+  private ringRun: Record<DeckId, { sign: number; count: number; t: number; held: number }> = {
+    A: { sign: 0, count: 0, t: -Infinity, held: 0 },
+    B: { sign: 0, count: 0, t: -Infinity, held: 0 },
+  };
+  static readonly RING_RUN_MS = 150;
 
   // --- Echo lamp (FLX4 SMART CFX) ---
   // Lit, the hardware feature makes the COLOR knob ALSO send TRIM. Every echo lands within a few ms

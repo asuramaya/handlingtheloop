@@ -115,6 +115,10 @@ export const DDJ_FLX4: DeviceProfile = {
     // so force shift:false or the held SHIFT would suppress it.
     { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x60, type: "note", shift: false },
     { control: { kind: "action", action: "keyMatch" }, deck: "B", status: NOTE_B, data: 0x60, type: "note", shift: false },
+    // ★ SHIFT + BEAT SYNC on the DDJ-400 family sends 0x5C (Mixxx maps it to tempo-range); the 0x60
+    // above was never seen in a capture. Both → KEY until a capture settles which one this unit sends.
+    { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x5c, type: "note", shift: false },
+    { control: { kind: "action", action: "keyMatch" }, deck: "B", status: NOTE_B, data: 0x5c, type: "note", shift: false },
     // Performance-pad MODE buttons → HTL pad banks. The FLX4's four UNSHIFTED bank-select
     // buttons (note status, deck A 0x90 / deck B 0x91) switch which pad mode that DECK shows,
     // positionally 1:1 with our on-screen CUE · FX · LOOP · SMP row. Notes from the Mixxx map:

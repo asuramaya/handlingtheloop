@@ -71,15 +71,41 @@ describe("MidiEngine — FLX4 jog layers decode through the real profile", () =>
     expect(events).toEqual([{ type: "jogTurn", deck: "A", delta: 2, scratch: false }]);
   });
 
-  it("OUTER RING (CC 0x21) → jogBend, with the ±1 rest-jitter deadzone", async () => {
+  it("OUTER RING (CC 0x21) → jogBend: a slow ±1 run passes, lone or reversing ±1 jitter does not", async () => {
     const { events, send } = await flx();
-    send(CC_A, 0x21, 0x41); // +1 → swallowed by the deadzone (|delta| must exceed 1)
-    send(CC_A, 0x21, 0x42); // +2 → passes
-    send(CC_A, 0x21, 0x3d); // −3 → passes
+    send(CC_A, 0x21, 0x41); // +1 → held (could be rest jitter)
+    send(CC_A, 0x21, 0x41); // +1 again, same direction → a slow turn: both go out
+    send(CC_A, 0x21, 0x41); // the run continues → at once
+    send(CC_A, 0x21, 0x3d); // −3 → unmistakably a turn
+    send(CC_B, 0x21, 0x41); // deck B jitter: +1 …
+    send(CC_B, 0x21, 0x3f); // … −1 … (reverses: never a turn)
+    send(CC_B, 0x21, 0x41); // … +1
     expect(events).toEqual([
       { type: "jogBend", deck: "A", delta: 2 },
+      { type: "jogBend", deck: "A", delta: 1 },
       { type: "jogBend", deck: "A", delta: -3 },
     ]);
+  });
+
+  it("OUTER RING on the real 2026-11-02 capture: ≥ 99% of the ring's travel survives (the old deadzone kept ~40%)", async () => {
+    const cap = JSON.parse(readFileSync(new URL("./fixtures/flx4-jog-real-2026-11-02.json", import.meta.url), "utf8")) as MidiCapture;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+    try {
+      const { events, send } = await flx();
+      const t0 = performance.now() - cap.events[0].t;
+      let raw = 0;
+      for (const e of cap.events) {
+        const due = t0 + e.t - performance.now();
+        if (due > 0) vi.advanceTimersByTime(due);
+        if ((e.s & 0xf0) === 0xb0 && e.d1 === 0x21) raw += Math.abs(e.d2 - 64);
+        send(e.s, e.d1, e.d2);
+      }
+      const got = events.reduce((a, ev) => a + (ev.type === "jogBend" ? Math.abs(ev.delta) : 0), 0);
+      expect(raw).toBeGreaterThan(1000);
+      expect(got / raw).toBeGreaterThan(0.99);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("SHIFT + jog (CC 0x29) → jogSearch", async () => {

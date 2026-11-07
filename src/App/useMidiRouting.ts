@@ -15,6 +15,12 @@ import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
 
+/** SHIFT + tempo fader: semitones across the fader's full throw (≈ 4% of travel per semitone). */
+const KEY_FADER_SEMIS = 24;
+/** Quantized loop-edge adjust on the jog: platter roll (track-seconds at 0.0025 s/tick) per beat
+ *  step. 0.15 s = 60 ticks ≈ 30° of platter. */
+const LOOP_ADJ_ROLL = 0.15;
+
 export interface MidiRoutingDeps {
   settings: Settings;
   room: ReturnType<typeof useRoom>;
@@ -163,6 +169,8 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     [],
   );
   const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // SHIFT + tempo fader = KEY: where the fader and the key were when this shifted gesture began.
+  const keyFader = useRef<Partial<Record<DeckId, { anchor: number; base: number }>>>({});
   const knobAcc = useRef<Record<string, number>>({});
 
   const onMidiEvent = useCallback(
@@ -192,12 +200,14 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           deck.adjustBy(sec);
           return;
         }
-        const interval = deck.beatgrid?.interval || 0.5;
+        // ★ ONE BEAT PER LOOP_ADJ_ROLL OF PLATTER (operator, 2026-11-06: loop edges on the jog are
+        // "bothersome"). It was one beat per beat-INTERVAL of roll, i.e. ~190 ticks (≈ a quarter
+        // turn) per beat at 128 bpm, slower still on slow tracks. Now a fixed ~30° per beat, any bpm.
         const acc = (loopAdjAcc.current[did] ?? 0) + sec;
-        const steps = Math.trunc(acc / interval);
+        const steps = Math.trunc(acc / LOOP_ADJ_ROLL);
         if (steps !== 0) {
           for (let k = 0; k < Math.abs(steps); k++) deck.adjustStep(Math.sign(steps));
-          loopAdjAcc.current[did] = acc - steps * interval;
+          loopAdjAcc.current[did] = acc - steps * LOOP_ADJ_ROLL;
         } else {
           loopAdjAcc.current[did] = acc;
         }
@@ -209,6 +219,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // moves to whichever deck is focused while it's on. Scoped per deck, never both.
           if (ev.deck) {
             const d = ev.deck;
+            if (!ev.down) keyFader.current[d] = undefined; // the next shifted tempo gesture re-anchors
             setMidiShift((m) => (m[d] === ev.down ? m : { ...m, [d]: ev.down }));
           } else {
             setFocusShift(ev.down);
@@ -371,6 +382,25 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // off the leash) and jumped the tempo to wherever the slider sat. A CDJ ignores a synced
           // deck's tempo slider; so does this. Press SYNC to let go. The pickup state is reset, so
           // after release the slider has to come to the deck's tempo before it takes over.
+          // ★ SHIFT + TEMPO FADER = KEY SHIFT (operator, 2026-11-06: "find a way to do key shifting,
+          // possibly by using the same tempo slider during shift mode"). Relative to where the fader
+          // was when the shifted gesture began, in whole semitones, KEY_FADER_SEMIS over the full
+          // throw. The tempo does not move; the slider then has to come back to the deck's tempo
+          // before it drives tempo again (its pickup is reset), so letting go of SHIFT never jumps.
+          if (ev.target === "tempo" && ev.shift) {
+            if (!ev.deck) break;
+            const g = keyFader.current[id] ?? (keyFader.current[id] = { anchor: ev.value, base: deck.pitch });
+            const r = settings.pitchRange;
+            const semis = Math.max(-r, Math.min(r, g.base + Math.round((ev.value - g.anchor) * KEY_FADER_SEMIS)));
+            if (semis !== deck.pitch) {
+              deck.setPitch(semis);
+              ctl({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
+              refresh();
+            }
+            knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
+            break;
+          }
+          if (ev.target === "tempo") keyFader.current[id] = undefined;
           if (ev.target === "tempo" && engine.syncRole(id) === "slave") {
             knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
             break;

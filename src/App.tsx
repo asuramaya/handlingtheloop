@@ -1019,9 +1019,9 @@ function AppBody() {
     // The keyboard transport for the shared pad gesture (fxPads). It used to toggle, on the
     // grounds that "the keyboard has no key-up" — it does; nothing was listening.
     const fxKeyDown = (deck: DeckRef, id: DeckId, i: number, s = false) => {
-      const { fired, off, repeat, kind } = fxPadPress(deck, id, i, s); // s = SHIFT → toggle the latch
+      const { fired, off, repeat, kind, alt } = fxPadPress(deck, id, i, s); // s = SHIFT → toggle the latch
       if (repeat) return; // auto-repeat: the throw, the reveal and the render all stay put
-      if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i) });
+      if (fired) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, i, alt) });
       if (off) emitRef.current({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, i) });
       if (kind) fxCtlFor(id)?.selectKind(kind); // press IS reveal
     };

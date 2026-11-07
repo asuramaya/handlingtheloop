@@ -10,7 +10,7 @@ export type SectionKey = "interface" | "controls" | "turntable" | "midi" | "audi
 
 export const SECTION_KEYS: Record<SectionKey, (keyof Settings)[]> = {
   interface: [
-    "accentA", "accentB", "bgColor", "textColor", "borderColor", "selectorColor", "loopColor", "markerColor", "shiftColor",
+    "accentA", "accentB", "bgColor", "textColor", "borderColor", "selectorColor", "loopColor", "markerColor", "shiftColor", "slipMoveColor",
     "stripColor", "stemDrumsColor", "stemBassColor", "stemVocalsColor", "stemOtherColor", "freqLowColor", "freqMidColor",
     "freqHighColor", "glow", "freqColors", "freqVividness", "bandLayers", "bandFromDeck", "stemsFollowDeck", "waveformDebrick",
     "markerThickness", "uiContrast", "inheritRoomColor", "deckArtAccent",

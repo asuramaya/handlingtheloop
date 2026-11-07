@@ -243,9 +243,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     if (locked) return; // watch-only: see the lock note above changePadMode
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    const { fired, off, repeat, kind } = fxPadPress(deck, id, slot, shift || e.shiftKey); // SHIFT → toggle the latch
+    const { fired, off, repeat, kind, alt } = fxPadPress(deck, id, slot, shift || e.shiftKey); // SHIFT → toggle the latch
     if (repeat) return;
-    if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot) });
+    if (fired) emit({ kind: "board", deck: id, id: "fxPad", phase: "down", arg: fxPadArg(deck, slot, alt) });
     if (off) emit({ kind: "board", deck: id, id: "fxPad", phase: "up", arg: fxPadArg(deck, slot) });
     // ★ PRESS IS REVEAL. You threw it, so it is what you are looking at — which closes the hole
     // chains opened, where a pad could engage something that was not on screen.

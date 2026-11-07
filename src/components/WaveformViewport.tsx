@@ -1270,11 +1270,13 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // The slip move's layer: a tinted band from where the audio IS to where the track IS, the
     // audio's ghost line, and the move's name, so the effect reads at a glance.
     if (move && shadow != null) {
+      // Its colour is a setting (Colours ▸ Surfaces), following the SHIFT highlight by default.
+      const mc = getComputedStyle(document.documentElement).getPropertyValue("--slip-move").trim() || "#ffd250";
       const gx = Math.max(-2 * dpr, Math.min(w + 2 * dpr, toX(audible)));
       const x0 = Math.min(gx, w / 2), x1 = Math.max(gx, w / 2);
-      ctx.fillStyle = rgba(p.accent, 0.16);
+      ctx.fillStyle = rgba(mc, 0.12);
       ctx.fillRect(0, 0, w, h); // the whole lane carries the move, lightly
-      ctx.fillStyle = rgba(p.accent, 0.3);
+      ctx.fillStyle = rgba(mc, 0.28);
       ctx.fillRect(x0, 0, Math.max(x1 - x0, dpr), h);
       ctx.fillStyle = rgba(p.selectorColor, 0.55);
       for (let y = 0; y < h; y += 6 * dpr) ctx.fillRect(gx - dpr, y, 2 * dpr, 3 * dpr); // dashed ghost
@@ -1283,7 +1285,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.textBaseline = "top";
       const tw = ctx.measureText(label).width;
       const lx = Math.min(w - tw - 4 * dpr, w / 2 + 5 * dpr);
-      ctx.fillStyle = rgba(p.accent, 0.95);
+      ctx.fillStyle = rgba(mc, 0.95);
       ctx.fillText(label, lx, 4 * dpr);
     }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MOVE_PADS } from "./movePads";
-import { fireFxPadArg, padsForDeck } from "./fxPads";
+import { fireFxPadArg, fxPadPress, fxPadRelease, padsForDeck } from "./fxPads";
 import type { Deck } from "@htl/audio";
 
 // FX2 = deck moves (operator, 2026-11-07): SPIN · CENSOR · BRAKE, the rest to be decided.
@@ -14,8 +14,27 @@ function fakeDeck(padMode = "fx2") {
     pause() { this.calls.push("pause"); },
     spinBegin() { this.calls.push("spinBegin"); },
     spinEnd() { this.calls.push("spinEnd"); },
+    spinback() { this.calls.push("spinback"); },
+    get spinning() { return false; },
   };
 }
+
+describe("FX2 SHIFT + SPIN", () => {
+  it("is a real backspin (playhead goes back), fired on the press, inert on release", () => {
+    const d = fakeDeck();
+    const r = fxPadPress(d as unknown as Deck, "Z", 0, true);
+    expect(r).toMatchObject({ fired: true, alt: true });
+    expect(fxPadRelease(d as unknown as Deck, "Z", 0)).toBe(false);
+    expect(d.calls).toEqual(["spinback"]);
+  });
+
+  it("crosses the wire as its own gesture, so a co-DJ hears the real backspin too", () => {
+    const d = fakeDeck("cue");
+    fireFxPadArg(d as unknown as Deck, "@moves:0!", true);
+    fireFxPadArg(d as unknown as Deck, "@moves:0!", false);
+    expect(d.calls).toEqual(["spinback"]);
+  });
+});
 
 describe("FX2 SPIN", () => {
   it("is a held slip move too: backspin on press, land on the beat on release", () => {

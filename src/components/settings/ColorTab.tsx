@@ -29,6 +29,7 @@ type ColorKey =
   | "loopColor"
   | "markerColor"
   | "shiftColor"
+  | "slipMoveColor"
   | "stripColor"
   | "stemDrumsColor"
   | "stemBassColor"
@@ -229,6 +230,7 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
         {swatch({ key: "textColor", label: "Text" })}
         {swatch({ key: "borderColor", label: "Lines" })}
         {swatch({ key: "shiftColor", label: "SHIFT highlight" })}
+        {swatch({ key: "slipMoveColor", label: "Censor · brake · spin", def: settings.shiftColor || "#ffd250" }, undefined, !settings.slipMoveColor)}
         <Slider
           label="Contrast"
           hint={settings.uiContrast < 0.25 ? "soft" : settings.uiContrast > 0.8 ? "inky" : "balanced"}

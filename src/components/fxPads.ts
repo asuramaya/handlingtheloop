@@ -22,6 +22,9 @@ export interface FxPadDef {
   off?: (d: Deck) => void;
   active?: (d: Deck) => boolean; // lights the pad while sounding
   hint: string;
+  /** SHIFT's own one-shot for this pad, replacing the latch: fires on the press, nothing on release.
+   *  (FX2 SPIN: SHIFT is a real backspin that moves the playhead back, not a latched slip spin.) */
+  shiftOn?: (d: Deck) => void;
 }
 
 export const FX_PADS: FxPadDef[] = [
@@ -117,13 +120,17 @@ const heldPads = new Map<string, { wasOn: boolean; latch: boolean }>();
 /** Press. Plain: engage while held. SHIFT: toggle the latch now. Reports whether the effect went
  *  ON (`fired`, so the caller emits a down) or OFF (`off`, emit an up), and which device to reveal.
  *  Repeats are ignored — a held keyboard key auto-repeats forty times a second. */
-export function fxPadPress(deck: Deck, deckId: string, slot: number, shift = false): { fired: boolean; off?: boolean; repeat?: boolean; kind?: FxKind } {
+export function fxPadPress(deck: Deck, deckId: string, slot: number, shift = false): { fired: boolean; off?: boolean; repeat?: boolean; kind?: FxKind; alt?: boolean } {
   const pad = padsForDeck(deck)[slot];
   if (!pad) return { fired: false };
   const key = `${deckId}${slot}`;
   if (heldPads.has(key)) return { fired: false, repeat: true, kind: pad.kind };
   const wasOn = fxPadIsOn(deck, pad);
   heldPads.set(key, { wasOn, latch: shift });
+  if (shift && pad.shiftOn) {
+    pad.shiftOn(deck);
+    return { fired: true, alt: true, kind: pad.kind };
+  }
   if (shift) {
     if (wasOn) {
       padOff(deck, pad, true);
@@ -186,8 +193,9 @@ export function fireFxPad(deck: Deck, slot: number, on: boolean): void {
 /** The wire name of the FX2 moves bank (a chain can never be called this: chain names are user
  *  text, upper-cased, and this is lower case with a sigil). */
 const MOVES = "@moves";
-export function fxPadArg(deck: Deck, slot: number): string {
-  if (deck.padMode === "fx2") return `${MOVES}:${slot}`; // a move, not a device: same on any receiver
+export function fxPadArg(deck: Deck, slot: number, alt = false): string {
+  // A move, not a device: the same on any receiver. `!` marks SHIFT's own one-shot (shiftOn).
+  if (deck.padMode === "fx2") return `${MOVES}:${slot}${alt ? "!" : ""}`;
   // The chain the press ACTUALLY hit, not the one in focus — in FX2 those differ, and sending the
   // focused one would make the far side fire a different effect from the one you just heard.
   const c = deck.fxChain(deck.padChain);
@@ -201,12 +209,18 @@ export function chainRef(deck: Deck, ref: string) {
 export function fireFxPadArg(deck: Deck, arg: string | number, on: boolean): void {
   const raw = String(arg);
   const cut = raw.lastIndexOf(":");
-  const slot = Number(cut >= 0 ? raw.slice(cut + 1) : raw);
+  const tail = cut >= 0 ? raw.slice(cut + 1) : raw;
+  const alt = tail.endsWith("!");
+  const slot = Number(alt ? tail.slice(0, -1) : tail);
   const chain = cut >= 0 ? raw.slice(0, cut) : "";
   if (chain === MOVES) {
     // A move fires on the receiver whatever bank it is sitting in.
     const pad = MOVE_PADS[slot];
-    if (pad) on ? pad.on(deck) : pad.off?.(deck);
+    if (!pad) return;
+    if (alt) {
+      if (on) pad.shiftOn?.(deck);
+    } else if (on) pad.on(deck);
+    else pad.off?.(deck);
     return;
   }
   const back = deck.padChainOverride;

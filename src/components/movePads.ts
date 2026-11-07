@@ -10,7 +10,10 @@ import type { FxPadDef } from "./fxPads";
 // All three are SLIP overlays: the track keeps going underneath and the release lands on it.
 
 export const MOVE_PADS: (FxPadDef | null)[] = [
-  { label: "SPIN", hold: true, on: (d) => d.spinBegin(), off: (d) => d.spinEnd(), active: (d) => d.spinning, hint: "Backspin while held; on release it lands where the track would be, on the beat" },
+  // SPIN: plain = the held slip spin (lands on the beat); SHIFT = a REAL backspin — the record goes
+  // back and plays on from there (operator, 2026-11-07: "let spin actually go back in the playhead
+  // when shift spin and normal when no shift"), with no slip layer, because nothing continues.
+  { label: "SPIN", hold: true, on: (d) => d.spinBegin(), off: (d) => d.spinEnd(), active: (d) => d.spinning, shiftOn: (d) => d.spinback(), hint: "Backspin while held, landing on the beat · SHIFT = a real backspin that goes back and plays on" },
   { label: "CENSOR", hold: true, on: (d) => d.censorBegin(), off: (d) => d.censorEnd(), active: (d) => d.reversing, hint: "Reverse while held; on release it lands where the track would be" },
   { label: "BRAKE", hold: true, on: (d) => d.brakeBegin(), off: (d) => d.brakeEnd(), active: (d) => d.braking, hint: "Power down while held; on release it lands where the track would be and keeps playing" },
   // 3–7: to be decided (operator, 2026-11-07: "the rest are tbd but tying them to fx doesnt really

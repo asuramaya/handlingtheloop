@@ -25,6 +25,7 @@ export interface Settings {
   loopColor: string; // waveform loop region + loop markers
   markerColor: string; // waveform beat grid markers
   shiftColor: string; // SHIFT-mode / alt-action highlight ("Accents"); "" = default amber
+  slipMoveColor: string; // the waveform layer over a held CENSOR / BRAKE / SPIN; "" = the SHIFT highlight
   stripColor: string; // waveform strip (body); "" = follow the deck accent
   stemDrumsColor: string; // per-stem waveform colours; "" each = built-in default
   stemBassColor: string;
@@ -286,6 +287,7 @@ export const DEFAULT_SETTINGS: Settings = {
   loopColor: "#6ee7a8",
   markerColor: "#ffd64a",
   shiftColor: "#ffd250", // SHIFT highlight ("Accents")
+  slipMoveColor: "", // follows the SHIFT highlight until set
   stripColor: "", // empty = use the deck's own accent for the waveform
   stemDrumsColor: "", // empty each = the built-in per-stem colour
   stemBassColor: "",
@@ -566,6 +568,8 @@ export function applySettings(s: Settings) {
   root.style.setProperty("--wv-loop", s.loopColor || "#6ee7a8");
   root.style.setProperty("--wv-marker", s.markerColor || "#ffd64a");
   root.style.setProperty("--shift", s.shiftColor || "#ffd250"); // SHIFT / alt-action highlight
+  // The slip-move layer on the waveform (CENSOR / BRAKE / SPIN): its own colour, else SHIFT's.
+  root.style.setProperty("--slip-move", s.slipMoveColor || s.shiftColor || "#ffd250");
   if (s.stripColor) root.style.setProperty("--wv-strip", s.stripColor);
   else root.style.removeProperty("--wv-strip");
   document.body.classList.toggle("no-glow", !s.glow);

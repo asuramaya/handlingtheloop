@@ -351,6 +351,12 @@
   max-width: 58%;
 }
 .fx-rack-bar > .fx-group.master.open .fx-tabs {
+  /* ★ THE ROW SHRINKS, THE ＋ DOES NOT (operator, 2026-11-06: "the plus button disappears").
+     `.fx-group .fx-tabs` sets `flex: 0 0 auto`, which this rule used to inherit: capped by the
+     master's max-width, the device row could not give up width, so it shoved the ＋ past the
+     body's `overflow: hidden` edge and the ＋ was clipped away. Shrinkable, the row scrolls inside
+     its share and the ＋ keeps its place at the end. */
+  flex: 0 1 auto;
   overflow-x: auto;
   scrollbar-width: none;
   min-width: 0;

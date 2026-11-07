@@ -17,6 +17,7 @@ import { CompPanel } from "./CompPanel";
 import { PromptModal } from "./Dialog";
 import { StemPicker, STEMS } from "./StemPicker";
 import { Menu, MenuFly } from "./ContextMenu";
+import { aimEnter } from "./lib/menuAim";
 import { bankChainRows, chainOf, CHAIN_KIND, resolveFxRows, presetOf, isGroup, isRef, reorderTop, reorderInGroup, fileIntoGroup, moveOutOfGroup, moveBetweenGroups, addFxSection, deleteFxSection, deleteFxRow, revertFxRow, renameFxSection, materialiseFxRow, type FxRow, type FxLeaf, type FxPath } from "@htl/audio";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
@@ -75,10 +76,17 @@ export interface FxStripCtl {
 /** Where a flyout hangs, and how wide it is. ★ THE WIDTH IS MEASURED, NOT CHOSEN — it comes off
  *  the menu the row lives in, so the two windows are the same object at two sizes rather than one
  *  box and a constant that used to be right. */
-type FlyAnchor = { left: number; right: number; top: number };
+type FlyAnchor = { left: number; right: number; top: number; dir?: "left" | "right" };
 function flyFrom(el: HTMLElement): { anchor: FlyAnchor } {
   const r = el.getBoundingClientRect();
-  const menu = el.closest<HTMLElement>(".fx-preset-menu")?.getBoundingClientRect();
+  const menuEl = el.closest<HTMLElement>(".fx-preset-menu");
+  const menu = menuEl?.getBoundingClientRect();
+  // ★ A NESTED WINDOW KEEPS ITS PARENT'S DIRECTION (operator, 2026-11-06: "the fan out happens in
+  // the wrong direction when space constrained and overlaps the main thing"). Each window used to
+  // pick its side alone: the first flyout, out of room on the right, flipped LEFT of the menu; the
+  // third then found room on ITS right, which is exactly where the menu is, and opened on top of it.
+  // A window that opened leftward hands "left" on, so the cascade keeps fanning away from the menu.
+  const dir = menuEl?.classList.contains("fly-left") ? "left" : undefined;
   // ★ HORIZONTALLY IT HANGS OFF THE MENU, VERTICALLY OFF THE ROW. It used to take both from the
   // row — but a row sits INSIDE the menu's 4px padding and its own border, so `row.right + gap`
   // put the second window a few pixels inside the first one's edge: the two boxes overlapped, and
@@ -86,7 +94,7 @@ function flyFrom(el: HTMLElement): { anchor: FlyAnchor } {
   // row's TOP is still the right vertical anchor (the window should open beside the thing you
   // pointed at); its left and right never were.
   // Only the ANCHOR now — the window measures itself (see MenuFly).
-  return { anchor: { left: menu?.left ?? r.left, right: menu?.right ?? r.right, top: r.top } };
+  return { anchor: { left: menu?.left ?? r.left, right: menu?.right ?? r.right, top: r.top, dir } };
 }
 
 export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls, onSelect, onOpenFx, fxPageOpen, onCloseFx, ctlRef, locked = false }: FxStripProps) {
@@ -1013,7 +1021,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         className={`fx-preset-row ${chainPeek?.key === path.join(":") ? "hot" : ""} ${drag.from === i ? "reorder-source" : ""}`}
         {...drag.bind(i)}
         data-peek-row={path.join(":")}
-        onMouseEnter={(e) => { holdPeek(); if (!chainRowMenu && drag.from == null) setChainPeek({ key: path.join(":"), preset: p, ...flyFrom(e.currentTarget) }); }}
+        onMouseEnter={(e) => { holdPeek(); const el = e.currentTarget; aimEnter(el, () => { if (!chainRowMenu && drag.from == null) setChainPeek({ key: path.join(":"), preset: p, ...flyFrom(el) }); }); }}
         onMouseLeave={() => dropPeek()}
         {...longChain.bind({ preset: p, path, factory })}
         onContextMenu={(e) => {
@@ -1432,7 +1440,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                   // …and not while EITHER drag runs: a heading that re-targets the open flyout
                   // mid-drag would also re-target the source group a flyout drop reads from, so
                   // the row would be taken out of whichever section you last passed over.
-                  onMouseEnter={(e) => !rowMenu && presetDrag.from == null && sectionDrag.from == null && setPresetFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) })}
+                  onMouseEnter={(e) => { const el = e.currentTarget; aimEnter(el, () => { if (!rowMenu && presetDrag.from == null && sectionDrag.from == null) setPresetFly({ at: i, name: r.name, ...flyFrom(el) }); }); }}
                   {...presetDrag.bind(i)}
                   {...presetDrag.foreign(String(i))}
                   {...longRow.bind({ kind: menuDev.kind, path: [i] as FxPath, group: true, name: r.name, factory: false })}
@@ -1522,7 +1530,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     <div
                       data-fly-row={`chain:${i}`}
                       className={`fx-preset-row fx-section-row ${chainFly?.at === i ? "hot" : ""} ${chainTopDrag.onto === String(i) || (chainSectionDrag.onto === String(i) && chainFly?.at !== i) ? "drop" : ""} ${chainTopDrag.from === i ? "reorder-source" : ""}`}
-                      onMouseEnter={(e) => { if (chainRowMenu || chainTopDrag.from != null || chainSectionDrag.from != null) return; dropPeek(true); setChainFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) }); }}
+                      onMouseEnter={(e) => { if (chainRowMenu || chainTopDrag.from != null || chainSectionDrag.from != null) return; const el = e.currentTarget; aimEnter(el, () => { dropPeek(true); setChainFly({ at: i, name: r.name, ...flyFrom(el) }); }); }}
                       {...chainTopDrag.bind(i)}
                       {...chainTopDrag.foreign(String(i))}
                       {...longRow.bind({ kind: CHAIN_KIND, path: [i] as FxPath, group: true, name: r.name, factory: false })}
@@ -1748,7 +1756,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 data-add-row={k}
                 className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
                 role="menuitem"
-                onMouseEnter={(e) => { if (has) openFly(e.currentTarget); }}
+                onMouseEnter={(e) => { const el = e.currentTarget; aimEnter(el, () => { if (has) openFly(el); else { setAddHover(null); setAddFly(null); } }); }}
                 onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); setAddFly(null); }}
               >
                 {KIND_LABEL[k] ?? k.toUpperCase()}
@@ -1803,7 +1811,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 key={`as:${i}:${r.name}`}
                 data-addfly-row={`add:${i}`}
                 className={`fx-preset-row fx-section-row ${addFly?.at === i ? "hot" : ""}`}
-                onMouseEnter={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget) })}
+                onMouseEnter={(e) => { const el = e.currentTarget; aimEnter(el, () => setAddFly({ at: i, name: r.name, ...flyFrom(el) })); }}
               >
                 <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"}`} onClick={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) })}>
                   <i className="fx-section-n">{r.items.length}</i>

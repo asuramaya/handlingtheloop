@@ -5,7 +5,7 @@ import type { FxPadDef } from "./fxPads";
 // lets try the first draft"). FX2 used to be the same eight effects as FX, aimed at the master
 // chain, so with no stem chains it was an exact duplicate ("they feel the same"). FX stays the
 // chain's effects; FX2 is eight DECK MOVES:
-//   SPIN · CENSOR · BRAKE · CUT, the bottom row still to be decided.
+//   SPIN · CENSOR · BRAKE · CUT / WARP · FREEZE, the last two still to be decided.
 // Same gesture as every FX pad (fxPads): a plain press is live while held, SHIFT+press latches.
 // SPIN, CENSOR and BRAKE are SLIP overlays: the track keeps going underneath and the release lands
 // on it. CUT just silences it.
@@ -20,9 +20,9 @@ export const MOVE_PADS: (FxPadDef | null)[] = [
   // CUT (operator, 2026-11-07: "lets do cut for #4"): the deck drops out while held and slams back
   // in where the track has got to — it never stopped, it was only silent.
   { label: "CUT", hold: true, on: (d) => d.setCut(true), off: (d) => d.setCut(false), active: (d) => d.cutting, hint: "Silence the deck while held; it drops back in where the track has got to" },
-  // 4–7: still being decided (operator: "need to keep brainstorming the rest"). Empty, not placeholders.
-  null,
-  null,
+  { label: "WARP", hold: true, on: (d) => d.warpBegin(), off: (d) => d.warpEnd(), active: (d) => d.warping, hint: "The record warps — speed and pitch wobble while held; release lands on the beat" },
+  { label: "FREEZE", hold: true, on: (d) => d.freezeBegin(), off: (d) => d.freezeEnd(), active: (d) => d.freezing, hint: "Holds this instant as a drone while held; the track runs on underneath and drops back in" },
+  // 6–7: still being decided. Empty, not placeholders.
   null,
   null,
 ];

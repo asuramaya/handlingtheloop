@@ -78,6 +78,9 @@ class Stretch extends AudioWorkletProcessor {
     this.naturalNext = 0;    // source idx the next grain should continue from
     this.loopActive = false; this.loopStart = 0; this.loopEnd = 0;
     this.loopWrap = false; this.loopStartI = 0; this.loopLenI = 0;
+    // FREEZE (FX2): grains keep being read from one instant instead of moving on. freezeAt = the
+    // source sample frozen on; spray = how far (samples) each grain may wander around it.
+    this.freezeOn = false; this.freezeAt = 0; this.freezeSpray = 0;
     // intermediate FIFO (stretched, pre-resample)
     this.ringL = new Float32Array(RING); this.ringR = new Float32Array(RING);
     this.wHead = 0; this.rHead = 0; // FIFO write (int) / read (frac) cursors
@@ -234,6 +237,13 @@ class Stretch extends AudioWorkletProcessor {
       // Declicked re-seat (Deck only sends this while playing): fade out fast, then the
       // process loop resets at silence and fades back in. No immediate reset → no click.
       this.seekPending = Math.max(0, d.offset || 0); this.ended = false; this.gainTarget = 0;
+    } else if (d.type === 'freeze') {
+      // ★ FREEZE (operator, 2026-11-07). The engine already builds its output from overlapping
+      // grains; frozen, every grain is read from (about) the same instant, so the sound holds as
+      // a drone with no rhythm. Deck's own clock keeps running meanwhile — that is the track going
+      // on underneath — and the release re-seats there with a declicked seek.
+      this.freezeOn = !!d.on;
+      if (this.freezeOn) { this.freezeAt = this.idealPos; this.freezeSpray = Math.max(0, (d.spray || 0) * this.sr); }
     } else if (d.type === 'stop') {
       this.playing = false; this.gainTarget = 0;
     } else if (d.type === 'loop') {
@@ -272,6 +282,7 @@ class Stretch extends AudioWorkletProcessor {
     }
   }
   reset(offsetSec) {
+    this.freezeOn = false; // a re-seat (start / seek / new track) always thaws
     this.idealPos = Math.max(0, offsetSec * this.sr);
     this.grainStart = this.idealPos;
     this.naturalNext = this.idealPos;
@@ -361,6 +372,7 @@ class Stretch extends AudioWorkletProcessor {
       if (total > 0) { this.idealPos -= total; this.naturalNext -= total; this.refreshTarget(); }
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
+    if (this.freezeOn) this.idealPos = this.freezeAt + (Math.random() * 2 - 1) * this.freezeSpray;
 
     const FS = this.FS, HS = this.HS, OVL = this.OVL, SEARCH = this.SEARCH, win = this.win;
     const offStep = this.offStep, tapStep = this.tapStep;
@@ -378,7 +390,7 @@ class Stretch extends AudioWorkletProcessor {
     let flux = 0;
     for (let i = SEARCH + 1; i < SEARCH + HS; i++) { const dM = M[i] - M[i - 1]; flux += dM * dM; }
     const ema = this.energyEMA;
-    const transient = this.transientOn && ema > 1e-7 && flux > this.tThresh * ema && flux > 1e-5;
+    const transient = !this.freezeOn && this.transientOn && ema > 1e-7 && flux > this.tThresh * ema && flux > 1e-5;
     this.energyEMA = ema + 0.3 * (flux - ema);
     // cross-correlation search for the best-matching grain offset — plain array reads
     // into M (candidate start index = SEARCH + d). Skipped on a transient → bestD = 0
@@ -451,6 +463,7 @@ class Stretch extends AudioWorkletProcessor {
     if (transient) { adv = HS; this.debt += HS - Ha; }
     else { const corr = Math.max(-HS * 0.5, Math.min(HS * 0.5, this.debt)); adv = Ha - corr; this.debt -= corr; }
     this.idealPos += adv;
+    if (this.freezeOn) { this.idealPos = this.freezeAt; this.debt = 0; } // frozen: time does not move
     this.grainStart = gs; this.naturalNext = gs + HS;
     const tb = SEARCH + bestD + HS;
     for (let i = 0; i < OVL; i++) tgt[i] = M[tb + i];
@@ -576,6 +589,7 @@ class Stretch extends AudioWorkletProcessor {
       this.pvInit = false; // phase-reset across the loop seam
     }
     if (!this.loopActive && this.idealPos >= this.length) { this.markEnded(); return; }
+    if (this.freezeOn) this.idealPos = this.freezeAt + (Math.random() * 2 - 1) * this.freezeSpray;
     const N = this.pvN, Rs = this.Rs, bins = (N >> 1) + 1;
     const base = Math.round(this.idealPos);
     // L: forward STFT → transient decision (HF-weighted magnitude flux vs EMA) → synth
@@ -595,6 +609,7 @@ class Stretch extends AudioWorkletProcessor {
     olaL.copyWithin(0, Rs, N); olaL.fill(0, N - Rs, N);
     olaR.copyWithin(0, Rs, N); olaR.fill(0, N - Rs, N);
     this.idealPos += Ra;
+    if (this.freezeOn) this.idealPos = this.freezeAt; // frozen: a spectral freeze, time does not move
     this.grainStart = base; this.naturalNext = base + Rs;
     this.pvInit = true;
   }

@@ -889,8 +889,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // underneath and the release lands there, so THAT is the playhead: the view follows the slip
     // shadow, and the audio's own position (reversing, braking, spinning back) is drawn as a ghost
     // with the move's band between the two (below).
-    const audible = deck.visualPosition();
     const move = deck.slipMove;
+    const audible = move ? deck.slipGhost() : deck.visualPosition();
     const shadow = move ? deck.slipShadow() : null;
     const pos = shadow ?? audible;
     const r = Math.max(deck.rate, 0.01);
@@ -1280,7 +1280,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fillRect(x0, 0, Math.max(x1 - x0, dpr), h);
       ctx.fillStyle = rgba(p.selectorColor, 0.55);
       for (let y = 0; y < h; y += 6 * dpr) ctx.fillRect(gx - dpr, y, 2 * dpr, 3 * dpr); // dashed ghost
-      const label = move === "censor" ? "CENSOR" : move === "brake" ? "BRAKE" : "SPIN";
+      const label = move.toUpperCase();
       ctx.font = `700 ${Math.round(10 * dpr)}px system-ui, sans-serif`;
       ctx.textBaseline = "top";
       const tw = ctx.measureText(label).width;

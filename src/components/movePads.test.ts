@@ -48,8 +48,8 @@ describe("FX2 SPIN", () => {
 });
 
 describe("FX2 moves", () => {
-  it("FX2 holds SPIN, CENSOR, BRAKE and CUT; the bottom row is empty", () => {
-    expect(padsForDeck(fakeDeck() as unknown as Deck).map((p) => p?.label ?? null)).toEqual(["SPIN", "CENSOR", "BRAKE", "CUT", null, null, null, null]);
+  it("FX2 holds SPIN, CENSOR, BRAKE, CUT / WARP, FREEZE; the last two are empty", () => {
+    expect(padsForDeck(fakeDeck() as unknown as Deck).map((p) => p?.label ?? null)).toEqual(["SPIN", "CENSOR", "BRAKE", "CUT", "WARP", "FREEZE", null, null]);
   });
 
   it("CUT silences while held and drops back in on release", () => {

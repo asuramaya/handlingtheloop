@@ -1665,6 +1665,10 @@ export class Deck {
   pause() {
     this.jog.cancelJog();
     this.clearBend();
+    if (this._freezeAt != null) {
+      this._freezeAt = null;
+      this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+    }
     if (!this._playing) return;
     this.startOffset = this.position();
     this.stopSource();
@@ -1826,18 +1830,60 @@ export class Deck {
   get spinning() {
     return this.jog.holdKind === "spin";
   }
-  /** The slip overlay in flight — a held CENSOR, BRAKE or SPIN whose shadow is armed — or null.
-   *  While it runs the track is still going underneath; the waveform follows that, not the audio. */
-  get slipMove(): "censor" | "brake" | "spin" | null {
+  /** WARP (the FX2 pad): the record wobbles in speed and pitch while held — ±WARP_DEPTH, one
+   *  swing every two beats — then lands where the track would be, on the beat. */
+  warpBegin() {
+    const beat = (this.beatgrid?.interval ?? 0.5) / Math.max(0.25, this._rate);
+    this.jog.warpStart(2 * beat, Deck.WARP_DEPTH);
+  }
+  warpEnd() {
+    this.jog.warpStop();
+  }
+  get warping() {
+    return this.jog.warping;
+  }
+  private static readonly WARP_DEPTH = 0.06;
+
+  /** FREEZE (the FX2 pad): the sound holds on this instant as a drone while held; the track keeps
+   *  going underneath (the deck clock never stops) and the release drops back in where it is. */
+  private _freezeAt: number | null = null;
+  freezeBegin() {
+    if (!this._playing || this._freezeAt != null || this.jogging) return;
+    this._freezeAt = this.position();
+    this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
+  }
+  freezeEnd() {
+    if (this._freezeAt == null) return;
+    this._freezeAt = null;
+    this.stretchNode?.port.postMessage({ type: "freeze", on: false });
+    if (this._playing) this.seek(this.position()); // declicked re-seat onto the running clock
+  }
+  get freezing() {
+    return this._freezeAt != null;
+  }
+  private static readonly FREEZE_SPRAY = 0.03; // s each grain may wander around the frozen instant
+
+  /** The slip overlay in flight — a held CENSOR, BRAKE, SPIN, WARP or FREEZE — or null. While it
+   *  runs the track is still going underneath; the waveform follows that, not the audio. */
+  get slipMove(): "censor" | "brake" | "spin" | "warp" | "freeze" | null {
+    if (this._freezeAt != null) return "freeze";
     if (!this.slipAnchor) return null;
     if (this.jog.reversing) return "censor";
+    if (this.jog.warping) return "warp";
     const k = this.jog.holdKind;
     return k === "brake" ? "brake" : k === "spin" ? "spin" : null;
   }
-  /** Where the track would be now under a slip overlay (the shadow), WITHOUT consuming it. */
+  /** Where the track would be now under a slip overlay (the shadow), WITHOUT consuming it. A
+   *  FREEZE has no anchor: the deck clock never stopped, so the playhead itself is the track. */
   slipShadow(): number | null {
+    if (this._freezeAt != null) return this.position();
     const a = this.slipAnchor;
     return a ? this.shadowOf(a.pos, a.t) : null;
+  }
+  /** Where the AUDIO is during a slip move (the waveform's ghost): the frozen instant for FREEZE,
+   *  else the platter's own position. */
+  slipGhost(): number {
+    return this._freezeAt ?? this.visualPosition();
   }
 
   // A tap/click on the waveform: an instant seek with no grab, scrub or momentum.

@@ -10,7 +10,7 @@ import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
-import { pickupStep } from "./pickup";
+import { pickupStep, scaledTakeover } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
@@ -409,20 +409,34 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             knobPickup.current[`${id}:tempo`] = { caught: false, last: ev.value };
             break;
           }
+          // ★ THE TEMPO SLIDER TAKES OVER SCALED, NOT BY PICKUP (operator, 2026-11-06: "a dead zone in
+          // the midi when moving the tempo slider physically"). Pickup ignored the slider until it swept
+          // through the deck's tempo; whenever something else had moved one of them (SYNC, the screen,
+          // the auto-mixer, SHIFT+tempo key shift) that ignored stretch was a dead zone. scaledTakeover
+          // answers every move without a jump and meets the tempo at the end stop (pickup.ts).
+          if (ev.target === "tempo") {
+            const key = `${id}:tempo`;
+            const r = settings.tempoRange;
+            const cur01 = Math.max(0, Math.min(1, deck.tempo / r / 2 + 0.5));
+            const next = scaledTakeover(knobPickup.current[key], cur01, ev.value);
+            knobPickup.current[key] = { caught: next.caught, last: next.last };
+            if (next.apply == null) break;
+            deck.setTempo((next.apply - 0.5) * 2 * r);
+            ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
+            refresh();
+            break;
+          }
           // Soft-takeover for an ABSOLUTE pickup knob (Starrypad): don't move the param
           // until the knob value sweeps THROUGH its current value — so switching focus /
           // first touch never jumps. Once caught it tracks 1:1 (and reaches 0/max).
-          // ★ AND EVERY HARDWARE TEMPO SLIDER. Its position and the deck's tempo part company whenever
-          // something else sets the tempo (SYNC, the screen, a keyboard nudge, the auto-mixer), and the
-          // next touch used to JUMP the tempo to the slider. Keyed per deck (the FLX4 has two).
-          if (ev.pickup || ev.target === "tempo") {
+          // (The hardware TEMPO slider takes over scaled instead — above.)
+          if (ev.pickup) {
             const t = ev.target;
-            const key = t === "tempo" ? `${id}:tempo` : t;
+            const key = t;
             let cur01: number | null = null;
             if (t === "level") cur01 = deck.level / 2;
             else if (t === "trim") cur01 = deck.trim / 2;
             else if (t === "pitch") cur01 = (deck.pitch + settings.pitchRange) / (2 * settings.pitchRange);
-            else if (t === "tempo") cur01 = deck.tempo / settings.tempoRange / 2 + 0.5;
             else if (t === "stemDrums") cur01 = deck.stemLevel("drums") / 1.5;
             else if (t === "stemBass") cur01 = deck.stemLevel("bass") / 1.5;
             else if (t === "stemVocals") cur01 = deck.stemLevel("vocals") / 1.5;
@@ -430,21 +444,13 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             else if (t === "filterHp") cur01 = deck.hpAmount;
             else if (t === "filterLp") cur01 = deck.lpAmount;
             if (cur01 != null) {
-              // A caught TEMPO slider lets go when the tempo was moved by anything else since its
-              // last reading (SYNC, the screen, the keyboard): it has to pick up afresh (relatch).
-              const next = pickupStep(knobPickup.current[key], cur01, ev.value, t === "tempo");
+              const next = pickupStep(knobPickup.current[key], cur01, ev.value);
               knobPickup.current[key] = next;
               const caught = next.caught;
               if (!caught) break; // not caught yet → ignore so it never jumps
             }
           }
           switch (ev.target) {
-            case "tempo": {
-              const pct = (ev.value - 0.5) * 2 * settings.tempoRange;
-              deck.setTempo(pct);
-              ctl({ kind: "control", deck: id, param: "tempo", value: deck.tempo });
-              break;
-            }
             case "level":
               // The on-screen channel fader spans 0..2 (unity at centre), so map the
               // physical fader 1:1 across that whole range — top of throw = full boost.

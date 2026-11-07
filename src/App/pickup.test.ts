@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickupStep, type PickupState } from "./pickup";
+import { pickupStep, scaledTakeover, type PickupState } from "./pickup";
 
 const run = (cur: number, values: number[], relatch = false, st?: PickupState) => {
   const caughtAt: boolean[] = [];
@@ -45,5 +45,33 @@ describe("pickupStep: soft takeover", () => {
     let st = run(0.5, [0.5, 0.6]).st;
     st = pickupStep(st, 0.9, 0.62);
     expect(st.caught).toBe(true);
+  });
+});
+
+describe("scaledTakeover — a tempo slider with no dead zone", () => {
+  it("an out-of-step slider moves the value at once, never jumps, and meets it at the end stop", () => {
+    // slider at 0.7, tempo at 0.5 (a key shift moved the slider, not the tempo)
+    let st = scaledTakeover(undefined, 0.5, 0.7);
+    expect(st.apply).toBeNull(); // first reading: no jump
+    let cur = 0.5;
+    st = scaledTakeover(st, cur, 0.6); // down a little
+    expect(st.apply).not.toBeNull();
+    expect(st.apply!).toBeLessThan(0.5); // the tempo answered, in the same direction
+    expect(st.apply!).toBeGreaterThan(0.4); // and proportionally, not a leap to 0.6
+    cur = st.apply!;
+    for (let v = 0.55; v >= 0; v -= 0.05) {
+      st = scaledTakeover(st, cur, Math.max(0, v));
+      cur = st.apply ?? cur;
+    }
+    st = scaledTakeover(st, cur, 0);
+    expect(st.apply).toBeCloseTo(0, 6); // met at the bottom
+    expect(st.caught).toBe(true);
+  });
+
+  it("a slider resting on the value is caught and tracks 1:1", () => {
+    let st = scaledTakeover(undefined, 0.5, 0.5);
+    expect(st.caught).toBe(true);
+    st = scaledTakeover(st, 0.5, 0.52);
+    expect(st.apply).toBe(0.52);
   });
 });

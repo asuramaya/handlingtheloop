@@ -8,6 +8,7 @@ import type { StemAckState } from "../htl/room/protocol";
 // (assigned by the far-below mixer) and passed in. The type-only `../App` import is erased at build
 // (no runtime cycle). See htl-refactor-monoliths.
 import { useCallback, useEffect, useRef } from "react";
+import { padSlots } from "./deckApply";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
@@ -160,8 +161,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       deck.setPitch(d.pitchSemis ?? 0);
       // Discrete state — absolute, so exact regardless of our own playhead.
       deck.cuePoint = d.cuePoint;
-      deck.hotCues = [...d.hotCues];
-      deck.hotLoops = (d.hotLoops ?? []).map((l) => (l ? { ...l } : null));
+      const slots = deck.hotCues.length;
+      deck.hotCues = padSlots([...d.hotCues], slots);
+      deck.hotLoops = padSlots((d.hotLoops ?? []).map((l) => (l ? { ...l } : null)), slots);
       deck.loop = d.loop ? { ...d.loop } : null;
       deck.loopInPoint = d.loopInPoint;
       applyDeckStems(deck, d);

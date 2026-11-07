@@ -264,3 +264,12 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
     expect(sent.filter((b) => b[0] === 0x96 && b[1] === 0x00)).toEqual([[0x96, 0x00, 0x7f], [0x96, 0x00, 0x7f]]);
   });
 });
+
+describe("MidiEngine — FLX4 second hot-cue bank", () => {
+  it("SHIFT + HOT CUE (0x69) → padModeCue with shift (App: CUE 2, hot cues 9–16)", async () => {
+    const { events, send } = await flx();
+    send(NOTE_A, 0x3f, 0x7f); // SHIFT A
+    send(NOTE_A, 0x69, 0x7f); // shifted HOT CUE
+    expect(events).toContainEqual(expect.objectContaining({ type: "button", action: "padModeCue", deck: "A", pressed: true, shift: true }));
+  });
+});

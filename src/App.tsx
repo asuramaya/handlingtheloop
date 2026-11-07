@@ -125,6 +125,7 @@ import {
   AutoMixer,
   SmartFader,
   PAD_MODE_RESERVED,
+  cueBankBase,
   type PadMode,
   type AutoMixStatus,
   type AutoMixMirror,
@@ -1306,7 +1307,7 @@ function AppBody() {
       // loop→roll, sampler→global, fx→fx2 (the FX latch layer). CUE has no shift peer (KEY retired).
       chainPrev: (_deck, id) => fxCtlFor(id)?.stepChain(-1),
       chainNext: (_deck, id) => fxCtlFor(id)?.stepChain(1),
-      padModeCue: (deck, id) => padModeKey(deck, id, "cue"),
+      padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "cue2" : "cue"), // SHIFT → hot cues 9–16
       padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),
       padModeSampler: (deck, id, s) => padModeKey(deck, id, s ? "global" : "sampler"),
       padModeFx: (deck, id, s) => padModeKey(deck, id, s ? "fx2" : "fx"),
@@ -1325,7 +1326,7 @@ function AppBody() {
               ? samplerCtl.current?.trigger(i) // global pads are flat index 0-7
               : deck.padMode === "fx" || deck.padMode === "fx2"
                 ? fxKeyDown(deck, id, i)
-                : hotcue(deck, id, s, i);
+                : hotcue(deck, id, s, cueBankBase(deck.padMode) + i); // CUE → 1–8, CUE 2 → 9–16
     handlersRef.current = HANDLERS; // expose to the MIDI dispatcher (same button behaviours)
     const keyIndex = bindingIndex(mergeBindings(settings.keyBindings));
 
@@ -2884,12 +2885,13 @@ function AppBody() {
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
-          hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[i] != null),
+          hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[cueBankBase(d.padMode) + i] != null), // the live bank's pads
           // The shifted peer modes light their BASE button's lamp (roll→loop, global→sampler, …).
           padMode:
             d.padMode === "roll" ? "loop"
             : d.padMode === "global" ? "sampler"
             : d.padMode === "fx2" ? "fx"
+            : d.padMode === "cue2" ? "cue"
             : d.padMode,
         };
         midi.setFeedback(id, fb);

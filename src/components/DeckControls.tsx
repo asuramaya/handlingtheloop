@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, PadMode } from "@htl/audio";
-import { HOT_CUE_COUNT, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
+import { HOT_CUE_BANK, cueBankBase, PAD_MODE_SHIFT, PAD_MODE_RESERVED } from "@htl/audio";
 import { deckPadBase, GLOBAL_COUNT, type SamplerApi, type SamplerPad } from "./useSampler";
 import { padsForDeck, fxPadArg, fxPadPress, fxPadRelease, fxPadIsOn } from "./fxPads";
 import { StemPicker, stemsToMask, maskToStems } from "./StemPicker";
@@ -75,7 +75,7 @@ const LOOP_SIZES: { n: number; label: string; kbd: string }[] = [
 // SMP = the deck's LOCAL sample pads (slices of this track); its shift peer GLBL = the account's
 // GLOBAL sample bank (uploaded one-shots).
 const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: string }[] = [
-  { base: "cue", label: "CUE", shiftLabel: "", kbd: "U" }, // no shift peer (KEY retired)
+  { base: "cue", label: "CUE", shiftLabel: "CUE2", kbd: "U" }, // CUE2 = hot cues 9–16
   { base: "fx", label: "FX", shiftLabel: "FX2", kbd: "I" },
   { base: "loop", label: "LOOP", shiftLabel: "ROLL", kbd: "O" },
   { base: "sampler", label: "SMP", shiftLabel: "GLBL", kbd: "P" },
@@ -148,7 +148,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   if (!padRestored.current) {
     padRestored.current = true;
     const saved = localStorage.getItem(PAD_MODE_KEY);
-    if (saved === "loop" || saved === "cue" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "global") deck.setPadMode(saved);
+    if (saved === "loop" || saved === "cue" || saved === "cue2" || saved === "sampler" || saved === "fx" || saved === "roll" || saved === "global") deck.setPadMode(saved);
   }
   // True when the deck is parked in a SHIFTED-layer mode (ROLL/GLOBAL/…) — used to persistently tint
   // the bank so it's obvious you're on the second layer even after releasing shift.
@@ -531,16 +531,18 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         </div>
         )}
 
-        {deck.padMode === "cue" && (
-        <div className="hotcues">
-          {Array.from({ length: HOT_CUE_COUNT }, (_, i) => {
+        {(deck.padMode === "cue" || deck.padMode === "cue2") && (
+        <div className={`hotcues ${deck.padMode === "cue2" ? "cue-bank2" : ""}`}>
+          {Array.from({ length: HOT_CUE_BANK }, (_, p) => {
+            // CUE pads are hot cues 1–8, CUE 2 pads 9–16: `i` is the hot-cue SLOT, `p` the pad.
+            const i = cueBankBase(deck.padMode) + p;
             const set = deck.slotIsSet(i);
             const isLoop = deck.hotLoops[i] != null;
             return (
               <button
                 key={i}
                 className={`pad ${set ? "set" : ""} ${isLoop ? "loop" : ""}`}
-                data-cue={i + 1}
+                data-cue={p + 1}
                 title={shift ? "Clear cue" : isLoop ? "Recall loop" : "Hot cue — tap to jump, hold to preview"}
                 onPointerDown={(e) => {
                   if (locked) return; // watch-only

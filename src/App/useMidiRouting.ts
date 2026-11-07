@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { decideSpinFollow } from "./jogSpinFollow";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
-import { EQ_MIN_DB, EQ_MAX_DB, type Deck, type DeckId, type SmartFader } from "@htl";
+import { EQ_MIN_DB, EQ_MAX_DB, cueBankBase, type Deck, type DeckId, type SmartFader } from "@htl";
 import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
 import type { Settings } from "@htl/state";
@@ -281,7 +281,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // only switch when the FAMILY differs, so an active shifted peer (ROLL/FX2/GLBL, set from the
           // shifted bank button) survives a plain pad hit in the same family.
           if (ev.padBank) {
-            const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode;
+            const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode === "cue2" ? "cue" : deck.padMode;
             if (family !== ev.padBank) {
               deck.setPadMode(ev.padBank);
               emitRef.current({ kind: "board", deck: id, id: "padMode", arg: ev.padBank });
@@ -294,7 +294,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // (CC) treat as firm. Scoped to the controller — keyboard unchanged.
           const wasPaused = !deck.playing;
           const cueSlot = /^hotcue(\d)$/.exec(ev.action);
-          const hadCue = cueSlot ? deck.hotCues[Number(cueSlot[1]) - 1] != null : false;
+          const hadCue = cueSlot ? deck.hotCues[cueBankBase(deck.padMode) + Number(cueSlot[1]) - 1] != null : false;
           const isLoop = /^beatLoop\d$/.test(ev.action);
           const firm = (ev.velocity ?? 127) >= 40; // soft tap < 40 = jump only
           handlersRef.current[ev.action]?.(deck, id, sh); // sets / resizes / EXITS the loop (shared toggle)

@@ -7,7 +7,9 @@
 import type { Beatgrid } from "../analysis/analyze";
 import { beatTimeOffset, nearestBeat } from "../analysis/analyze";
 
-export const HOT_CUE_COUNT = 8;
+/** Pads per hot-cue bank, and the number of hot cues (two banks: CUE 1–8, CUE 2 9–16). */
+export const HOT_CUE_BANK = 8;
+export const HOT_CUE_COUNT = 16;
 const ADJUST_FINE_BEATS = 1 / 16;
 
 export interface Loop {

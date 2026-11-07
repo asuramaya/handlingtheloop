@@ -57,7 +57,7 @@ export class FakeDeck implements IntentDeck {
   skipBeats = 4;
   loop: { start: number; end: number; active: boolean } | null = null;
   beatLoop = 0;
-  hotCues: (number | null)[] = Array(8).fill(null);
+  hotCues: (number | null)[] = Array(16).fill(null); // two banks (HOT_CUE_COUNT)
   /** Every gesture that reached this deck, in order — the receipt a failure is read off. */
   log: string[] = [];
   // Enough of the transport/analysis surface for the REAL SmartFader to run against this deck.

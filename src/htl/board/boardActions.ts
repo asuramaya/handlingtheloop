@@ -1,6 +1,6 @@
 import type { Deck } from "@htl/audio";
 
-type PadMode = "cue" | "loop" | "sampler" | "fx";
+type PadMode = "cue" | "cue2" | "loop" | "sampler" | "fx";
 
 // Board-agnostic gesture bus. The room protocol carries ONE `board` intent {deck, id, phase,
 // arg} and never learns about specific buttons — new pads / modes / effects sync + replay by

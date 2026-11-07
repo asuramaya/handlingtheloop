@@ -9,7 +9,8 @@ import { stemLaneGeometryAgrees, type StemLane } from "./stemLaneGeometry";
 import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
 import { LoopEngine } from "./LoopEngine";
-export { HOT_CUE_COUNT, type Loop } from "./LoopEngine";
+export { HOT_CUE_COUNT, HOT_CUE_BANK, type Loop } from "./LoopEngine";
+import { HOT_CUE_BANK } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
 import { pcmMark, pcmResident } from "./pcmMeter";
 import { ENGINE_RATE_MAX, ENGINE_RATE_MIN } from "./stretchWorklet";
@@ -227,11 +228,16 @@ export type SyncRole = "off" | "master" | "slave";
 // 2026-09-10, while three comments (this one included) described a latch-vs-throw split per bank
 // that the code never implemented. The latch/throw split is real but per-GESTURE (FX_HOLD_MS) and
 // per-PAD (FxPadDef.hold), so it applies identically in both banks and always did. Thread 9ee26ff4.
-export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2";
-// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels). cue → cue = no
-// peer (the slot is blank); the UI shows no shifted label for CUE and shift+CUE stays in cue.
+// ★ cue2 IS THE SECOND HOT-CUE BANK (operator, 2026-11-06: "a second layer to cue so shift cue / u
+// gives me cue 2 and 8 more cue points/pads 9-16"). The same 8 pads, aimed at hot cues 9–16
+// (HOT_CUE_BANK offset). SHIFT + HOT CUE on the board, SHIFT + U on the keyboard.
+export type PadMode = "cue" | "fx" | "loop" | "sampler" | "roll" | "global" | "fx2" | "cue2";
+/** First hot-cue slot a pad bank addresses: CUE pads are cues 1–8, CUE 2 pads are 9–16. */
+export const cueBankBase = (m: PadMode): number => (m === "cue2" ? HOT_CUE_BANK : 0);
+// Each unshifted mode's shifted peer (mirrors the FLX silkscreen's gray labels).
 export const PAD_MODE_SHIFT: Record<PadMode, PadMode> = {
-  cue: "cue", // no shift peer (blank slot)
+  cue: "cue2",
+  cue2: "cue",
   fx: "fx2",
   loop: "roll",
   sampler: "global",

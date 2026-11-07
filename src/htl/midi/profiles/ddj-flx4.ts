@@ -132,7 +132,8 @@ export const DDJ_FLX4: DeviceProfile = {
     // Shifted bank buttons → the peer pad modes. Captured live on the unit with SHIFT held
     // (notes climb by 2: HOT CUE 0x69, PAD FX1 0x6b, BEAT JUMP 0x6d, SAMPLER 0x6f). The App
     // padMode* handlers already route the shift flag to the peer (fx→fx2, loop→roll,
-    // sampler→global); CUE's 0x69 has no peer since KEY was retired, so it's left unbound.
+    // sampler→global, cue→cue2 = hot cues 9–16).
+    ...shiftedBtn("padModeCue", 0x69),
     ...shiftedBtn("padModeFx", 0x6b),
     ...shiftedBtn("padModeLoop", 0x6d),
     ...shiftedBtn("padModeSampler", 0x6f),

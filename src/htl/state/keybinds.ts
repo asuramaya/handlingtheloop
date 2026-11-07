@@ -55,7 +55,7 @@ export const KEY_ACTIONS: KeyAction[] = [
   // "<" and ">" walk the chain row; the pads and the panel follow.
   { id: "chainPrev", label: "Previous FX chain", group: "Pads", defaultKey: "Comma" },
   { id: "chainNext", label: "Next FX chain", group: "Pads", defaultKey: "Period" },
-  { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU" },
+  { id: "padModeCue", label: "Pad mode: Hot Cue", group: "Pads", defaultKey: "KeyU", shiftLabel: "Pad mode: Hot Cue 2 (cues 9–16)" },
   { id: "padModeFx", label: "Pad mode: FX", group: "Pads", defaultKey: "KeyI", shiftLabel: "Pad mode: FX2 (latch)" },
   { id: "padModeLoop", label: "Pad mode: Loop", group: "Pads", defaultKey: "KeyO", shiftLabel: "Pad mode: Roll" },
   { id: "padModeSampler", label: "Pad mode: Sampler (local)", group: "Pads", defaultKey: "KeyP", shiftLabel: "Pad mode: Global" },

@@ -1823,14 +1823,22 @@ export class Deck {
   // There is ONE slip shadow for the whole run, armed on the first press, so however many moves
   // were chained the landing is where the track would be. (CUT is not a move here: it only mutes, so
   // it layers over anything.)
-  private moveStack: MoveKind[] = [];
+  // ★ AND EVERY MOVE HAS TWO LAYERS — PLAIN = SLIP, SHIFT = COMMIT (operator, 2026-11-07: "those are
+  // missing a piece where the actually shift the timeline instead of resuming … i want to
+  // standardize the feeling of all 8 fx2"). A slip move lands where the track would be; a COMMITTED
+  // one leaves the track where the move took it: release carries on from wherever the audio got to
+  // (FREEZE: the frozen instant; CENSOR: where the reverse reached; BRAKE: where it stopped, spun
+  // back up; DRAG/PUSH: a beat behind / ahead). Each stack entry remembers its layer, and the move
+  // SOUNDING when the stack empties decides the landing.
+  private moveStack: { k: MoveKind; commit: boolean }[] = [];
   private moveActive: MoveKind | null = null;
+  private _moveCommit = false; // the sounding move's layer
   private _freezeAt: number | null = null; // FREEZE's frozen instant while it sounds
   private static readonly FREEZE_SPRAY = 0.03; // s each grain may wander around the frozen instant
 
-  /** A move pad went down. */
-  moveDown(k: MoveKind) {
-    if (this.moveStack.includes(k)) return;
+  /** A move pad went down. `commit` = its SHIFT layer: the move really moves the track. */
+  moveDown(k: MoveKind, commit = false) {
+    if (this.moveStack.some((e) => e.k === k)) return;
     let from: number;
     if (this.moveActive) from = this.moveStop(this.moveActive);
     else {
@@ -1838,26 +1846,32 @@ export class Deck {
       this.slipArmForce(); // the one shadow for the whole run
       from = this.position();
     }
-    this.moveStack.push(k);
-    this.moveGo(k, from);
+    this.moveStack.push({ k, commit });
+    this.moveGo(k, from, commit);
   }
   /** A move pad came up. */
   moveUp(k: MoveKind) {
-    const i = this.moveStack.indexOf(k);
+    const i = this.moveStack.findIndex((e) => e.k === k);
     if (i < 0) return;
     this.moveStack.splice(i, 1);
     if (this.moveActive !== k) return; // it was waiting underneath: just forget it
+    const commit = this._moveCommit;
     const from = this.moveStop(k);
     const back = this.moveStack[this.moveStack.length - 1];
-    if (back) this.moveGo(back, from);
-    else this.moveLand(from);
+    if (back) this.moveGo(back.k, from, back.commit);
+    else this.moveLand(from, k, commit);
   }
-  /** Is this move held (sounding or waiting)? */
+  /** Is this move sounding? */
   moveHeld(k: MoveKind): boolean {
     return this.moveActive === k;
   }
-  private moveGo(k: MoveKind, from: number) {
+  /** Is the sounding move its committed (SHIFT) layer? */
+  get moveCommitted(): boolean {
+    return this.moveActive != null && this._moveCommit;
+  }
+  private moveGo(k: MoveKind, from: number, commit: boolean) {
     this.moveActive = k;
+    this._moveCommit = commit;
     if (k === "freeze") {
       if (!this._playing) {
         // Coming from a platter move: the engine voice restarts on the audio's point, frozen.
@@ -1868,16 +1882,18 @@ export class Deck {
       this._freezeAt = from;
       this.stretchNode?.port.postMessage({ type: "freeze", on: true, spray: Deck.FREEZE_SPRAY });
     } else {
-      // Scratch patterns lock to the grid: the track-seconds of a beat and where in the beat `from` is.
+      // A platter pattern needs the grid: the track-seconds of a beat, and — for a rhythmic one
+      // (RUB) — where in the beat `from` is, so it locks to the bar. DRAG and PUSH start at the press.
       const g = this.beatgrid;
       const interval = g?.interval || 0.5;
-      const phase0 = g ? (((from - g.firstBeat) / interval) % 1 + 1) % 1 : 0;
+      const phase0 = g && k === "rub" ? (((from - g.firstBeat) / interval) % 1 + 1) % 1 : 0;
       this.jog.moveEnter(k, from, { interval, phase0 });
     }
   }
   /** Stop the sounding move WITHOUT landing; returns where its audio got to. */
   private moveStop(k: MoveKind): number {
     this.moveActive = null;
+    this._moveCommit = false;
     if (k === "freeze") {
       const at = this._freezeAt ?? this.position();
       this._freezeAt = null;
@@ -1886,20 +1902,28 @@ export class Deck {
     }
     return this.jog.moveExit();
   }
-  /** The run is over: land where the track would be, and play on. */
-  private moveLand(from: number) {
-    const pos = this.slipReleasePos() ?? from;
-    if (this._playing) this.seek(pos); // FREEZE: the voice is running — a declicked re-seat
-    else {
-      this.startOffset = pos;
-      this.spawnSource(pos);
-      this._playing = true;
+  /** The run is over. Slip: land where the track would be. Commit: carry on from where the audio
+   *  got to (a committed BRAKE spins back up from rest, on the Play spin-up time). */
+  private moveLand(from: number, k: MoveKind, commit: boolean) {
+    const shadow = this.slipReleasePos(); // consumed either way: the run is over
+    const pos = commit ? from : (shadow ?? from);
+    if (this._playing) {
+      this.seek(pos); // FREEZE: the voice is running — a declicked re-seat
+      return;
     }
+    this.startOffset = pos;
+    if (commit && k === "brake") {
+      this.jog.softStart();
+      return;
+    }
+    this.spawnSource(pos);
+    this._playing = true;
   }
   /** Drop every held move at once (a transport action took over): no landing. */
   private moveCancel() {
     this.moveStack = [];
     this.moveActive = null;
+    this._moveCommit = false;
     if (this._freezeAt != null) {
       this._freezeAt = null;
       this.stretchNode?.port.postMessage({ type: "freeze", on: false });
@@ -2247,6 +2271,22 @@ export class Deck {
   }
   get cutting() {
     return this._cut;
+  }
+  /** CUT's committed (SHIFT) layer: a real PAUSE while held — silence with time stopped — then it
+   *  picks up exactly where it left off. */
+  private _cutPaused = false;
+  cutPause(on: boolean) {
+    if (on) {
+      if (!this._playing) return;
+      this.pause();
+      this._cutPaused = true;
+    } else if (this._cutPaused) {
+      this._cutPaused = false;
+      this.play();
+    }
+  }
+  get cutPaused() {
+    return this._cutPaused;
   }
   setLevel(gain: number) {
     this._level = gain;

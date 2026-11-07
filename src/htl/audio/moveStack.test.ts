@@ -21,6 +21,7 @@ function rig() {
       moveEnter(k: MoveKind, from: number) { log.push(`enter ${k} @${from}`); jogPos = from - 1; (d as unknown as { _playing: boolean })._playing = false; /* the platter takes the audio */ },
       moveExit() { log.push("exit"); return jogPos; },
       cancelJog() {},
+      softStart() { log.push("spin-up"); },
     },
     stretchNode: { port: { postMessage: (m: { type: string; on: boolean }) => log.push(`freeze ${m.on ? "on" : "off"}`) } },
   });
@@ -83,5 +84,29 @@ describe("FX2 move stack", () => {
     d.moveDown("brake");
     expect(log).toEqual([]);
     expect(d.moveHeld("brake")).toBe(false);
+  });
+
+  it("SHIFT = commit: release carries on from where the audio got to, not the shadow", () => {
+    const { d, log } = rig();
+    d.moveDown("censor", true);
+    expect(d.moveCommitted).toBe(true);
+    d.moveUp("censor");
+    expect(log).toEqual(["arm", "enter censor @10", "exit", "play @9"]); // the reversed-to point, not 42
+  });
+
+  it("a committed BRAKE spins back up from where it stopped", () => {
+    const { d, log } = rig();
+    d.moveDown("brake", true);
+    d.moveUp("brake");
+    expect(log).toEqual(["arm", "enter brake @10", "exit", "spin-up"]);
+  });
+
+  it("the move SOUNDING when the stack empties decides: slip under commit still lands on the beat", () => {
+    const { d, log } = rig();
+    d.moveDown("drag", true); // commit underneath
+    d.moveDown("censor"); // slip on top
+    d.moveUp("drag"); // the waiting commit goes
+    d.moveUp("censor"); // the sounding slip lands
+    expect(log.at(-1)).toBe("play @42");
   });
 });

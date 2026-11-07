@@ -53,7 +53,7 @@ describe("FX2 moves", () => {
   });
 
   it("CUT silences while held and drops back in on release", () => {
-    const d = { ...fakeDeck(), cut: false, setCut(on: boolean) { this.cut = on; }, get cutting() { return this.cut; } };
+    const d = { ...fakeDeck(), cut: false, setCut(on: boolean) { this.cut = on; }, get cutting(): boolean { return this.cut; } };
     const cut = MOVE_PADS[3]!;
     cut.on(d as unknown as Deck);
     expect(cut.active!(d as unknown as Deck)).toBe(true);

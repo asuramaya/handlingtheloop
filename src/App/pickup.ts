@@ -26,14 +26,21 @@ export function pickupStep(st: PickupState | undefined, cur: number, value: numb
   return { caught, last: value };
 }
 
-/** SCALED TAKEOVER for a hardware tempo slider: no dead zone (operator, 2026-11-06: "a dead zone in
- *  the midi when moving the tempo slider physically … in some situations"). Plain pickup ignores
- *  the slider until it sweeps through the deck's tempo, and that ignored stretch is the dead zone:
- *  after SYNC, the screen, the auto-mixer or a SHIFT+tempo key shift moved one without the other.
- *  Here an uncaught slider still moves the value, toward the end it is heading for, by the
- *  same fraction of the remaining travel: (E − next) / (E − cur) = (E − value) / (E − last). So the
- *  first touch never jumps, every move answers at once, the value and the slider meet at the end
- *  stop, and with a small gap it is nearly 1:1. `apply` = the value (0..1) to set, or null. */
+/** How much of the slider's own travel goes to closing the gap: the tempo moves at (1 ± CATCH_UP)×
+ *  the slider's speed, so it keeps the slider's direction and the gap is gone after 1/CATCH_UP
+ *  times its width of travel. */
+export const CATCH_UP = 0.5;
+
+/** CATCH-UP TAKEOVER for a hardware tempo slider: no dead zone, no jump, and a true midpoint.
+ *  (operator, 2026-11-06: first "a dead zone in the midi when moving the tempo slider physically …
+ *  in some situations", then, with the slider scaled to meet the tempo only at its end stop, "the
+ *  midpoint is broken".) Plain pickup ignored the slider until it swept through the deck's tempo:
+ *  after SYNC, the screen, the auto-mixer or a SHIFT+tempo key shift that ignored stretch was a
+ *  dead zone. End-stop scaling fixed that, but left the slider's centre off 0 % until it hit an end.
+ *  Here an out-of-step slider moves the tempo in its own direction at (1 ± CATCH_UP)× its speed:
+ *  slower while the slider closes in on the tempo, faster while it pulls away. So the gap shrinks
+ *  by CATCH_UP × every move. Within PICKUP_EPS the slider is caught and tracks 1:1, centre = 0 %.
+ *  `apply` = the value (0..1) to set, or null. */
 export function scaledTakeover(
   st: PickupState | undefined,
   cur: number,
@@ -43,11 +50,12 @@ export function scaledTakeover(
   const p = pickupStep(st, cur, value, relatch);
   if (p.caught) return { ...p, apply: value };
   const last = st?.last;
-  if (last == null || value === last) return { ...p, apply: null }; // first reading: nothing to scale yet
-  const end = value > last ? 1 : 0;
-  const span = end - last;
-  const next = Math.abs(span) < 1e-9 ? end : end - (end - cur) * ((end - value) / span);
-  const clamped = Math.max(0, Math.min(1, next));
-  const caught = Math.abs(clamped - value) < PICKUP_EPS;
-  return { caught, last: value, apply: clamped };
+  if (last == null || value === last) return { ...p, apply: null }; // first reading: nothing to move yet
+  const d = value - last;
+  const gap = last - cur; // slider minus tempo, before this move
+  const shrink = Math.min(Math.abs(gap), Math.abs(d) * CATCH_UP);
+  const newGap = gap - Math.sign(gap) * shrink;
+  const next = Math.max(0, Math.min(1, value - newGap));
+  const caught = Math.abs(next - value) < PICKUP_EPS;
+  return { caught, last: value, apply: caught ? value : next };
 }

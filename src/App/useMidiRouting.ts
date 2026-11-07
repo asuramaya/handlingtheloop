@@ -413,7 +413,8 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // the midi when moving the tempo slider physically"). Pickup ignored the slider until it swept
           // through the deck's tempo; whenever something else had moved one of them (SYNC, the screen,
           // the auto-mixer, SHIFT+tempo key shift) that ignored stretch was a dead zone. scaledTakeover
-          // answers every move without a jump and meets the tempo at the end stop (pickup.ts).
+          // answers every move without a jump and closes the gap as it goes, so the centre is 0 % again
+          // after a short sweep (pickup.ts).
           if (ev.target === "tempo") {
             const key = `${id}:tempo`;
             const r = settings.tempoRange;

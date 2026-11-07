@@ -48,8 +48,17 @@ describe("FX2 SPIN", () => {
 });
 
 describe("FX2 moves", () => {
-  it("FX2 holds SPIN, CENSOR and BRAKE; the other five slots are empty", () => {
-    expect(padsForDeck(fakeDeck() as unknown as Deck).map((p) => p?.label ?? null)).toEqual(["SPIN", "CENSOR", "BRAKE", null, null, null, null, null]);
+  it("FX2 holds SPIN, CENSOR, BRAKE and CUT; the bottom row is empty", () => {
+    expect(padsForDeck(fakeDeck() as unknown as Deck).map((p) => p?.label ?? null)).toEqual(["SPIN", "CENSOR", "BRAKE", "CUT", null, null, null, null]);
+  });
+
+  it("CUT silences while held and drops back in on release", () => {
+    const d = { ...fakeDeck(), cut: false, setCut(on: boolean) { this.cut = on; }, get cutting() { return this.cut; } };
+    const cut = MOVE_PADS[3]!;
+    cut.on(d as unknown as Deck);
+    expect(cut.active!(d as unknown as Deck)).toBe(true);
+    cut.off!(d as unknown as Deck);
+    expect(d.cut).toBe(false);
   });
 
   it("BRAKE is a held slip overlay: brakeBegin on press, brakeEnd on release, and it never pauses", () => {
@@ -71,7 +80,7 @@ describe("FX2 moves", () => {
 
   it("an empty slot on the wire does nothing", () => {
     const d = fakeDeck("cue");
-    fireFxPadArg(d as unknown as Deck, "@moves:6", true);
+    fireFxPadArg(d as unknown as Deck, "@moves:6", true); // an empty bottom-row slot
     expect(d.calls).toEqual([]);
   });
 });

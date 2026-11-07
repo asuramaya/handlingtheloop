@@ -253,6 +253,8 @@ export class Deck {
   readonly output: GainNode; // channel level fader (feeds the crossfader)
   readonly cueSend: GainNode; // pre-fader PFL tap (headphone cue) — AudioEngine wires it to the cue bus
   private readonly trimNode: GainNode;
+  private readonly cutNode: GainNode;
+  private _cut = false;
   private readonly eq: Eq3;
   readonly rack: FxRack; // the channel-strip device chain (EQ is dev0; effects splice in after)
   // Post-fader stereo meter: split L/R into two analysers (sinks). The UI reads
@@ -485,7 +487,11 @@ export class Deck {
     this.trimNode = ctx.createGain();
     this.output = ctx.createGain();
     this.rack.output.connect(this.trimNode);
-    this.trimNode.connect(this.output);
+    // CUT (FX2): its own gain between trim and the channel fader, so the fader keeps working
+    // through a cut and the headphone cue (tapped off trim, below) still hears the track.
+    this.cutNode = ctx.createGain();
+    this.trimNode.connect(this.cutNode);
+    this.cutNode.connect(this.output);
     // Pre-fader headphone cue (PFL) tap: a parallel send off the trim node (post-EQ,
     // BEFORE the channel fader/crossfader) so a deck can be auditioned in the cue
     // device even while faded out of the master mix. Starts silent (gain 0);
@@ -2144,6 +2150,20 @@ export class Deck {
   }
   get level() {
     return this._level;
+  }
+  /** CUT (the FX2 pad): silence the deck while held; the track plays on underneath, so release
+   *  drops straight back in where it is. A few-ms ramp each way, so neither edge clicks. */
+  setCut(on: boolean) {
+    if (on === this._cut) return;
+    this._cut = on;
+    const now = this.ctx.currentTime;
+    const g = this.cutNode.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(on ? 0 : 1, now + 0.004);
+  }
+  get cutting() {
+    return this._cut;
   }
   setLevel(gain: number) {
     this._level = gain;

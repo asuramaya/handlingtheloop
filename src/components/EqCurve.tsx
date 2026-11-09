@@ -112,6 +112,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const outRef = useRef<HTMLDivElement>(null); // the draggable output baseline (the graph's zero)
+  const outLast = useRef<{ top: string; txt: string; trimmed: boolean | null }>({ top: "", txt: "", trimmed: null });
   const outPillRef = useRef<HTMLSpanElement>(null);
   const handleRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // h = the element box; vh = the GRAPH's height (the readout strip owns the top READOUT_H px).
@@ -425,13 +426,23 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       });
 
       // The output baseline rides with the trim (see y0 above) — it IS the graph's zero.
+      // ★ WRITE ONLY WHAT CHANGED (operator, 2026-11-09: "super hard performance drops at full 4k").
+      // This ran every frame and rewrote the badge's top, text and class whether or not anything
+      // moved. A textContent write replaces the text node, so the badge repainted every frame, and
+      // its paint invalidation was unbounded: a 4K trace showed #document (8.3 Mpx) re-rastered on
+      // every frame because of it. Diffed against the last write, it is silent at rest.
       const outEl = outRef.current;
       if (outEl) {
-        outEl.style.top = `${READOUT_H + clamp(y0, 0, h)}px`;
-        const pill = outPillRef.current;
         const o = deck.eqOut;
-        if (pill) pill.textContent = `${o > 0 ? "+" : ""}${o.toFixed(1)}`;
-        outEl.classList.toggle("trimmed", Math.abs(o) > 0.05);
+        const top = `${READOUT_H + clamp(y0, 0, h)}px`;
+        const txt = `${o > 0 ? "+" : ""}${o.toFixed(1)}`;
+        const trimmed = Math.abs(o) > 0.05;
+        const last = outLast.current;
+        if (top !== last.top) outEl.style.top = top;
+        const pill = outPillRef.current;
+        if (pill && txt !== last.txt) pill.textContent = txt;
+        if (trimmed !== last.trimmed) outEl.classList.toggle("trimmed", trimmed);
+        outLast.current = { top, txt, trimmed };
       }
 
       // reposition node dots to match the live filter (only when the filter or the box moved)

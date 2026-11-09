@@ -207,6 +207,9 @@ const DRAFT_SETTLE_MS = 130;
 interface WaveMeta {
   draft?: boolean; // a motion-time layer: view-wide only, no glow (see rebuildWave)
   cols: number; // columns of the layer canvas in use (a draft uses fewer than its width)
+  /** RING OFFSET: the physical canvas column holding LOGICAL column 0 (the one at `left`). The
+   *  layer is a ring buffer, so scrolling moves this instead of the pixels — see shiftToCover. */
+  ring: number;
   left: number;
   span: number;
   win: number; // the VIEW window (zoom) this layer was built for — RATE-INDEPENDENT, so a
@@ -254,7 +257,6 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const sizeRef = useRef({ w: 0, h: 0, dpr: 1 }); // cached device-px size (no per-frame reflow)
   const dirty = useRef(true); // request one composite (set on any React render / resize)
   const waveRef = useRef<HTMLCanvasElement | null>(null); // offscreen rasterised waveform
-  const scratchRef = useRef<HTMLCanvasElement | null>(null); // scratch for the scroll-shift blit
   const waveMeta = useRef<WaveMeta | null>(null);
   const prevPos = useRef<number>(Number.NaN); // last frame's playhead, to detect a seek/cue JUMP
   const geomKey = useRef(""); // last frame's zoom/size signature — so a zoom DEBOUNCE settles
@@ -741,7 +743,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const metaFor = (draft: boolean, cols: number, left: number, span: number, win: number, secPerPx: number, colSec: number, w: number, h: number): WaveMeta => {
     const p = view.current;
     const stems = deck.stemPyramids;
-    return { draft, cols, left, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask: stemMask(deck, stems), strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
+    return { draft, cols, ring: 0, left, span, win, secPerPx, colSec, w, h, pyr: p.pyramid, stems, mask: stemMask(deck, stems), strip: p.stripColor, accent: p.accent, freq: p.freqColors, freqCols: p.freqLow + p.freqMid + p.freqHigh, viv: p.vividness, layers: p.bandLayers, fromDeck: p.bandFromDeck, stemsDeck: p.stemsFollowDeck, dbrk: p.debrick, glow: p.glow, stemCols: stemColsKey(p.stemColors) };
   };
 
   // ★ REFINE: THE FULL LAYER IS BUILT IN SLICES, NOT IN ONE FRAME. After a draft (motion) or a zoom,
@@ -828,39 +830,59 @@ export function WaveformViewport(props: WaveformViewportProps) {
     if (!wctx) return false;
     const tShift = performance.now();
 
-    // Shift existing pixels via a scratch copy (robust vs. overlapping self-blit). Forward play
-    // (shiftCols > 0) moves content LEFT; a backward seek moves it right.
-    let sc = scratchRef.current;
-    if (!sc) {
-      sc = document.createElement("canvas");
-      scratchRef.current = sc;
-    }
-    if (sc.width !== wc.width || sc.height !== h) {
-      sc.width = wc.width;
-      sc.height = h;
-    }
-    const sctx = sc.getContext("2d");
-    if (!sctx) return false;
-    sctx.clearRect(0, 0, ow, h);
-    sctx.drawImage(wc, 0, 0, ow, h, 0, 0, ow, h);
-    wctx.clearRect(0, 0, ow, h);
-    wctx.drawImage(sc, 0, 0, ow, h, -shiftCols, 0, ow, h);
-
-    // Re-rasterise the now-uncovered band (+ PAD on the preserved side so glow joins seamlessly).
+    // ★ A RING, NOT A COPY (operator, 2026-11-09: "super hard performance drops at full 4k"). This
+    // used to move the pixels: the whole layer into a scratch canvas and back, every frame a deck
+    // scrolled. At 3840 px the layer is ~10,700 x 716, so that was ~15 Mpx of GPU fill per deck
+    // per frame before the visible blit, and an Iris Xe at 4K with two decks playing ran 34-38 fps
+    // with the main thread 84% idle. Now the pixels stay put: `ring` says which physical column
+    // holds logical column 0, a scroll advances it, and only the newly exposed band is drawn.
+    const ring = (((m.ring + shiftCols) % ow) + ow) % ow;
     const newStart = shiftCols > 0 ? ow - shiftCols : 0;
     const c0 = Math.max(0, newStart - PAD);
     const c1 = Math.min(ow, newStart + Math.abs(shiftCols) + PAD);
     const newLeft = m.left + shiftCols * m.colSec;
-    wctx.clearRect(c0, 0, c1 - c0, h);
-    wctx.save();
-    wctx.translate(c0, 0);
     draftRaster.current = !!m.draft; // a draft's edge strips match its body (no glow)
-    rasterize(wctx, newLeft + c0 * m.colSec, m.colSec, c1 - c0, h);
+    // The band [c0, c1) in LOGICAL columns lands at physical (ring + c) mod ow, so it is one
+    // contiguous piece or two (when it crosses the end of the canvas). Each piece is drawn PAD
+    // columns wider on both sides and clipped to itself, so the glow is continuous across the
+    // seams exactly as in a one-shot build (the same trick the refine slices use).
+    let a = c0;
+    while (a < c1) {
+      const pa = (ring + a) % ow;
+      const b = Math.min(c1, a + (ow - pa)); // up to the canvas end
+      const pw = b - a;
+      wctx.save();
+      wctx.beginPath();
+      wctx.rect(pa, 0, pw, h);
+      wctx.clip();
+      wctx.clearRect(pa, 0, pw, h);
+      wctx.translate(pa - PAD, 0);
+      rasterize(wctx, newLeft + (a - PAD) * m.colSec, m.colSec, pw + 2 * PAD, h);
+      wctx.restore();
+      a = b;
+    }
     draftRaster.current = false;
-    wctx.restore();
+    m.ring = ring;
     m.left = newLeft;
     perfWork("wave.shift", performance.now() - tShift);
     return true;
+  };
+
+  /** Copy LOGICAL columns [srcX, srcX + srcW) of the ring layer onto the view (0..w). The part of
+   *  the window that lies outside the layer stays empty, as a plain out-of-bounds drawImage left
+   *  it; the part inside is one drawImage, or two where it crosses the ring's seam. */
+  const blitRing = (ctx: CanvasRenderingContext2D, wc: HTMLCanvasElement, m: WaveMeta, srcX: number, srcW: number, w: number, h: number) => {
+    if (srcW <= 0) return;
+    const cols = m.cols;
+    const pxPerCol = w / srcW;
+    let a = Math.max(0, srcX);
+    const end = Math.min(cols, srcX + srcW);
+    while (a < end - 1e-6) {
+      const pa = (m.ring + a) % cols;
+      const b = Math.min(end, a + (cols - pa));
+      ctx.drawImage(wc, pa, 0, b - a, m.h, (a - srcX) * pxPerCol, 0, (b - a) * pxPerCol, h);
+      a = b;
+    }
   };
 
   // Per-frame composite: background, loop tint, the blitted waveform, grid,
@@ -868,7 +890,9 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const draw = () => {
     const el = canvasRef.current;
     if (!el) return;
-    const ctx = el.getContext("2d");
+    // OPAQUE (2026-11-09, 4K perf): the lane is painted edge to edge every frame (bg fill first), so
+    // an alpha channel bought nothing and made the compositor BLEND a ~2.5 Mpx layer per deck per frame.
+    const ctx = el.getContext("2d", { alpha: false });
     if (!ctx) return;
     const { w, h, dpr } = sizeRef.current;
     if (w === 0) return;
@@ -1045,7 +1069,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // a box resize stretches the old layer correctly until the debounced rebuild lands.
       const srcX = (left - m.left) / m.colSec;
       const srcW = trackWindow / m.colSec;
-      ctx.drawImage(wc, srcX, 0, srcW, m.h, 0, 0, w, h);
+      blitRing(ctx, wc, m, srcX, srcW, w, h);
     }
 
     // A replacement stem set is computing over the stems already on screen — dim the wave

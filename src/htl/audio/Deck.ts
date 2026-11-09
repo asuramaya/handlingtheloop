@@ -104,6 +104,9 @@ function buildLodPyramid(
   return { sampleRate: sr, length, levels };
 }
 import { STEM_NAMES, type StemName, type Stems, type PackedStems } from "../stems";
+/** The stem behind each FX-chain stem bit, bit 0 first (drums=1, bass=2, vocals=4, other=8) — the
+ *  order StemPicker, the chain chips and the chain presets use. NOT STEM_NAMES' order. */
+export const CHAIN_STEM_ORDER: readonly StemName[] = ["drums", "bass", "vocals", "other"];
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
@@ -586,7 +589,8 @@ export class Deck {
     }
   }
   get stemTapsEnabled() { return this.stemTapsOn; }
-  /** The tap for one stem (0=DRUM 1=BASS 2=VOICE 3=INST) — a GainNode fed by the matching worklet
+  /** The tap for one stem by CHAIN BIT position (0=DRUM 1=BASS 2=VOICE 3=INST, see CHAIN_STEM_ORDER)
+   *  — a GainNode fed by the matching worklet
    *  output. Turns the taps on as a side effect, because asking for one is the only reason to have
    *  them. Null if no stretch node is attached yet (pre-gesture); ask again after attach. */
   stemTap(index: number): GainNode | null {
@@ -605,7 +609,13 @@ export class Deck {
         this.stemTapNodes.push(n);
       }
     }
-    return this.stemTapNodes[index];
+    // ★ BY NAME, NOT BY POSITION (operator, 2026-11-08: the chain's stem buttons were "mismatched").
+    // `index` is a CHAIN BIT (1=drums 2=bass 4=vocals 8=other: the picker, the chips and the chain
+    // presets), but the worklet's outputs follow the order the stems were PUSHED in, which is
+    // STEM_NAMES (vocals, drums, bass, other). Indexing one with the other routed D→vocals,
+    // B→drums, V→bass; only I happened to line up.
+    const g = STEM_NAMES.indexOf(CHAIN_STEM_ORDER[index]);
+    return g >= 0 ? this.stemTapNodes[g] : null;
   }
 
   /** Attach (or hot-swap) the unified time-stretch worklet — THE playback engine: it owns the

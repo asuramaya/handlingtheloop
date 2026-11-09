@@ -18,6 +18,7 @@ import { PromptModal } from "./Dialog";
 import { StemPicker, STEMS } from "./StemPicker";
 import { Menu, MenuFly } from "./ContextMenu";
 import { aimEnter } from "./lib/menuAim";
+import { back as boardBack, move as boardMove, openBoard, point as boardPoint, press as boardPress, top as boardTop, type BoardEffect, type BoardRow, type BoardState } from "./fxBoardMenu";
 import { bankChainRows, chainOf, CHAIN_KIND, resolveFxRows, presetOf, isGroup, isRef, reorderTop, reorderInGroup, fileIntoGroup, moveOutOfGroup, moveBetweenGroups, addFxSection, deleteFxSection, deleteFxRow, revertFxRow, renameFxSection, materialiseFxRow, type FxRow, type FxLeaf, type FxPath } from "@htl/audio";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
@@ -71,6 +72,9 @@ export interface FxStripCtl {
   openMenu: (kind: FxKind, x: number, y: number) => void; // that device's own menu, at a cursor
   cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
   closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
+  /** FX SELECT's board menu (fxBoardMenu.ts): PRESS = in / choose, SHIFT+PRESS = back / close,
+   *  BEAT ◀▶ = move. Opens on the selected effect's presets, with ＋ Add effect and ✕ Remove. */
+  boardMenu: { isOpen: () => boolean; open: () => void; press: () => void; back: () => void; move: (dir: number) => void };
 }
 
 /** Where a flyout hangs, and how wide it is. ★ THE WIDTH IS MEASURED, NOT CHOSEN — it comes off
@@ -526,6 +530,85 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     refresh();
   };
 
+  // ★ THE FX SELECT BOARD MENU (operator, 2026-11-08 — the agreed design; see fxBoardMenu.ts). Its
+  // own small menu in the shared Menu chrome, so the board's cursor has one honest list to walk:
+  // the selected effect's presets (sections drill in), then ＋ Add effect and ✕ Remove. Every
+  // apply / add / remove goes through the SAME functions the mouse menus use, so it syncs the same.
+  type Board = { st: BoardState; slot: number; x: number; y: number; orig: { params: Record<string, number>; name: string } };
+  const [board, setBoard] = useState<Board | null>(null);
+  const boardLive = useRef<Board | null>(null);
+  boardLive.current = board;
+  const boardMenuRef = useRef<HTMLDivElement | null>(null);
+  // Rows for an effect's presets as the arrangement shows them, sections nested one deep.
+  const boardRowsFor = (kind: string): BoardRow[] =>
+    resolveFxRows(kind).flatMap((r): BoardRow[] => {
+      if (isGroup(r)) {
+        const items = r.items.flatMap((leaf): BoardRow[] => {
+          const p = presetOf(kind, leaf);
+          return p ? [{ t: "preset", preset: p }] : [];
+        });
+        return [{ t: "section", name: r.name, items }];
+      }
+      const p = presetOf(kind, r);
+      return p ? [{ t: "preset", preset: p }] : [];
+    });
+  // The live operations, re-bound every render (the ctl closure below is created once).
+  const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {} });
+  boardOps.current = {
+    open: () => {
+      if (locked) return;
+      const slot = live.current.cur;
+      const dev = deck.fxDeviceAt(slot);
+      if (!dev) return;
+      cancelMenuTimer();
+      setMenu(null);
+      const tabEl = tabsRef.current?.children[tabAt(slot)] as HTMLElement | undefined;
+      const r = tabEl?.getBoundingClientRect();
+      const name = presetNameRef.current[dev.kind] ?? "";
+      setBoard({
+        st: openBoard(KIND_LABEL[dev.kind] ?? dev.kind.toUpperCase(), dev.kind, boardRowsFor(dev.kind), name),
+        slot,
+        x: r ? r.left : window.innerWidth / 2,
+        y: r ? r.bottom + 4 : window.innerHeight / 3,
+        orig: { params: dev.snapshotParams(), name },
+      });
+    },
+    run: (st, effect) => {
+      const b = boardLive.current;
+      if (!b) return;
+      const dev = deck.fxDeviceAt(b.slot);
+      if (effect && dev) {
+        if (effect.t === "audition") {
+          if (effect.row.t === "default") {
+            presetNameRef.current[dev.kind] = "";
+            applyDefault(b.slot);
+          } else if (effect.row.t === "preset") applyPresetNamed(b.slot, effect.row.preset);
+        } else if (effect.t === "revert") {
+          for (const k in b.orig.params) deck.setFxParam(b.slot, k, b.orig.params[k]);
+          presetNameRef.current[dev.kind] = b.orig.name;
+          armEq(dev, b.orig.name || "Default", b.orig.params);
+          syncDevice(dev);
+          refresh();
+        } else if (effect.t === "remove") {
+          const holder = deck.fxChainList.find((c) => c.devices.includes(dev));
+          removeDeviceFromChain(dev.kind, holder?.id ?? "master");
+        }
+      }
+      if (effect?.t === "add") addDeviceToChain(effect.kind as FxKind, deck.fxFocus, effect.preset ?? undefined);
+      setBoard(st ? { ...b, st } : null);
+    },
+  };
+  const boardSource = {
+    addList: (): BoardRow[] => others.map((k) => ({ t: "kind", kind: k, label: KIND_LABEL[k] ?? k.toUpperCase() })),
+    kindRows: (kind: string): BoardRow[] => [{ t: "default" }, ...boardRowsFor(kind)],
+  };
+  const boardSourceRef = useRef(boardSource);
+  boardSourceRef.current = boardSource;
+  // The highlighted row stays in view as the cursor walks a long bank.
+  useEffect(() => {
+    boardMenuRef.current?.querySelector(".board-cursor")?.scrollIntoView({ block: "nearest" });
+  }, [board]);
+
   // The FLX BEAT FX section drives this strip over `ctlRef`. The rack is fixed-membership now
   // (EQ + the permanent pad-FX bank — no add/remove), so the section is a SINGLE-EFFECT unit over
   // the chain: BEAT ◀▶ select / reorder, DEPTH wet/dry, ON/OFF engage, FX SELECT latch-throw
@@ -623,6 +706,28 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         refresh();
       },
       closeMenu,
+      boardMenu: {
+        isOpen: () => boardLive.current != null,
+        open: () => boardOps.current.open(),
+        move: (dir) => {
+          const b = boardLive.current;
+          if (!b) return;
+          const r = boardMove(b.st, dir);
+          boardOps.current.run(r.state, r.effect);
+        },
+        press: () => {
+          const b = boardLive.current;
+          if (!b) return;
+          const r = boardPress(b.st, boardSourceRef.current);
+          boardOps.current.run(r.state, r.effect);
+        },
+        back: () => {
+          const b = boardLive.current;
+          if (!b) return;
+          const r = boardBack(b.st);
+          boardOps.current.run(r.state, r.effect);
+        },
+      },
     };
     return () => {
       if (ctlRef) ctlRef.current = null;
@@ -1347,6 +1452,46 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         </div>
       )}
       </div>
+
+      {/* FX SELECT's board menu — see the block above `ctlRef`. The mouse points the same highlight
+          (no audition on hover) and a click is a PRESS on that row; clicking away keeps what is on. */}
+      {board && (() => {
+        const lvl = boardTop(board.st);
+        const kind = deck.fxDeviceAt(board.slot)?.kind;
+        const inUse = kind ? presetNameRef.current[kind] ?? "" : "";
+        const label = (r: BoardRow) =>
+          r.t === "default" ? "Default"
+          : r.t === "preset" ? r.preset.name
+          : r.t === "section" ? `${r.name}  ›`
+          : r.t === "add" ? "＋ Add effect"
+          : r.t === "remove" ? (board.st.confirmRemove ? "Press again to remove" : "✕ Remove")
+          : r.label;
+        return (
+          <Menu x={board.x} y={board.y} innerRef={boardMenuRef} head={board.st.stack.map((l) => l.title).join(" › ")} onClose={() => setBoard(null)}>
+            {lvl.rows.map((r, i) => {
+              const sel = lvl.mode === "edit" && ((r.t === "default" && inUse === "") || (r.t === "preset" && r.preset.name === inUse));
+              return (
+                <button
+                  key={`${lvl.title}:${i}`}
+                  className={`fx-palette-item ${i === lvl.cursor ? "board-cursor" : ""} ${sel ? "sel" : ""} ${r.t === "remove" ? "board-danger" : ""} ${r.t === "add" || r.t === "remove" ? "board-act" : ""}`}
+                  role="menuitem"
+                  onMouseEnter={() => setBoard((b) => (b ? { ...b, st: boardPoint(b.st, i) } : b))}
+                  onClick={() => {
+                    const b = boardLive.current;
+                    if (!b) return;
+                    const st = boardPoint(b.st, i);
+                    const res = boardPress(st, boardSourceRef.current);
+                    boardLive.current = { ...b, st };
+                    boardOps.current.run(res.state, res.effect);
+                  }}
+                >
+                  {label(r)}
+                </button>
+              );
+            })}
+          </Menu>
+        );
+      })()}
 
       {/* Preset menu — right-click an effect tab. Same FxMenu as the chain menu and the picker:
           one widget, one place to change it. */}

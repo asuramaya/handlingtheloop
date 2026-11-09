@@ -119,10 +119,10 @@ const stemColsKey = (c: Record<string, string>) => STEM_ORDER.map((n) => c[n] ||
 // Cache key for the stem lanes: which stems exist + each one's BRIGHTNESS state
 // (muted, or its knob level quantised to 0.25 steps). Quantising means dragging a
 // stem knob only re-rasterises when it crosses a step, not every sub-pixel.
-function stemMask(deck: Deck, st: Record<string, Pyramid> | null): string {
+function stemMask(_deck: Deck, st: Record<string, Pyramid> | null): string {
   if (!st) return "";
   return STEM_ORDER.filter((n) => st[n])
-    .map((n) => (deck.stemActive(n) ? Math.round(Math.min(1.5, deck.stemLevel(n)) * 4) : "m"))
+    .map((n) => n[0]) // which lanes exist — their brightness is applied per frame (laneDim), not baked
     .join(",");
 }
 
@@ -259,6 +259,7 @@ export function WaveformViewport(props: WaveformViewportProps) {
   const waveRef = useRef<HTMLCanvasElement | null>(null); // offscreen rasterised waveform
   const waveMeta = useRef<WaveMeta | null>(null);
   const prevPos = useRef<number>(Number.NaN); // last frame's playhead, to detect a seek/cue JUMP
+  const prevPosT = useRef<number>(Number.NaN); // …and when it was read (the expected advance scales with it)
   const geomKey = useRef(""); // last frame's zoom/size signature — so a zoom DEBOUNCE settles
   const rebuildTimer = useRef(0); // debounced crisp rebuild after a zoom settles
   const draftRaster = useRef(false); // rasterize() skips the glow while this is set
@@ -655,9 +656,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
         if (!py) continue;
         const ssr = py.sampleRate;
         const raw = !draftRaster.current && secPerPx * ssr < RAW_SPP ? deck.stemChannel(name) : null;
-        // Brightness tracks the stem's KNOB level (muted/0 → dim, unity → full).
-        const amp = deck.stemActive(name) ? deck.stemLevel(name) : 0;
-        const alpha = 0.16 + 0.84 * Math.min(1, amp);
+        // Rasterised at FULL brightness; the knob level dims the lane at blit time (laneDim, in draw).
+        const alpha = 1;
         const yc = (li + 0.5) * laneH;
         if (p.freqColors && hasBands(py)) {
           // Each stem in ITS OWN hue family (bandRamp), layered where the lane can show the
@@ -924,8 +924,19 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // (smooth play is ≤ rate·dt ≈ rate/60 s). The incremental scroll-shift below is built
     // for smooth scrolling, NOT a discontinuity — trusting it across a jump left the stem
     // lanes blank. Detect the jump and force a clean full rebuild instead.
-    const jumped = Number.isFinite(prevPos.current) && Math.abs(pos - prevPos.current) > r * 0.1 + 0.02;
+    // ★ AGAINST WHERE PLAYBACK SHOULD BE, NOT AGAINST THE LAST FRAME (operator capture 2026-11-09,
+    // 4K @ dpr 2: both decks rebuilt every ~0.5 s for 25 s straight). The test was "moved more than
+    // 0.1 s·rate since the last frame", which assumes frames are ~16 ms apart. One stalled frame
+    // (≥ 120 ms) let normal playback cross it, the "jump" forced a rebuild, the rebuild stalled the
+    // next frame, and the loop fed itself. Now the expected advance (rate × elapsed, while playing)
+    // is subtracted first, so only a real seek / cue / loop wrap reads as a jump however slow the
+    // frames are.
+    const nowT = performance.now();
+    const dtS = Number.isFinite(prevPosT.current) ? Math.min(1, (nowT - prevPosT.current) / 1000) : 0;
+    const expected = Number.isFinite(prevPos.current) ? prevPos.current + (deck.playing ? deck.rate * dtS : 0) : pos;
+    const jumped = Number.isFinite(prevPos.current) && Math.abs(pos - expected) > r * 0.1 + 0.02;
     prevPos.current = pos;
+    prevPosT.current = nowT;
     const secPerPx = trackWindow / w;
     const toX = (t: number) => ((t - left) / trackWindow) * w;
 
@@ -961,6 +972,10 @@ export function WaveformViewport(props: WaveformViewportProps) {
       !m0 ||
       m0.pyr !== p.pyramid ||
       m0.stems !== stemsNow ||
+      // ★ NOT the stem LEVELS (operator capture 2026-11-09, 4K @ dpr 2, stems on both decks: 100 full
+      // rebuilds in 48 s at ~38 ms each, frames up to 457 ms). The mask used to carry each stem's
+      // level in quarter steps, so every knob move, fade or AUTO ride re-rasterised the whole layer.
+      // Levels only set a lane's BRIGHTNESS, which draw() now applies over the blit (laneDim).
       m0.mask !== maskNow ||
       m0.strip !== p.stripColor ||
       m0.accent !== p.accent ||
@@ -981,7 +996,11 @@ export function WaveformViewport(props: WaveformViewportProps) {
     // Window unchanged but a big sustained TEMPO move coarsened/sharpened the layer past
     // usefulness — the one rate case that needs a fresh rasterise (checked only when NOT
     // mid-zoom, so it never pre-empts the smooth-zoom blit-scale below).
-    const ratioOff = !!m0 && (secPerPx > m0.colSec * 2.2 || secPerPx < m0.colSec * 0.4);
+    // ★ Against the VIEW's secPerPx at build time, not the layer's colSec. colSec also carries the
+    // wave-quality downscale (dpr > 1) and a draft's half density, so at dpr 2 every DRAFT read as
+    // "too coarse" (secPerPx < 0.4·colSec) and was replaced by a full ~38 ms rebuild on the very next
+    // frame — the drafts never saved anything there. Only a real tempo change moves this ratio.
+    const ratioOff = !!m0 && (secPerPx > m0.secPerPx * 2.2 || secPerPx < m0.secPerPx * 0.45);
     // Does the cached layer still span the visible view? (the blit-scale below reads
     // [srcX, srcX+srcW] columns out of [0, ow] — if that runs off either edge the
     // uncovered side draws BLANK.) Used to bail out of the deferred-rebuild path the
@@ -1070,6 +1089,24 @@ export function WaveformViewport(props: WaveformViewportProps) {
       const srcX = (left - m.left) / m.colSec;
       const srcW = trackWindow / m.colSec;
       blitRing(ctx, wc, m, srcX, srcW, w, h);
+      // Each stem lane's knob level as brightness: a strip of the lane background over the lane at
+      // (1 - alpha), which is exactly the old baked-in alpha (wave·a + bg·(1-a)) — 4 rects a frame
+      // instead of a re-rasterise per knob step.
+      if (m.stems) {
+        const laneH = h / STEM_ORDER.length;
+        ctx.save();
+        ctx.fillStyle = bgRef.current;
+        for (let li = 0; li < STEM_ORDER.length; li++) {
+          const name = STEM_ORDER[li];
+          if (!m.stems[name]) continue;
+          const amp = deck.stemActive(name) ? deck.stemLevel(name) : 0;
+          const a = 0.16 + 0.84 * Math.min(1, amp);
+          if (a >= 0.999) continue;
+          ctx.globalAlpha = 1 - a;
+          ctx.fillRect(0, li * laneH, w, laneH);
+        }
+        ctx.restore();
+      }
     }
 
     // A replacement stem set is computing over the stems already on screen — dim the wave

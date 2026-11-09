@@ -26,8 +26,33 @@ describe("FX SELECT board menu", () => {
     s = open();
     r = move(s, 1); // → Wide
     expect(r.effect).toEqual({ t: "audition", row: P("Wide") });
-    r = move(r.state, 1); // → Dub (a section)
+    r = move(r.state, 1); // → Dub (a section): leaving the presets undoes the audition
+    expect(r.effect).toEqual({ t: "restore" });
+    r = move(r.state, 1); // → Tight
+    expect(r.effect).toEqual({ t: "audition", row: P("Tight") });
+  });
+
+  // ★ operator, 2026-11-08: cycling past an ungrouped preset onto the next row left it "stuck on
+  // that mode" — it now goes back to the state the menu opened on.
+  it("cycling past the presets onto ＋ Add / ✕ Remove restores the opening state, once", () => {
+    let r = move(open("Tight"), -1); // Tight → Dub▸: nothing auditioned yet, nothing to restore
     expect(r.effect).toBeUndefined();
+    r = move(open(), 3); // Default → Tight
+    expect(r.effect).toEqual({ t: "audition", row: P("Tight") });
+    r = move(r.state, 1); // → ＋ Add
+    expect(r.effect).toEqual({ t: "restore" });
+    r = move(r.state, 1); // → ✕ Remove: already restored
+    expect(r.effect).toBeUndefined();
+    r = move(r.state, 1); // wraps → Default: auditioned again
+    expect(r.effect).toEqual({ t: "audition", row: { t: "default" } });
+  });
+
+  it("backing out of a section after auditioning inside it restores the opening state", () => {
+    let s = move(move(open(), 1).state, 1).state; // on Dub▸ (Wide was auditioned, then restored)
+    s = press(s, SRC).state!;
+    const r = move(s, 1); // → Dub B
+    expect(r.effect).toEqual({ t: "audition", row: P("Dub B") });
+    expect(back(r.state).effect).toEqual({ t: "restore" });
   });
 
   it("PRESS drills into a section; on a preset it keeps it and closes", () => {

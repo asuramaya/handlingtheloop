@@ -583,7 +583,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
             presetNameRef.current[dev.kind] = "";
             applyDefault(b.slot);
           } else if (effect.row.t === "preset") applyPresetNamed(b.slot, effect.row.preset);
-        } else if (effect.t === "revert") {
+        } else if (effect.t === "revert" || effect.t === "restore") {
           for (const k in b.orig.params) deck.setFxParam(b.slot, k, b.orig.params[k]);
           presetNameRef.current[dev.kind] = b.orig.name;
           armEq(dev, b.orig.name || "Default", b.orig.params);

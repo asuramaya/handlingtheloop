@@ -652,8 +652,77 @@
 }
 /* A loaded row reads in its deck's colour (--row-deck, set inline by TrackTable); the old fixed
    green is only the fallback for a row loaded somewhere the table has no colour for. */
+/* ★ ON A DECK, UNMISTAKABLY (operator, 2026-11-08: "make the current playing songs super obvious
+   by highlighting the row"). Every list (Collection, Community, playlists, Search, the Queue)
+   draws it the same way, in the deck's own colour (--row-deck, the Colours setting / art accent):
+     loaded   a tinted row, a thin deck-colour edge, the title in the deck's colour
+     playing  a LIT row: a stronger gradient, a solid 4px edge, a deck-colour outline, a bold
+              glowing title, and the A/B badge pulses
+   STACKING with the other row states (rules further down):
+     browse cursor (FLX wheel) keeps its lime edge + outline ON TOP — that is what LOAD will grab —
+       while the row keeps its deck fill, so both read at once;
+     multi-selection mixes its cyan with the deck tint instead of replacing it. */
 .track-table tbody tr.loaded {
   color: var(--row-deck, #6ee7a8);
+  background: color-mix(in srgb, var(--row-deck, #6ee7a8) 9%, transparent);
+  box-shadow: inset 3px 0 0 0 color-mix(in srgb, var(--row-deck, #6ee7a8) 60%, transparent);
+}
+.track-table tbody tr.loaded:hover {
+  background: color-mix(in srgb, var(--row-deck, #6ee7a8) 14%, var(--panel));
+}
+.track-table tbody tr.loaded .col-title {
+  color: var(--row-deck, #6ee7a8);
+  font-weight: 600;
+}
+.track-table tbody tr.loaded .col-artist {
+  color: color-mix(in srgb, var(--row-deck, #6ee7a8) 45%, var(--muted));
+}
+.track-table tbody tr.loaded.playing {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--row-deck, #6ee7a8) 30%, transparent),
+    color-mix(in srgb, var(--row-deck, #6ee7a8) 11%, transparent) 70%
+  );
+  box-shadow:
+    inset 4px 0 0 0 var(--row-deck, #6ee7a8),
+    inset 0 0 0 1px color-mix(in srgb, var(--row-deck, #6ee7a8) 50%, transparent);
+}
+.track-table tbody tr.loaded.playing .col-title {
+  font-weight: 750;
+  color: color-mix(in srgb, var(--row-deck, #6ee7a8) 55%, #fff);
+}
+body:not(.no-glow) .track-table tbody tr.loaded.playing .col-title {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--row-deck, #6ee7a8) 70%, transparent);
+}
+/* The badges: both decks when the same track sits on A and B; a live (playing) one pulses. */
+.tt-decks {
+  display: inline-flex;
+  gap: 2px;
+  vertical-align: middle;
+}
+.tt-decks .tt-deck {
+  margin-right: 0;
+}
+.tt-decks .tt-deck + .tt-deck {
+  min-width: 1.1em;
+  padding: 0 0.15em;
+}
+.tt-deck.live {
+  box-shadow: 0 0 0 1px color-mix(in srgb, #fff 55%, transparent);
+  animation: tt-deck-live 1.1s ease-in-out infinite alternate;
+}
+@keyframes tt-deck-live {
+  to {
+    filter: brightness(1.3);
+    box-shadow:
+      0 0 0 1px #fff,
+      0 0 9px var(--row-deck, #6ee7a8);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt-deck.live {
+    animation: none;
+  }
 }
 /* The cache-dot slot ahead of each title: a fixed width, so every title in the column starts at
    the same x whether its row has zero, one or two dots. */
@@ -801,7 +870,7 @@ th.col-thumb {
   background: rgba(0, 229, 255, 0.12);
 }
 .track-table tbody tr.selected.loaded {
-  background: rgba(93, 255, 158, 0.14);
+  background: color-mix(in srgb, var(--row-deck, #6ee7a8) 16%, rgba(0, 229, 255, 0.12));
 }
 .track-table tbody tr {
   user-select: none;
@@ -824,6 +893,27 @@ th.col-thumb {
 }
 .track-table tbody tr.tt-cursor.selected {
   background: rgba(0, 229, 255, 0.16);
+}
+/* Cursor ON a deck's row: the deck keeps the fill and the title colour, the cursor keeps its lime
+   edge and outline — "this is loaded" and "LOAD grabs this" at once. */
+.track-table tbody tr.tt-cursor.loaded {
+  background: color-mix(in srgb, var(--row-deck, #6ee7a8) 16%, color-mix(in srgb, var(--neon-lime) 8%, transparent));
+}
+.track-table tbody tr.tt-cursor.loaded.playing {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--row-deck, #6ee7a8) 30%, transparent),
+    color-mix(in srgb, var(--neon-lime) 10%, transparent) 70%
+  );
+}
+.track-table tbody tr.tt-cursor.loaded,
+.track-table tbody tr.tt-cursor.loaded.playing {
+  box-shadow:
+    inset 4px 0 0 0 var(--neon-lime),
+    inset 0 0 0 1px color-mix(in srgb, var(--neon-lime) 55%, transparent);
+}
+.track-table tbody tr.tt-cursor.loaded .col-title {
+  color: color-mix(in srgb, var(--row-deck, #6ee7a8) 55%, #fff);
 }
 
 /* NARROW docked Library (desktop side panel, ≤520px): the full 8-column table is

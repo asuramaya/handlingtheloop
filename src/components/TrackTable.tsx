@@ -11,6 +11,8 @@ import { TrackContextMenu } from "./lib/TrackContextMenu";
 import { useColumnLayout } from "./lib/useColumnLayout";
 import { startTouchDrag, moveTouchDrag, endTouchDrag, cancelTouchDrag, type TouchDragPayload } from "../htl/state/touchDrag";
 import { loadTableState, saveTableState } from "./lib/trackTableState";
+import { useDeckPlaying } from "./lib/deckPlaying";
+import { MetaChip } from "./MetaChip";
 import {
   TRACK_DND_MIME,
   ROW_INDEX_MIME,
@@ -115,6 +117,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   // again. Read once, on mount: `stateKey` changing means a different list, and a different list
   // gets its own remount via React's key, not a mutation of this one.
   const saved = useMemo(() => loadTableState(stateKey), [stateKey]);
+  const deckPlaying = useDeckPlaying(!!(deckLoaded?.A || deckLoaded?.B));
   // ★ THE CURSOR COMES BACK WITH THE LIST (operator, 2026-11-06: "when navigating in and out of the
   // lists make it remember the position of the selector so i dont have to scroll all the way down to
   // the last position"). Held by track identity; saved with the rest of the table's state.
@@ -671,14 +674,24 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {view.slice(vStart, vEnd).map((t, k) => {
               const i = vStart + k; // true index into `view` (selection/menus/reorder use it)
               const rowKey = trackKey(t); // identity for selection/menus; NOT for deck/cache state
-              const onDeck = deckLoaded?.A === t.videoId ? "A" : deckLoaded?.B === t.videoId ? "B" : null;
+              // ★ EVERY deck holding this track (both, when the same song sits on A and B), and
+              // which of them is running. The row takes the colour of the deck that is PLAYING it
+              // (else the first deck holding it) — loaded reads as a tint, playing as a lit row.
+              const onDecks = (["A", "B"] as const).filter((d) => deckLoaded?.[d] === t.videoId);
+              const onDeck = onDecks.find((d) => deckPlaying[d]) ?? onDecks[0] ?? null;
+              const playing = onDecks.some((d) => deckPlaying[d]);
+              const badges = onDecks.map((d) => (
+                <span key={d} className={`tt-deck${deckPlaying[d] ? " live" : ""}`} style={{ background: deckColors?.[d] }} title={`${deckPlaying[d] ? "Playing" : "Loaded"} on Deck ${d}`}>
+                  {d}
+                </span>
+              ));
               return (
               <tr
                 ref={k === 0 ? firstRowRef : undefined}
                 key={`${rowKey}:${i}`}
                 // A loaded row reads in ITS DECK's colour (it was a fixed green whatever the deck was).
                 style={onDeck && deckColors?.[onDeck] ? ({ ["--row-deck" as string]: deckColors[onDeck] } as CSSProperties) : undefined}
-                className={`${loadedIds?.has(t.videoId) ? "loaded" : ""} ${selected.has(rowKey) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
+                className={`${onDecks.length || loadedIds?.has(t.videoId) ? "loaded" : ""} ${playing ? "playing" : ""} ${selected.has(rowKey) ? "selected" : ""} ${reorderOver === i ? "reorder-over" : ""} ${i === cursor ? "tt-cursor" : ""}`}
                 draggable
                 onClick={(e) => {
                   // Left click → the "Load to Deck A / B" menu (pick a deck). Modifier-
@@ -789,23 +802,15 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                     ahead of the cache dots, so a loaded row's title started ~2em right of every other
                     row's and the Title column read as ragged. The # is the least useful thing on a
                     loaded row; "on deck A" is the most. */}
-                <td className="col-num">
-                  {onDeck ? (
-                    <span className="tt-deck" style={{ background: deckColors?.[onDeck] }} title={`Loaded on Deck ${onDeck}`}>
-                      {onDeck}
-                    </span>
-                  ) : (
-                    i + 1
-                  )}
-                </td>
+                <td className="col-num">{onDecks.length ? <span className="tt-decks">{badges}</span> : i + 1}</td>
                 <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
                 <td className="col-title" title={t.title /* the upload's own title, in full */}>
                   {/* Fixed-width slot, so a title starts in the same place with or without dots. */}
                   {/* The # column (and the deck badge in it) is dropped in the narrow view, so the
                       badge is repeated here, shown only there (library.css, the 440px container). */}
-                  {onDeck && (
-                    <span className="tt-deck tt-deck-inline" style={{ background: deckColors?.[onDeck] }} aria-hidden="true">
-                      {onDeck}
+                  {onDecks.length > 0 && (
+                    <span className="tt-decks tt-deck-inline" aria-hidden="true">
+                      {badges}
                     </span>
                   )}
                   <span className="tt-marks">
@@ -816,9 +821,9 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                 <td className="col-artist" title={t.artist}>
                   {displayTrack(t.title, t.artist).artist}
                 </td>
-                <td className="col-bpm">{t.bpm != null ? t.bpm.toFixed(1) : "—"}</td>
-                <td className="col-key">{t.key || "—"}</td>
-                <td className="col-time">{fmtTime(t.duration)}</td>
+                <td className="col-bpm"><MetaChip kind="bpm">{t.bpm != null ? t.bpm.toFixed(1) : null}</MetaChip></td>
+                <td className="col-key"><MetaChip kind="key">{t.key || null}</MetaChip></td>
+                <td className="col-time"><MetaChip kind="time">{fmtTime(t.duration)}</MetaChip></td>
                 {extraCol && <td className="col-extra">{extraCol.render(t, i)}</td>}
               </tr>
               );

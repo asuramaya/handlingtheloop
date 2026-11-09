@@ -1,0 +1,80 @@
+/* ★ ONE CHIP FOR A TRACK'S NUMBERS (MetaChip.tsx; operator, 2026-11-08: "the text and key etc
+   chips need flare and consistency across the interface"). BPM · KEY · TIME in the track rows, the
+   deck header and the queue's Now/Next cards are the same object: tabular digits in a soft pill
+   tinted by --mc. The KEY's --mc is its place on the Camelot wheel (--kh hue, --kl lightness:
+   minor a shade deeper than major), so keys that mix read as neighbouring colours. Loaded last so
+   it wins over the old per-surface colour rules. */
+.mchip {
+  --mc: var(--muted);
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.3em;
+  min-width: 2.6em;
+  padding: 0.12em 0.5em;
+  border-radius: 5px;
+  font-size: 0.92em;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: color-mix(in srgb, var(--mc) 72%, var(--text));
+  background: color-mix(in srgb, var(--mc) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mc) 24%, transparent);
+}
+.mchip-bpm {
+  --mc: color-mix(in srgb, var(--text) 70%, var(--muted));
+}
+.mchip-key.keyed {
+  --mc: hsl(var(--kh) 85% var(--kl, 64%));
+  color: var(--mc);
+  background: color-mix(in srgb, var(--mc) 15%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mc) 40%, transparent);
+}
+body:not(.no-glow) .mchip-key.keyed {
+  text-shadow: 0 0 6px color-mix(in srgb, var(--mc) 55%, transparent);
+}
+.mchip-time {
+  font-weight: 550;
+  background: color-mix(in srgb, var(--mc) 7%, transparent);
+  box-shadow: none;
+}
+.mchip.empty {
+  opacity: 0.45;
+  background: transparent;
+  box-shadow: none;
+}
+/* The small word after a number ("BPM", the key's name). */
+.mchip-unit {
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.72;
+}
+
+/* Deck header: the tempo chip carries the deck's accent, as the bare readout did. */
+.lane-bpm.mchip {
+  --mc: var(--accent);
+  color: var(--accent);
+  font-weight: 750;
+}
+.lane-key.mchip {
+  font-size: 11px;
+}
+.lane-key.mchip.gliding {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Track rows: the chips sit in fixed-width cells; never let one push past its column. */
+.track-table td.col-bpm .mchip,
+.track-table td.col-key .mchip,
+.track-table td.col-time .mchip {
+  max-width: 100%;
+  font-size: 0.86em;
+}
+/* Queue Now/Next cards: the chip IS the value (dd); its own size, not the dd's big type. */
+.mixq-stat dd .mchip {
+  font-size: 0.85em;
+}

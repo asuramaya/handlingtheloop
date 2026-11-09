@@ -1,5 +1,6 @@
 import { separationForces, type SeparatePurpose } from "./App/separatePurpose";
 import { canArmAutoMix } from "./htl/automix/autoMixAuthority";
+import { DeckPlayingContext } from "./components/lib/deckPlaying";
 import { setBeatlockMax, BEATLOCK_ANY } from "./htl/analysis";
 import { canDriveDeck as canDriveDeckFor, canDriveBoard as canDriveBoardFor } from "./App/drivePermission";
 import type { StemAckState } from "./htl/room/protocol";
@@ -1580,6 +1581,7 @@ function AppBody() {
   useLibrarySync(library);
 
   const loadedIds = new Set([loaded.A, loaded.B].filter((v): v is string => v !== null));
+  const deckPlayingGet = useCallback(() => ({ A: engine.deckA.playing, B: engine.deckB.playing }), [engine]);
 
   // NOTE: no global per-frame re-render here. Each DeckLane self-animates its
   // own waveform + time readout via its own rAF, so playback never re-renders the
@@ -4248,6 +4250,9 @@ function AppBody() {
         {/* Bottom third dissolved — EQ moved into each deck bank's foot. */}
       </main>
 
+      {/* The track lists poll which decks are RUNNING (lib/deckPlaying.ts): App does not re-render
+          on transport, so a prop would go stale the moment AUTO or the board starts a deck. */}
+      <DeckPlayingContext.Provider value={deckPlayingGet}>
       <LibraryPanel
         ref={libRef}
         library={library}
@@ -4275,6 +4280,7 @@ function AppBody() {
           onHold: autoHold,
         }}
       />
+      </DeckPlayingContext.Provider>
 
       {/* Settings + Profile + Session share the RIGHT dock (the slot the old Search
           panel left) — one open at a time. On desktop the dock shares the workspace row

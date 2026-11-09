@@ -17,6 +17,7 @@ import { TRACK_DND_MIME, TrackTable, type TrackTableHandle } from "./TrackTable"
 import type { Ref } from "react";
 import { autoLine, fmtClock } from "./automixStatus";
 import { Menu } from "./ContextMenu";
+import { MetaChip } from "./MetaChip";
 
 // The auto-mix "up next" panel: curate the queue, see how each pair will transition,
 // and drive the auto-DJ (mix now / skip / hold). Radio mode tops itself up from the
@@ -128,7 +129,9 @@ function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" 
         {stats.map(([k, v]) => (
           <div key={k} className={`mixq-stat stat-${k.toLowerCase()}`}>
             <dt>{k}</dt>
-            <dd>{v ?? "—"}</dd>
+            <dd>
+              <MetaChip kind={k === "BPM" ? "bpm" : k === "Key" ? "key" : "time"}>{v}</MetaChip>
+            </dd>
           </div>
         ))}
       </dl>

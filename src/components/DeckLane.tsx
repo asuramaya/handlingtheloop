@@ -12,6 +12,7 @@ import { TRACK_DND_MIME } from "./TrackTable";
 import { displayTrack, fmtTime } from "../util/format";
 import type { StemBadge, StemStatus } from "../App";
 import { isStemBusy, stemProcText } from "./stemProcText";
+import { MetaChip } from "./MetaChip";
 
 export interface DeckMeta {
   name: string;
@@ -291,20 +292,25 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         <span className="lane-time">
           <LaneTime deck={deck} duration={meta.duration} />
         </span>
-        <span className="lane-bpm">{deck.effectiveBpm != null ? `${deck.effectiveBpm.toFixed(1)}` : "--"} BPM</span>
+        <MetaChip kind="bpm" className="lane-bpm">
+          {deck.effectiveBpm != null ? deck.effectiveBpm.toFixed(1) : "--"}
+          <span className="mchip-unit">BPM</span>
+        </MetaChip>
         {deck.liveKey && (() => {
           // Live sounding key — tracks the keylock-off pitch glide (Smart Fader / vinyl), with the
           // sub-semitone drift shown in cents so the continuous shift `pitch` hides is visible.
           const semis = deck.livePitchSemis;
           const cents = Math.round((semis - Math.round(semis)) * 100);
           return (
-            <span
+            <MetaChip
+              kind="key"
+              keyName={deck.liveKey.camelot}
               className={`lane-key${cents !== 0 ? " gliding" : ""}`}
               title={`Key ${deck.liveKey.name} · pitch ${semis >= 0 ? "+" : ""}${semis.toFixed(2)} st`}
             >
-              {deck.liveKey.camelot} {deck.liveKey.name}
+              {deck.liveKey.camelot} <span className="mchip-unit">{deck.liveKey.name}</span>
               {cents !== 0 && <span className="lane-key-cents"> {cents > 0 ? "+" : ""}{cents}¢</span>}
-            </span>
+            </MetaChip>
           );
         })()}
         {/* Loop state — a pulsing ⟳ chip that shows ONLY while a loop is live (its beat length in

@@ -260,6 +260,10 @@ export const DDJ_FLX4: DeviceProfile = {
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —
     // IF the unit accepts incoming note-on for these (verify with the Debug output prober).
     padModes: { cue: 0x1b, fx: 0x1e, loop: 0x20, sampler: 0x22 },
+    // ★ The blink first went to the base addresses only and the lamp stayed solid in CUE2 (operator,
+    // 2026-11-08): in a shifted layer the firmware shows the button's SHIFTED lamp, addressed by the
+    // note it sends with SHIFT held (HOT CUE 0x69, PAD FX 0x6B, BEAT JUMP 0x6D, SAMPLER 0x6F).
+    padModesAlt: { cue: 0x69, fx: 0x6b, loop: 0x6d, sampler: 0x6f },
   },
   // Channel LEVEL METERS: CC 0x02 on each deck's channel (0xB0 / 0xB1), 0–127 lights the column
   // bottom-up — the same message rekordbox / Mixxx drive them with. Fed from the deck's post-fader

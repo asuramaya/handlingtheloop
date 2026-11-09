@@ -88,6 +88,9 @@ export interface MidiFeedbackMap {
   // mode, lit on `noteStatus`; the active mode lights, the rest clear. Lets the board
   // reflect a mode change made anywhere (keyboard / on-screen / gamepad / session sync).
   padModes?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
+  /** The same buttons' SHIFTED lamp addresses (Pioneer: the note the button sends with SHIFT held).
+   *  While a shifted layer is live the firmware may be showing THIS lamp, so the blink drives both. */
+  padModesAlt?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
 }
 
 export interface DeviceProfile {

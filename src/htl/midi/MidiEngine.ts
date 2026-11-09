@@ -746,12 +746,16 @@ export class MidiEngine {
     if (f.padModes && noteStatus != null) {
       const lit = f.padModes[fb.padMode];
       const want = !fb.padModeAlt || Math.floor(Date.now() / MidiEngine.PAD_BLINK_MS) % 2 === 0;
+      const alt = f.padModesAlt?.[fb.padMode];
       if (fb.padMode !== prev?.padMode) {
         const off = prev ? f.padModes[prev.padMode] : undefined;
         if (off != null && off !== lit) this.send([noteStatus, off, 0x00]);
         if (lit != null) this.send([noteStatus, lit, want ? 0x7f : 0x00]);
-      } else if (lit != null && want !== this.padLampOn[deck]) {
-        this.send([noteStatus, lit, want ? 0x7f : 0x00], false);
+        if (alt != null && fb.padModeAlt) this.send([noteStatus, alt, want ? 0x7f : 0x00]);
+      } else if (want !== this.padLampOn[deck] || !!fb.padModeAlt !== !!prev?.padModeAlt) {
+        // the flip goes to the base lamp AND the shifted one — whichever the firmware is showing
+        if (lit != null) this.send([noteStatus, lit, want ? 0x7f : 0x00], false);
+        if (alt != null) this.send([noteStatus, alt, fb.padModeAlt && want ? 0x7f : 0x00], false); // leaving the layer: dark
       }
       this.padLampOn[deck] = want;
     }

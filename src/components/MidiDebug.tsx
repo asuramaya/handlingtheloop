@@ -82,35 +82,14 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
 
   return (
     <>
-      {/* JOG CADENCE — instrumentation for the scratch velocity model. Spin the platter
-          and read: a steady mouse is ~1–8 ms/tick with ~0 burst; a bursty/sparse hardware
-          jog shows a high burst% (sub-1ms clusters) + big max-gap — the case the alpha-beta
-          filter smooths. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Jog scratch cadence</span>
-          <InfoDot
-            text="Scratch the jog wheel to measure it. A steady mouse reads about 1 to 8 ms per tick with almost no burst; a bursty or sparse hardware jog shows a high burst percentage, meaning clusters under a millisecond, and a big maximum gap. That second shape is what the smoothing filter exists to fix, so these numbers say whether it is needed."
-            label="Jog scratch cadence"
-          />
-        </div>
-        <div className="midi-monitor-row" style={{ flexWrap: "wrap", gap: "10px 16px" }}>
-          <span className="midi-monitor-meta">{jog.rate.toFixed(0)} ticks/s</span>
-          <span className="midi-monitor-meta">med {jog.medMs.toFixed(1)} ms</span>
-          <span className="midi-monitor-meta">p95 {jog.p95Ms.toFixed(1)} ms</span>
-          <span className="midi-monitor-meta">maxgap {jog.maxGapMs.toFixed(0)} ms</span>
-          <span className="midi-monitor-meta" style={{ color: jog.burst > 0.25 ? "var(--accent, #e66)" : undefined }}>
-            burst {(jog.burst * 100).toFixed(0)}%
-          </span>
-          <span className="midi-monitor-meta">avg |tick| {jog.avgTick.toFixed(1)}</span>
-          <span className="midi-monitor-meta">n {jog.count}</span>
-        </div>
-      </div>
-
       {/* INPUT — the live monitor (the map-building surface) */}
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">MIDI input</span>
+          <InfoDot
+            text="Press any control on the controller and its raw bytes appear below, so you can build a map by hand or work out what an unknown control sends. Capture records every incoming byte to a JSON fixture you can replay in the test suite, which re-grounds a byte map without needing the hardware present."
+            label="MIDI input monitor"
+          />
           <button
             className="link-btn"
             onClick={toggleCapture}
@@ -118,10 +97,6 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
           >
             {capturing ? "■ Stop & download" : "● Capture"}
           </button>
-          <InfoDot
-            text="Press any control on the controller and its raw bytes appear below, so you can build a map by hand or work out what an unknown control sends. Capture records every incoming byte to a JSON fixture you can replay in the test suite, which re-grounds a byte map without needing the hardware present."
-            label="MIDI input monitor"
-          />
         </div>
         <div className="midi-monitor">
           {inMon.length === 0 ? (
@@ -154,19 +129,27 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
         {/* PAUSE APP LIGHTS — while on, the app writes no lamp at all, so a value sent below stays
             on the board instead of being overwritten on the next feedback tick. Resuming re-sends
             every lamp from scratch. */}
-        <label className="settings-row">
-          <span className="settings-label">Pause app lights</span>
-          <span className="settings-control">
-            <input
-              type="checkbox"
-              checked={lampsPaused}
-              onChange={(e) => {
-                midi.pauseLamps(e.target.checked);
-                setLampsPaused(e.target.checked);
-              }}
+        <div className="settings-row">
+          <span className="settings-label">
+            Pause app lights
+            <InfoDot
+              text="While on, the app writes no lamp at all — button lights, meters, the SMART CFX lamp — so a value you send below stays on the board instead of being overwritten on the next feedback tick. Turn it off to hand the lights back; every lamp is re-sent from scratch."
+              label="Pause app lights"
             />
           </span>
-        </label>
+          <button
+            className={`toggle ${lampsPaused ? "on" : ""}`}
+            onClick={() => {
+              midi.pauseLamps(!lampsPaused);
+              setLampsPaused(!lampsPaused);
+            }}
+            role="switch"
+            aria-checked={lampsPaused}
+            aria-label="Pause app lights"
+          >
+            <span className="toggle-knob" />
+          </button>
+        </div>
         <div className="midi-dbg-row">
           <input
             className="midi-dbg-hex"
@@ -197,6 +180,39 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
           )}
         </div>
       </div>
+      {/* JOG CADENCE — instrumentation for the scratch velocity model. Spin the platter
+          and read: a steady mouse is ~1–8 ms/tick with ~0 burst; a bursty/sparse hardware
+          jog shows a high burst% (sub-1ms clusters) + big max-gap — the case the alpha-beta
+          filter smooths. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Jog scratch cadence</span>
+          <InfoDot
+            text="Scratch the jog wheel to measure it. A steady mouse reads about 1 to 8 ms per tick with almost no burst; a bursty or sparse hardware jog shows a high burst percentage, meaning clusters under a millisecond, and a big maximum gap. That second shape is what the smoothing filter exists to fix, so these numbers say whether it is needed."
+            label="Jog scratch cadence"
+          />
+        </div>
+        {/* A tidy stat grid (label over value), not a run of loose spans. */}
+        <div className="debug-stats">
+          {(
+            [
+              ["ticks/s", jog.rate.toFixed(0)],
+              ["median", `${jog.medMs.toFixed(1)} ms`],
+              ["p95", `${jog.p95Ms.toFixed(1)} ms`],
+              ["max gap", `${jog.maxGapMs.toFixed(0)} ms`],
+              ["burst", `${(jog.burst * 100).toFixed(0)}%`],
+              ["avg |tick|", jog.avgTick.toFixed(1)],
+              ["count", String(jog.count)],
+            ] as const
+          ).map(([k, v]) => (
+            <span key={k} className={`debug-stat${k === "burst" && jog.burst > 0.25 ? " hot" : ""}`}>
+              <span className="debug-stat-k">{k}</span>
+              <span className="debug-stat-v">{v}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+
     </>
   );
 }

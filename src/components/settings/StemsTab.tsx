@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { InfoDot } from "./InfoDot";
+import { OptionRow } from "./OptionRow";
 import {
   type Settings,
   type StemQuality,
@@ -108,6 +109,90 @@ export function StemsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedKey, doneKey]);
 
+  // ★ ONE ROW PER DECK, status and action together. The row's text is the live status while there
+  // is one (separating 42%, downloading, failed — coloured by phase), else the steady state (which
+  // engine's stems are on the deck). Re-analyze sits on the right whenever the selected engine can
+  // run here. Rows exist for a deck that is loaded OR reporting a status, on any device.
+  const sel = getStemModel(settings.stemModel);
+  const supported = !isMobileDevice() && sel.kind !== "dsp" && modelSupport(sel) === "runs";
+  const rowIds = (["A", "B"] as const).filter((id) => loadedDecks.some((d) => d.id === id) || stemStatus?.[id]);
+  const deckRows =
+    rowIds.length === 0 ? (
+      !isMobileDevice() && sel.kind !== "dsp" ? (
+        <div className="stem-reanalyze-empty">Load a track to separate or re-analyze it with {sel.label}.</div>
+      ) : null
+    ) : (
+      <div className="stem-deck-list">
+        {rowIds.map((id) => {
+          const d = loadedDecks.find((x) => x.id === id);
+          const st = stemStatus?.[id] ?? null;
+          const onSel = !!d && d.neural && d.model === sel.id; // already this exact neural model
+          const steady = !d
+            ? ""
+            : !d.hasStems
+              ? "plain mix"
+              : d.neural
+                ? d.model
+                  ? getStemModel(d.model).label
+                  : "neural"
+                : // UNREACHABLE (every setStems call passes neural=true since the DSP split was
+                  // deleted in f2004f2); kept so the ternary is total. Seeing it on screen is the bug.
+                  "DSP split";
+          const text = st?.detail || (onSel ? `✓ ${steady}` : steady);
+          const canRun = supported && !!d && !!onReanalyze;
+          return (
+            <div className={`stem-deck-row${onSel ? " is-current" : ""}${st ? ` phase-${st.phase}` : ""}`} key={id}>
+              <span className="stem-deck-id">{id}</span>
+              <span className="stem-deck-state" title={text}>
+                {text}
+              </span>
+              {supported && d && (
+                <button
+                  className="stem-deck-reanalyze"
+                  disabled={!canRun}
+                  onClick={() => canRun && onReanalyze?.(sel.id, id)}
+                  title={onSel ? `Re-run ${sel.label} on deck ${id}, overwriting its cached stems` : `Separate deck ${id} with ${sel.label}`}
+                >
+                  ↻ {onSel ? "Re-analyze" : sel.label}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+
+  // The device line, as a quiet note in the card head: which GPU separates here, or why nothing does.
+  const gpuNote = (() => {
+    const gpu = sel.tier === "gpu";
+    const sup = modelSupport(sel);
+    // Separation is Chromium + WebGPU only — there is no CPU route anywhere.
+    const onGpu = gpu && sup === "runs";
+    const adapter = webGpuAdapterInfo();
+    // probeWebGPU() records the adapter even when it REJECTS a software fallback (SwiftShader).
+    const softwareOnly = !onGpu && !!adapter?.includes("swiftshader");
+    const text = gpu
+      ? onGpu
+        ? adapter || "WebGPU"
+        : sup === "blocked"
+          ? "disabled after a crash"
+          : softwareOnly
+            ? `software only (${adapter}) — cached stems still load`
+            : isChromium()
+              ? "no WebGPU here — cached stems still load"
+              : "needs Chromium + WebGPU — cached stems still load"
+      : // SINGLE IS NOT "NO STEMS" WHILE AUTO-ENHANCE IS ON: cached neural stems still download.
+        settings.autoEnhance
+        ? "no separation · cached stems still load"
+        : "plain mix · no separation";
+    return (
+      <span className={`settings-head-note stem-device ${onGpu ? "gpu" : "none"}`} title={text}>
+        {gpu && <span className="stem-device-tag">GPU</span>}
+        <span className="stem-device-text">{text}</span>
+      </span>
+    );
+  })();
+
   return (
     <>
       {isGpuBlocked() && (
@@ -127,41 +212,30 @@ export function StemsTab({
         </div>
       )}
 
-      {(stemStatus?.A || stemStatus?.B) && (
-        <div className="settings-section">
-          <div className="settings-section-head">
-            <span className="settings-label">Stem status</span>
-          </div>
-          {(["A", "B"] as const).map((d) => {
-            const st = stemStatus?.[d];
-            if (!st) return null;
-            return (
-              <div key={d} className={`stem-status-row ${st.phase}`}>
-                <span className="stem-status-deck">{d}</span>
-                <span className="stem-status-detail">{st.detail}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
+      {/* ★ ONE CARD (operator, 2026-11-08: "consolidate the stems settings so they're not so
+          overwhelming … combine stem status with the last line and move reanalyze to the first
+          line"). The separate Stem status card is gone: each deck's live status IS its row, and the
+          rows lead the card, Re-analyze on the right. Explanations moved behind ⓘ; what is visible
+          is either a control or a report on right now. */}
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">{isMobileDevice() ? "Stems" : "Stem separation"}</span>
+          {!isMobileDevice() && gpuNote}
         </div>
+
+        {deckRows}
+
         {isMobileDevice() ? (
           <>
           {/* ★ A PHONE NEVER SEPARATES. `canSeparate()` returns false for every mobile UA before
               it looks at anything else, and the pipeline's own mobile branch is labelled FETCH +
               RENDER ONLY: it probes the shared cache and, finding nothing, stays on the plain mix.
-              This control was nevertheless called "Split tracks into stems · on-device", which
-              promised the one thing the device cannot do — and when a phone then sat on the mix,
-              nothing in the wording could explain why. It is a DOWNLOAD switch, so it says so. */}
+              It is a DOWNLOAD switch, so it says so. */}
           <div className="settings-row">
             <span className="settings-label">
               Use shared stems
               <InfoDot
-                text="Phones never separate a track themselves: the neural model needs a desktop GPU, and loading it here would crash the tab. What a phone can do is download a set someone's desktop already made and shared. On, a loaded deck checks the shared cache and takes the stems if they are there. Off, it stays on the plain mix, which is the lightest thing to play. Auto-DJ turns this on while it runs, because a stem transition needs both decks."
+                text="Phones never separate a track themselves: the neural model needs a desktop GPU, and loading it here would crash the tab. What a phone can do is download a set someone's desktop already made and shared. On, a loaded deck checks the shared cache and takes the stems if they are there. Off, it stays on the plain mix, which is the lightest thing to play. Auto-DJ turns this on while it runs, because a stem transition needs both decks. A track only has stems once someone has separated it on a desktop with Demucs; until then the deck plays the mix."
                 label="Use shared stems"
               />
             </span>
@@ -175,20 +249,7 @@ export function StemsTab({
               <span className="toggle-knob" />
             </button>
           </div>
-          {/* The dependency, stated once and up front. A phone that silently plays the mix looks
-              broken; a phone that told you a desktop has to go first does not. */}
-          {settings.mobileStems && (
-            <p className="settings-note">
-              A track only has stems once someone has separated it on a desktop with Demucs. Until then this
-              deck plays the mix.
-            </p>
-          )}
-          {/* ★ THIS NOTICE USED TO BE A LIE, and a vague one. It read "Downgraded after a crash"
-              and offered to "Retry full quality" — for a guard that nothing armed and a level that
-              nothing acted on, so no downgrade had happened and there was nothing to retry. Both
-              halves are true now (2026-09-10 redesign): the level really does gate the mobile stem
-              download, and it says WHICH rung you are on, because "downgraded" without naming what
-              you lost is not something a user can act on. */}
+          {/* The crash guard says WHICH rung you are on — a report on right now, so it stays visible. */}
           {stemFailLevel() > 0 && (
             <p className="settings-note warn">
               {stemFailLevel() >= 2
@@ -207,38 +268,34 @@ export function StemsTab({
           )}
           </>
         ) : (
-          <div className="stem-models">
-            {/* No mobile filter here: this whole branch is the `!isMobileDevice()` side. A phone
-                never reaches the model picker at all — it gets the "Use shared stems" switch and
-                nothing else. The filter that used to sit here implied otherwise. */}
-            {STEM_MODELS
-              .map((m) => {
-                const sup = modelSupport(m);
-                const badge = supportBadge(m);
-                const cached = cachedModels[m.id];
-                const blocked = sup === "blocked" && !cached;
-                return (
-                  <button
-                    key={m.id}
-                    className={`stem-model ${settings.stemModel === m.id ? "on" : ""} ${blocked ? "blocked" : ""}`}
-                    disabled={blocked}
-                    onClick={() => !blocked && set({ stemModel: m.id })}
-                  >
-                    <span className="stem-model-label">
-                      {m.label}
-                      {m.kind !== "dsp" && <span className={`stem-badge ${badge.cls}`}>{badge.text}</span>}
-                      {cached && <span className="stem-badge cached">✓ cached for loaded track</span>}
-                    </span>
-                    {/* Single + Auto-enhance still loads a track's cached stems, so "plain mix only"
-                        would contradict the status row above it. Say what actually happens. */}
-                    <span className="stem-model-note">
-                      {m.id === "off" && settings.autoEnhance
-                        ? "Never separates here, lightest on memory. A track with stems in the shared cache still gets them (Auto-enhance)."
-                        : m.note}
-                    </span>
-                  </button>
-                );
-              })}
+          <div className="stem-models" role="radiogroup" aria-label="Stem engine">
+            {/* This whole branch is the `!isMobileDevice()` side: a phone gets the switch above. */}
+            {STEM_MODELS.map((m) => {
+              const sup = modelSupport(m);
+              const badge = supportBadge(m);
+              const cached = cachedModels[m.id];
+              const blocked = sup === "blocked" && !cached;
+              // ONE badge: "cached for the loaded track" is the most useful fact when true;
+              // otherwise what this device can do with it. The other goes behind the ⓘ.
+              const shown = cached ? { text: "✓ cached", cls: "cached" } : m.kind !== "dsp" ? badge : null;
+              // Single + Auto-enhance still loads a track's cached stems, so say what actually happens.
+              const note =
+                m.id === "off" && settings.autoEnhance
+                  ? "Never separates here, lightest on memory. A track with stems in the shared cache still gets them (Auto-enhance)."
+                  : m.note;
+              const info = m.kind === "dsp" ? note : `${note} · On this device: ${badge.text}${cached ? " · cached for the loaded track" : ""}.`;
+              return (
+                <OptionRow
+                  key={m.id}
+                  on={settings.stemModel === m.id}
+                  disabled={blocked}
+                  onPick={() => set({ stemModel: m.id })}
+                  label={m.label}
+                  badge={shown ? <span className={`stem-badge ${shown.cls}`}>{shown.text}</span> : undefined}
+                  info={info}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -264,16 +321,13 @@ export function StemsTab({
         )}
 
         {!isMobileDevice() && getStemModel(settings.stemModel).tier === "gpu" && (
-          <>
-          {/* The chosen preset's blurb is the ONE piece of prose kept as prose on this tab, and
-              deliberately: it changes with the control, so it is a readout of the current choice
-              rather than an explanation of the control. Explanation goes behind the ⓘ; state
-              stays visible. */}
           <div className="stem-quality settings-row">
             <span className="settings-label">
-              Separation quality
+              Quality
+              {/* The chosen preset's blurb used to sit as a sentence under the control; it rides in
+                  the ⓘ now, after the general explanation, so it still changes with the choice. */}
               <InfoDot
-                text="How hard the GPU works on each split. Higher settings run the model more times over the track and overlap the windows further, which cleans up bleed between stems at a proportional cost in time. The compute figure is the multiplier against the fastest setting."
+                text={`How hard the GPU works on each split. Higher settings run the model more times over the track and overlap the windows further, which cleans up bleed between stems at a proportional cost in time. The figure is the compute multiplier against the fastest setting. ${STEM_PRESETS[settings.stemQuality].label}: ${STEM_PRESETS[settings.stemQuality].blurb}`}
                 label="Separation quality"
               />
             </span>
@@ -292,99 +346,8 @@ export function StemsTab({
               </span>
             </span>
           </div>
-          <p className="settings-note">{STEM_PRESETS[settings.stemQuality].blurb}</p>
-        </>
         )}
-
-        {(() => {
-          const sel = getStemModel(settings.stemModel);
-          if (sel.kind === "dsp" || isMobileDevice()) return null;
-          const supported = modelSupport(sel) === "runs";
-          if (loadedDecks.length === 0) {
-            return <div className="stem-reanalyze-empty">Load a track to separate or re-analyze it with {sel.label}.</div>;
-          }
-          return (
-            <div className="stem-deck-list">
-              {loadedDecks.map((d) => {
-                // Steady per-deck stem state: which engine is on this deck right now.
-                const onSel = d.neural && d.model === sel.id; // already this exact neural model
-                const state = !d.hasStems
-                  ? "plain mix"
-                  : d.neural
-                    ? d.model
-                      ? getStemModel(d.model).label
-                      : "neural"
-                    // UNREACHABLE, and kept only so the ternary is total. A deck cannot hold
-                    // stems that are not neural: every setStems/loadPackedStems call site in the
-                    // app passes neural=true (the param DEFAULTS to false, which is why this is
-                    // worth stating), and the DSP split that could once produce non-neural stems
-                    // was deleted in f2004f2, 2026-07-01. If this string ever appears on screen,
-                    // something has started setting stems without the flag — that is the bug,
-                    // not this label.
-                    : "DSP split";
-                const canRun = supported && !!onReanalyze;
-                return (
-                  <div className={`stem-deck-row${onSel ? " is-current" : ""}`} key={d.id}>
-                    <span className="stem-deck-id">{d.id}</span>
-                    <span className="stem-deck-state">{onSel ? `✓ ${state}` : state}</span>
-                    <button
-                      className="stem-deck-reanalyze"
-                      disabled={!canRun}
-                      onClick={() => canRun && onReanalyze?.(sel.id, d.id)}
-                      title={
-                        !supported
-                          ? `${sel.label} can't be separated on this device`
-                          : onSel
-                            ? `Re-run ${sel.label} on deck ${d.id}, overwriting its cached stems`
-                            : `Separate deck ${d.id} with ${sel.label}`
-                      }
-                    >
-                      ↻ {onSel ? "Re-analyze" : sel.label}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
-        {!isMobileDevice() && (() => {
-          const sel = getStemModel(settings.stemModel);
-          const gpu = sel.tier === "gpu";
-          const sup = modelSupport(sel);
-          // Separation is Chromium + WebGPU only — there is no CPU route anywhere.
-          // Everything else (Safari/Firefox, phones) consumes the shared cache.
-          const onGpu = gpu && sup === "runs";
-          const adapter = webGpuAdapterInfo();
-          // probeWebGPU() still records the adapter string even when it REJECTS that
-          // adapter for being a software fallback (SwiftShader) — surface that instead
-          // of the generic "not available" message, since it's a genuinely different,
-          // more actionable situation: WebGPU works, hardware acceleration doesn't.
-          const softwareOnly = !onGpu && !!adapter?.includes("swiftshader");
-          const text = gpu
-            ? onGpu
-              ? adapter || "WebGPU"
-              : sup === "blocked"
-                ? "Disabled after a crash — re-enable above, or use a cached result"
-                : softwareOnly
-                  ? `Only software rendering available (${adapter}) — cached stems still load here`
-                  : isChromium()
-                    ? "WebGPU not available here — cached stems still load"
-                    : "Separation needs a Chromium WebGPU browser — cached stems still load here"
-            : // ★ SINGLE IS NOT "NO STEMS" WHILE AUTO-ENHANCE IS ON: a track whose neural stems are in the
-              // shared cache downloads them anyway (that is what Auto-enhance means), so the old
-              // "no stem separation" sat directly under a status row reading "Enhancing with Demucs 75%".
-              settings.autoEnhance
-              ? "No separation here · cached stems still load"
-              : "Plain mix · no stem separation";
-          return (
-            <div className={`stem-device ${onGpu ? "gpu" : "none"}`}>
-              <span className="stem-device-tag">GPU</span>
-              <span className="stem-device-text">{text}</span>
-            </div>
-          );
-        })()}
       </div>
-
     </>
   );
 }

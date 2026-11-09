@@ -1628,18 +1628,20 @@ body.no-glow .stem-btn.on {
   box-shadow: none;
 }
 
-/* Settings stem-model picker: a stacked list of selectable backends. */
+/* Settings option picker (stem engine, lyrics source) — OptionRow. ONE compact line per option:
+   a radio dot, the name, at most one badge, and the explanation behind an ⓘ (operator,
+   2026-11-08). It was a tall card with a sentence under every name. */
 .stem-models {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .stem-model {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 10px 12px;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 6px 10px 6px 12px;
   text-align: left;
   background: var(--surface, #12141c);
   border: 1px solid var(--line, #2a3140);
@@ -1647,21 +1649,52 @@ body.no-glow .stem-btn.on {
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.stem-model:hover {
-  border-color: var(--neon-cyan, #36d1ff);
+.stem-model:hover:not(.blocked) {
+  border-color: color-mix(in srgb, var(--neon-cyan, #36d1ff) 60%, var(--line));
+}
+.stem-model:focus-visible {
+  outline: 2px solid var(--neon-cyan, #36d1ff);
+  outline-offset: 1px;
 }
 .stem-model.on {
   border-color: var(--neon-cyan, #36d1ff);
-  box-shadow: inset 0 0 0 1px var(--neon-cyan, #36d1ff);
+  background: color-mix(in srgb, var(--neon-cyan, #36d1ff) 7%, var(--surface, #12141c));
+}
+.stem-model.blocked {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The radio dot: a ring, filled when chosen — the same read as any OS radio, in the theme. */
+.stem-model-dot {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted, #8a94a6);
+  box-sizing: border-box;
+}
+.stem-model.on .stem-model-dot {
+  border-color: var(--neon-cyan, #36d1ff);
+  background: radial-gradient(circle, var(--neon-cyan, #36d1ff) 0 3px, transparent 3.5px);
 }
 .stem-model-label {
   font-weight: 700;
   font-size: 13px;
   color: var(--text, #ecedfb);
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stem-model > .stem-badge {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stem-model-info {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
 }
 .stem-model-note {
   font-size: 11px;
@@ -1740,7 +1773,6 @@ body.no-glow .stem-btn.on {
 }
 /* Per-deck stem status + contextual re-analyze (replaces the single both-decks button). */
 .stem-reanalyze-empty {
-  margin-top: 10px;
   font-size: 12px;
   color: var(--text-dim, #888);
 }
@@ -1748,7 +1780,6 @@ body.no-glow .stem-btn.on {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 10px;
 }
 .stem-deck-row {
   display: flex;
@@ -1777,8 +1808,29 @@ body.no-glow .stem-btn.on {
 }
 .stem-deck-state {
   flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-dim, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A deck row carrying a live stem status is coloured by its phase (the old Stem status card's
+   colours, now on the row itself). */
+.stem-deck-row.phase-separating .stem-deck-state {
+  color: var(--shift);
+}
+.stem-deck-row.phase-cached .stem-deck-state,
+.stem-deck-row.phase-downloading .stem-deck-state,
+.stem-deck-row.phase-ready .stem-deck-state,
+.stem-deck-row.phase-promoted .stem-deck-state {
+  color: #6ee7a8;
+}
+.stem-deck-row.phase-failed .stem-deck-state {
+  color: #ff7a7a;
+}
+.stem-deck-row.phase-unavailable .stem-deck-state {
+  color: #ffcf6e;
 }
 .stem-deck-reanalyze {
   flex: 0 0 auto;
@@ -1919,9 +1971,14 @@ body.no-glow .stem-btn.on {
 .stem-device {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+/* In the card head it is a quiet status note: no tall pill, the tag shrinks to a small caps word. */
+.settings-section-head > .stem-device .stem-device-tag {
+  padding: 1px 6px;
+  font-size: 9px;
 }
 .stem-device-tag {
   flex: 0 0 auto;

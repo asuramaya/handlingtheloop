@@ -185,8 +185,11 @@ export function MidiPanel({ midi, settings, onChange }: { midi: UseMidi; setting
           on, both directions) — point users there to read bytes / reverse-engineer LEDs. */}
       {settings.midiEnabled && (
         <p className="settings-note">
-          The live MIDI monitor and the LED feedback prober are in <strong>Settings ▸ Debug</strong>. Read any
-          control's bytes there and confirm a mapping as it happens.
+          Live monitor and LED prober: <strong>Settings ▸ Debug</strong>.
+          <InfoDot
+            label="MIDI monitor"
+            text="The live MIDI monitor and the LED feedback prober are in Settings ▸ Debug. Read any control's bytes there and confirm a mapping as it happens."
+          />
         </p>
       )}
     </>

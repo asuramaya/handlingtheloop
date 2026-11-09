@@ -2813,3 +2813,54 @@
 .tt-big b {
   font-size: 20px;
 }
+
+/* A tab with many cards groups them under a small title (Debug: Report & inspect · Engine ·
+   Controller), so the stack reads as three parts instead of eleven cards in a row. */
+.settings-group-title {
+  margin: 10px 2px 6px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+}
+.settings-group-title:first-child {
+  margin-top: 0;
+}
+/* Two actions in a card head (Event log: Copy · Clear) sit together on the right — only the
+   first is pushed over, or each claims its own auto margin and they drift apart at phone width. */
+.settings-section-head > .link-btn + .link-btn,
+.settings-section-head > .link-btn + button.link-btn:last-child:not(.info-dot) {
+  margin-left: 0;
+}
+/* A compact stat grid for the Debug tab's measurements (jog cadence). */
+.debug-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
+  gap: 6px;
+}
+.debug-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+.debug-stat-k {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.debug-stat-v {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+.debug-stat.hot .debug-stat-v {
+  color: var(--accent, #e66);
+}

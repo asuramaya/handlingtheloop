@@ -1,5 +1,7 @@
 import type { LyricsSource } from "@htl/lyrics";
 import { isMobileDevice, type Settings } from "@htl";
+import { InfoDot } from "./settings/InfoDot";
+import { OptionRow } from "./settings/OptionRow";
 
 /** What a deck's lyrics ARE right now — the lyric twin of the stem per-deck row. */
 export interface LyricDeck {
@@ -41,15 +43,17 @@ export function LyricsSettings({
   return (
     <div className="settings-section">
       <div className="settings-section-head">
-        <span className="settings-label">
-          Lyrics
-          <span className="settings-sub muted"> · timed to the vocal</span>
-        </span>
+        <span className="settings-label">Lyrics</span>
+        <InfoDot
+          text="Lyrics for each loaded track, timed to the vocal. Word-by-word timing needs the track's vocal stem; without one they still show, line by line."
+          label="Lyrics"
+        />
         <button
           className={`toggle ${settings.lyricsAuto ? "on" : ""}`}
           onClick={() => set({ lyricsAuto: !settings.lyricsAuto })}
           role="switch"
           aria-checked={settings.lyricsAuto}
+          aria-label="Lyrics"
         >
           <span className="toggle-knob" />
         </button>
@@ -57,31 +61,23 @@ export function LyricsSettings({
 
       {settings.lyricsAuto && (
         <>
-          <div className="stem-models">
-            <button
-              className={`stem-model ${!isYt ? "on" : ""}`}
-              onClick={() => set({ lyricsModel: "lrclib" })}
-            >
-              <span className="stem-model-label">
-                Lyrics database
-                <span className="stem-badge ok">Free · no download</span>
-                {wordLevel && <span className="stem-badge cached">Word-timed</span>}
-              </span>
-              <span className="stem-model-note">
-                Published lyrics, matched by acoustic fingerprint · any language ·{" "}
-                {wordLevel ? "every word timed to the vocal" : "line-by-line until stems are on"}
-              </span>
-            </button>
-            <button
-              className={`stem-model ${isYt ? "on" : ""}`}
-              onClick={() => set({ lyricsModel: "youtube" })}
-            >
-              <span className="stem-model-label">
-                YouTube captions
-                <span className="stem-badge ok">Instant</span>
-              </span>
-              <span className="stem-model-note">The uploader's captions · line-level, often auto-generated or missing</span>
-            </button>
+          {/* Compact source picker (operator, 2026-11-08: "clean up the lyrics database"): one line
+              per source, one badge, the explanation behind the ⓘ. */}
+          <div className="stem-models" role="radiogroup" aria-label="Lyrics source">
+            <OptionRow
+              on={!isYt}
+              onPick={() => set({ lyricsModel: "lrclib" })}
+              label="Lyrics database"
+              badge={<span className={`stem-badge ${wordLevel ? "cached" : "ok"}`}>{wordLevel ? "Word-timed" : "Line-timed"}</span>}
+              info={`Published lyrics, matched by acoustic fingerprint, in any language. Free, nothing to download. ${wordLevel ? "Every word is timed to the vocal stem." : "Line by line until stems are on; with a vocal stem every word is timed."}`}
+            />
+            <OptionRow
+              on={isYt}
+              onPick={() => set({ lyricsModel: "youtube" })}
+              label="YouTube captions"
+              badge={<span className="stem-badge ok">Instant</span>}
+              info="The uploader's own captions. Line-level, often auto-generated, and sometimes missing."
+            />
           </div>
 
           {/* Per-deck state — the answer to "are they even firing?" */}
@@ -125,7 +121,7 @@ export function LyricsSettings({
               stem (and so word timing) even with separation off, so "stems are off" was only true
               for the tracks nobody had separated yet. */}
           {!isYt && !wordLevel && !mobile && (
-            <p className="settings-hint warn">
+            <p className="settings-note warn">
               {settings.autoEnhance
                 ? "Separation is off: word timing only for tracks with cached stems, line-by-line otherwise."
                 : "Stems are off — right words, line-by-line timing."}

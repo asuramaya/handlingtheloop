@@ -106,6 +106,7 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
 
   return (
     <>
+      <div className="settings-group-title">Report & inspect</div>
       <div className="settings-section">
         <div className="settings-section-head">
           <span className="settings-label">Report a problem</span>
@@ -186,40 +187,7 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
         )}
       </div>
 
-      {/* ★ THE FLIGHT RECORDER, ON SCREEN. */}
-      <div className="settings-section">
-        <div className="settings-section-head">
-          <span className="settings-label">Event log</span>
-          <InfoDot
-            text="The last 300 significant things the app did, oldest first, stamped from page load: track loads, transitions, sync toggles, uncaught errors, and every warning the app logged about itself. This is the how-did-we-get-here that a bug report carries, and it is the same data — reading it here is usually faster than sending it. Clear it, reproduce the bug, and read only what it did."
-            label="Event log"
-          />
-          <button className="link-btn" onClick={() => copy(events.map(formatEvent).join("\n"), "events")}>
-            {copied === "events" ? "Copied ✓" : "Copy"}
-          </button>
-          <button
-            className="link-btn"
-            onClick={() => {
-              clearRing();
-              setEvents([]);
-            }}
-          >
-            Clear
-          </button>
-        </div>
-        {shownEvents.length ? (
-          <pre className="debug-log">{shownEvents.join("\n")}</pre>
-        ) : (
-          <p className="settings-note">{q ? `No events match “${filter}”.` : "Nothing recorded yet."}</p>
-        )}
-      </div>
-
-      {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
-          and reverse-engineering LED / RGB protocols. */}
-      {midi && <MidiDebug midi={midi} />}
-
-      <PerfCaptureSection />
-
+      <div className="settings-group-title">Engine</div>
       {diag.length > 0 && (
         <div className="settings-section">
           <div className="settings-section-head">
@@ -258,6 +226,34 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
         </div>
       )}
 
+      {/* ★ THE FLIGHT RECORDER, ON SCREEN. */}
+      <div className="settings-section">
+        <div className="settings-section-head">
+          <span className="settings-label">Event log</span>
+          <InfoDot
+            text="The last 300 significant things the app did, oldest first, stamped from page load: track loads, transitions, sync toggles, uncaught errors, and every warning the app logged about itself. This is the how-did-we-get-here that a bug report carries, and it is the same data — reading it here is usually faster than sending it. Clear it, reproduce the bug, and read only what it did."
+            label="Event log"
+          />
+          <button className="link-btn" onClick={() => copy(events.map(formatEvent).join("\n"), "events")}>
+            {copied === "events" ? "Copied ✓" : "Copy"}
+          </button>
+          <button
+            className="link-btn"
+            onClick={() => {
+              clearRing();
+              setEvents([]);
+            }}
+          >
+            Clear
+          </button>
+        </div>
+        {shownEvents.length ? (
+          <pre className="debug-log">{shownEvents.join("\n")}</pre>
+        ) : (
+          <p className="settings-note">{q ? `No events match “${filter}”.` : "Nothing recorded yet."}</p>
+        )}
+      </div>
+
       {/* On-device separation crash trace — survives a tab OOM-kill (synchronous
           localStorage), so after a crash + reload this shows the LAST step it
           reached. The only way to debug an iPhone Safari crash without a Mac. */}
@@ -293,6 +289,13 @@ export function DebugTab({ midi, debug }: { midi?: UseMidi; debug?: () => DebugS
           </div>
         );
       })()}
+      <PerfCaptureSection />
+      {midi && <div className="settings-group-title">Controller</div>}
+      {/* MIDI capture (in) + feedback prober (out) — always on, for building maps
+          and reverse-engineering LED / RGB protocols. */}
+      {midi && <MidiDebug midi={midi} />}
+
+
     </>
   );
 }

@@ -147,7 +147,11 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           <InfoDot label="Waveform" text="What colours the wave. Pick one; only the colours that choice uses are shown." />
         </div>
         <div className="settings-row">
-          <span className="settings-label">Colour by</span>
+          <span className="settings-label">
+            Colour by
+            {/* The chosen mode's explanation used to sit under the control as a sentence. */}
+            <InfoDot label="Colour by" text={WAVE_MODES.find((m) => m.id === mode)!.info} />
+          </span>
           <span className="settings-control">
             <span className="seg-group">
               {WAVE_MODES.map((m) => (
@@ -158,7 +162,6 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
             </span>
           </span>
         </div>
-        <p className="settings-hint color-mode-hint">{WAVE_MODES.find((m) => m.id === mode)!.info}</p>
         {mode === "flat" &&
           swatch(
             { key: "stripColor", label: "Wave" },

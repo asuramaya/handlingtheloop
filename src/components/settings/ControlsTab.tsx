@@ -276,11 +276,12 @@ export function PanelPlacementSection({
           />
         </div>
         {onePanel && (
-          <p className="settings-hint">
-            This screen shows one panel at a time, full-screen — Library, Settings, People and
-            Session each take the whole view and the chin switches between them. Placement,
-            stack order and dimming are desktop settings; open Handling The Loop on a larger
-            screen to change them. A tablet counts as a larger screen.
+          <p className="settings-note">
+            One panel at a time on this screen — placement is a desktop setting.
+            <InfoDot
+              label="One panel at a time"
+              text="This screen shows one panel at a time, full-screen — Library, Settings, People and Session each take the whole view and the chin switches between them. Placement, stack order and dimming are desktop settings; open Handling The Loop on a larger screen to change them. A tablet counts as a larger screen."
+            />
           </p>
         )}
         {!onePanel &&

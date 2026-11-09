@@ -582,6 +582,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   const closeAdd = () => { setAddMenu(null); setAddHover(null); setAddFly(null); };
   // The live operations, re-bound every render (the ctl closure below is created once).
+  const openRetry = useRef(false);
+  const plusChainRef = useRef<string | null>(null); // which chain the ＋ stop was chosen in
   const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {}, remove: () => {}, disarm: () => {}, focusOthers: (): FxKind[] => [], aim: () => {} });
   // ★ THE BOARD'S STOP LIVES IN THE FOCUSED CHAIN (operator, 2026-11-08: "the controls on chainfx
   // and when no fx selected are buggy if no fx default to add"). The selected tab is a deck-wide
@@ -594,10 +596,17 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     if (!c) return;
     if (!c.devices.length) {
       plusStopRef.current = true;
+      plusChainRef.current = c.id;
       setPlusStop(true);
       return;
     }
-    if (plusStopRef.current) return;
+    // the ＋ belongs to the chain it was chosen in: a focus moved to a chain WITH effects (a
+    // click on its chip) lands on that chain's first effect, not on its ＋
+    if (plusStopRef.current && plusChainRef.current === c.id) return;
+    if (plusStopRef.current) {
+      plusStopRef.current = false;
+      setPlusStop(false);
+    }
     if (c.devices.includes(deck.fxDeviceAt(live.current.cur) as (typeof c.devices)[number])) return;
     const idx = deck.fxDevices.indexOf(c.devices[0]);
     if (idx >= 0) {
@@ -611,6 +620,19 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     aim,
     open: () => {
       if (locked) return;
+      // ★ ANCHOR TO THE CHAIN THE BOARD IS AIMED AT (operator, 2026-11-08: the menu "spawns way
+      // off where it should"). Two things say "which chain": the board's focus (deck.fxFocus, set
+      // by SHIFT+BEAT ◀▶) and the chain drawn open (selChainId, set by clicking a chip). When they
+      // differed, the menu looked for the effect's tab — or the ＋ — in the chain on screen, found
+      // nothing, and fell back to the middle of the window. So open the board's chain first and
+      // place the menu on the next frame, once its tabs exist.
+      if (deck.fxFocus !== selChainId && deck.fxChain(deck.fxFocus) && !openRetry.current) {
+        openRetry.current = true; // once: if the chain will not open, place the menu anyway
+        setSelChainId(deck.fxFocus);
+        requestAnimationFrame(() => boardOps.current.open());
+        return;
+      }
+      openRetry.current = false;
       aim();
       disarm();
       cancelMenuTimer();
@@ -771,7 +793,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const plus = boardOps.current.focusOthers().length > 0;
         const here = plusStopRef.current ? n : Math.max(0, c.devices.findIndex((d) => d === deck.fxDeviceAt(live.current.cur)));
         const to = stepTabs(here, n, plus, dir);
-        if (to >= n) return setPlusStop(true);
+        if (to >= n) {
+          plusChainRef.current = deck.fxFocus;
+          return setPlusStop(true);
+        }
         const idx = deck.fxDevices.indexOf(c.devices[to]);
         if (idx >= 0) select(idx);
       },

@@ -40,7 +40,7 @@ export type FaderTarget =
 // block tells us which pad mode the player is physically in — HTL switches its deck pad mode to match
 // before routing the pad (see the button case in useMidiRouting). Peers (roll/fx2/global) share their
 // base's block, so they're reached by the SHIFT byte, not a distinct bank.
-export type PadBank = "cue" | "fx" | "loop" | "sampler";
+export type PadBank = "cue" | "fx" | "loop" | "sampler" | "cue2" | "fx2" | "roll" | "global"; // base banks, then their SHIFTED peers
 
 export type ControlSpec =
   | { kind: "action"; action: string; padBank?: PadBank } // button → HANDLERS[action]; padBank tags a performance pad with the hardware bank it came from
@@ -88,6 +88,8 @@ export interface MidiFeedbackMap {
    *  mode (FLX4: HOT CUE 0x00, PAD FX 0x10, BEAT JUMP 0x20, SAMPLER 0x30) shows that bank's lamps
    *  only on that bank's notes. Absent = every bank lights the hot-cue notes. */
   padLampBase?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
+  /** The same, for the bank's SHIFTED peer (fb.padModeAlt) when the firmware gives it its own notes. */
+  padLampBaseAlt?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
   // Pad-bank MODE buttons (FLX4: HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER). One note per
   // mode, lit on `noteStatus`; the active mode lights, the rest clear. Lets the board
   // reflect a mode change made anywhere (keyboard / on-screen / gamepad / session sync).

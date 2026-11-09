@@ -282,8 +282,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // only switch when the FAMILY differs, so an active shifted peer (ROLL/FX2/GLBL, set from the
           // shifted bank button) survives a plain pad hit in the same family.
           if (ev.padBank) {
+            // A SHIFTED peer's own block (FLX4: CUE2 0x40, FX2 0x50, ROLL 0x60, GLOBAL 0x70) names its
+            // mode exactly; a base block only says the family, so a live peer survives it.
+            const peer = ev.padBank === "cue2" || ev.padBank === "fx2" || ev.padBank === "roll" || ev.padBank === "global";
             const family = deck.padMode === "fx2" ? "fx" : deck.padMode === "roll" ? "loop" : deck.padMode === "global" ? "sampler" : deck.padMode === "cue2" ? "cue" : deck.padMode;
-            if (family !== ev.padBank) {
+            if (peer ? deck.padMode !== ev.padBank : family !== ev.padBank) {
               deck.setPadMode(ev.padBank);
               emitRef.current({ kind: "board", deck: id, id: "padMode", arg: ev.padBank });
             }
@@ -295,7 +298,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // (CC) treat as firm. Scoped to the controller — keyboard unchanged.
           const wasPaused = !deck.playing;
           const cueSlot = /^hotcue(\d)$/.exec(ev.action);
-          const hadCue = cueSlot ? deck.hotCues[cueBankBase(deck.padMode) + Number(cueSlot[1]) - 1] != null : false;
+          // ★ ONLY A HOT-CUE BANK LAUNCHES (operator, 2026-11-09: "in fx1 the first pad triggers play").
+          // The hotcueN action is every bank's pad N, so with hot cue 1 set, PAD FX pad 1 (or a
+          // sampler / beat-jump pad) on a paused deck read as "an existing cue" and started it.
+          const inCueBank = deck.padMode === "cue" || deck.padMode === "cue2";
+          const hadCue = cueSlot && inCueBank ? deck.hotCues[cueBankBase(deck.padMode) + Number(cueSlot[1]) - 1] != null : false;
           const isLoop = /^beatLoop\d$/.test(ev.action);
           const firm = (ev.velocity ?? 127) >= 40; // soft tap < 40 = jump only
           handlersRef.current[ev.action]?.(deck, id, sh); // sets / resizes / EXITS the loop (shared toggle)

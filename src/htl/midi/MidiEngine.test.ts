@@ -307,6 +307,19 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
   });
 });
 
+// ★ operator, 2026-11-09: "fx2 pads dont work". The shifted pad modes have their own note blocks.
+describe("MidiEngine — FLX4 shifted pad banks", () => {
+  it("a pad in PAD FX2's block (0x50+) is pad N, tagged fx2; KEYBOARD/BEAT LOOP/KEY SHIFT likewise", async () => {
+    const { events, send } = await flx();
+    send(0x97, 0x52, 0x7f);
+    send(0x99, 0x40, 0x7f);
+    send(0x97, 0x67, 0x7f);
+    send(0x99, 0x70, 0x7f);
+    const pads = events.filter((e) => e.type === "button").map((e) => [(e as { action: string }).action, (e as { deck?: string }).deck, (e as { padBank?: string }).padBank]);
+    expect(pads).toEqual([["hotcue3", "A", "fx2"], ["hotcue1", "B", "cue2"], ["hotcue8", "A", "roll"], ["hotcue1", "B", "global"]]);
+  });
+});
+
 describe("MidiEngine — FLX4 second hot-cue bank", () => {
   it("SHIFT + HOT CUE (0x69) → padModeCue with shift (App: CUE 2, hot cues 9–16)", async () => {
     const { events, send } = await flx();

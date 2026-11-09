@@ -784,11 +784,16 @@ export class MidiEngine {
     if (f.hotcues && padStatus != null) {
       // The live bank's own notes; a bank change re-sends all eight (that bank's lamps were never
       // told, or were told by a different state of the same bank).
+      // A shifted peer lights its OWN block when the profile has one, and the base block as well
+      // (cheap insurance while it is unconfirmed which of the two the firmware shows).
       const base = f.padLampBase?.[fb.padMode] ?? 0;
+      const alt = fb.padModeAlt ? f.padLampBaseAlt?.[fb.padMode] : undefined;
       const bankChanged = prev != null && (prev.padMode !== fb.padMode || !!prev.padModeAlt !== !!fb.padModeAlt);
       for (let i = 0; i < f.hotcues.length; i++) {
         const on = !!fb.hotcues[i];
-        if (bankChanged || on !== prev?.hotcues?.[i]) this.send([padStatus, base + f.hotcues[i], on ? 0x7f : 0x00]);
+        if (!bankChanged && on === prev?.hotcues?.[i]) continue;
+        this.send([padStatus, base + f.hotcues[i], on ? 0x7f : 0x00]);
+        if (alt != null) this.send([padStatus, alt + f.hotcues[i], on ? 0x7f : 0x00]);
       }
     }
     // Pad-mode bank LEDs: when the active mode changed, light the new button and clear the

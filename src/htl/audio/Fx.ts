@@ -618,6 +618,8 @@ export interface FxParam {
 // low dialled wet, in the middle of a curve morph that was being ramped politely around it.
 // Shared by BaseFxDevice's own throw lifecycle AND the EQ's separate curve-throw (Deck.eqThrow),
 // which can't inherit BaseFxDevice (fully-wet in-series, not a send) but wants the identical rule.
+/** Below this a dialled mix counts as OFF: a throw lifts it to the device's floor so the pad is heard. */
+export const MIX_SILENT = 0.05;
 export class MixFloorGuard {
   private prev: number | null = null;
   engage(get: () => number, set: (v: number) => void, floor: number | null) {
@@ -985,7 +987,11 @@ export abstract class BaseFxDevice implements FxDevice {
         this._releaseGen++; // cancel the pending re-bypass — we're sounding again
         this._releasePending = false;
         if (this._bypassed) this.internalSetBypass(false);
-        this._mixGuard.engage(() => this.mixAmount, (v) => this.setMix(v), this.throwMix);
+        // ★ THE PAD PLAYS THE WET YOU SET (operator, 2026-11-09: "the percentage overrides the current
+        // state"). A plain press is a HOLD now, so the floor used to fire on every touch and lift the
+        // mix to throwMix (0.85 on delay/reverb) over the dialled wet. It only rescues a mix that is
+        // effectively OFF now — the case it was for: a pad that lights and is silent.
+        this._mixGuard.engage(() => this.mixAmount, (v) => this.setMix(v), this.mixAmount < MIX_SILENT ? this.throwMix : null);
       }
       this.applyThrowBoost(true);
     } else {

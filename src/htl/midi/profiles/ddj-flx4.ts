@@ -61,13 +61,22 @@ function knob(target: "tempo" | "level" | "trim" | "eqHi" | "eqMid" | "eqLow" | 
 // mode — BUT each block is TAGGED with its `padBank`, so pressing a pad first switches the deck's pad
 // mode to that hardware bank (see the button case in useMidiRouting). The hardware bank you're
 // physically in becomes the source of truth, which is why switching banks used to leave every pad
-// stuck on CUE (the software mode never followed). Shifted peers (roll/fx2/global) share their base
-// bank's block, so they come from the SHIFT byte + the shifted bank buttons, not a distinct block.
-const PAD_BANKS: { base: number; bank: "cue" | "fx" | "loop" | "sampler" }[] = [
+// stuck on CUE (the software mode never followed).
+// ★ THE SHIFTED PEERS HAVE THEIR OWN BLOCKS (operator, 2026-11-09: "fx2 pads dont work"). This used
+// to say the peers share their base bank's block. That was never captured, and the DDJ-400 / FLX4
+// family gives each SHIFTED pad mode its own: KEYBOARD 0x40 (our CUE2), PAD FX2 0x50, BEAT LOOP 0x60
+// (our ROLL), KEY SHIFT 0x70 (our GLOBAL). Unbound, every FX2 pad press was dropped. Bound with
+// their own tags, a press there also switches the deck to that peer. If this unit DID share blocks
+// these bindings simply never fire. (Confirm in Debug ▸ MIDI monitor: SHIFT+PAD FX, then a pad.)
+const PAD_BANKS: { base: number; bank: "cue" | "fx" | "loop" | "sampler" | "cue2" | "fx2" | "roll" | "global" }[] = [
   { base: 0x00, bank: "cue" },
   { base: 0x10, bank: "fx" },
   { base: 0x20, bank: "loop" },
   { base: 0x30, bank: "sampler" },
+  { base: 0x40, bank: "cue2" },
+  { base: 0x50, bank: "fx2" },
+  { base: 0x60, bank: "roll" },
+  { base: 0x70, bank: "global" },
 ];
 function padBanks(): MidiBinding[] {
   const out: MidiBinding[] = [];
@@ -259,6 +268,7 @@ export const DDJ_FLX4: DeviceProfile = {
     // ★ SAMPLER PADS LIGHT LIKE CUES (operator, 2026-11-09: "in sampler mode, let the slots that are
     // filled light up like cue mode"). Each bank's pads are their own notes (PAD_BANKS above).
     padLampBase: { cue: 0x00, fx: 0x10, loop: 0x20, sampler: 0x30 },
+    padLampBaseAlt: { cue: 0x40, fx: 0x50, loop: 0x60, sampler: 0x70 },
     // Mode-button LEDs (same notes as the inputs). Lit when our software is in that bank,
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —
     // IF the unit accepts incoming note-on for these (verify with the Debug output prober).

@@ -110,7 +110,7 @@ export const CHAIN_STEM_ORDER: readonly StemName[] = ["drums", "bass", "vocals",
 import { isMobileDevice } from "../stems/models";
 import { decodeAudio } from "./decode";
 import { Eq3, EQ_HP, EQ_LP } from "./Eq3";
-import { FxRack, MixFloorGuard, type FxDevice, type FxKind, type FxSlot, type FxChain, type FxAddr } from "./Fx";
+import { FxRack, MixFloorGuard, MIX_SILENT, type FxDevice, type FxKind, type FxSlot, type FxChain, type FxAddr } from "./Fx";
 import type { FxChainSlot } from "../room/protocol";
 import { factoryFxPresets, type FxPreset } from "./fxPresets";
 import { CompFx } from "./CompFx";
@@ -2498,7 +2498,8 @@ export class Deck {
       this.eqSnapshot = this.eq.snapshotParams();
       this.eqThrowWasBypassed = this.eq.bypassed;
       if (this.eq.bypassed) this.eq.setBypass(false); // a thrown curve is audible even from bypass
-      this.eqMixGuard.engage(() => this.eq.mix, (v) => this.eq.setMix(v, Deck.EQ_THROW_RAMP_S), this.eq.paramDefault("mix"));
+      // the dialled mix stands; the floor only rescues one that is off (see BaseFxDevice.setThrow)
+      this.eqMixGuard.engage(() => this.eq.mix, (v) => this.eq.setMix(v, Deck.EQ_THROW_RAMP_S), this.eq.mix < MIX_SILENT ? this.eq.paramDefault("mix") : null);
       this.eq.applyCurve(p.params);
     } else {
       if (!this.clearEqThrow()) return;

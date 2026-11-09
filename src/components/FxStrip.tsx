@@ -582,12 +582,36 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   };
   const closeAdd = () => { setAddMenu(null); setAddHover(null); setAddFly(null); };
   // The live operations, re-bound every render (the ctl closure below is created once).
-  const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {}, remove: () => {}, disarm: () => {}, focusOthers: (): FxKind[] => [] });
+  const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {}, remove: () => {}, disarm: () => {}, focusOthers: (): FxKind[] => [], aim: () => {} });
+  // ★ THE BOARD'S STOP LIVES IN THE FOCUSED CHAIN (operator, 2026-11-08: "the controls on chainfx
+  // and when no fx selected are buggy if no fx default to add"). The selected tab is a deck-wide
+  // index, so after the focus moved to another chain it still pointed into the old one: FX SELECT
+  // opened, and SHIFT+FX SELECT armed, an effect the board was not aimed at (on an empty chain,
+  // the master EQ). Every board gesture aims first: an empty chain sits on the ＋; a selection
+  // outside the chain moves to the chain's first effect.
+  const aim = () => {
+    const c = deck.fxChain(deck.fxFocus);
+    if (!c) return;
+    if (!c.devices.length) {
+      plusStopRef.current = true;
+      setPlusStop(true);
+      return;
+    }
+    if (plusStopRef.current) return;
+    if (c.devices.includes(deck.fxDeviceAt(live.current.cur) as (typeof c.devices)[number])) return;
+    const idx = deck.fxDevices.indexOf(c.devices[0]);
+    if (idx >= 0) {
+      live.current = { ...live.current, cur: idx };
+      select(idx);
+    }
+  };
   boardOps.current = {
     disarm,
     focusOthers,
+    aim,
     open: () => {
       if (locked) return;
+      aim();
       disarm();
       cancelMenuTimer();
       setRowMenu(null);
@@ -642,7 +666,9 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       else closeAdd();
     },
     remove: () => {
-      if (locked || plusStopRef.current) return;
+      if (locked) return;
+      aim();
+      if (plusStopRef.current) return;
       const slot = live.current.cur;
       const dev = deck.fxDeviceAt(slot);
       if (!dev) return disarm();
@@ -736,6 +762,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; }
         setMenu(null); // moving to another effect closes the preset browse
         boardOps.current.disarm();
+        boardOps.current.aim();
         const c = deck.fxChain(deck.fxFocus);
         if (!c) return;
         const n = c.devices.length;
@@ -749,6 +776,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         if (idx >= 0) select(idx);
       },
       moveSel: (dir) => {
+        boardOps.current.aim();
         if (plusStopRef.current) return; // the ＋ is not a device: nothing to reorder
         boardOps.current.disarm();
         moveSelBy(dir);
@@ -765,7 +793,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         setMenu({ slot, x, y });
       },
       stepChain: (dir) => {
-        if (plusStopRef.current) return;
         boardOps.current.disarm();
         const list = deck.fxChainList;
         if (list.length < 2) return;
@@ -773,6 +800,10 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         const next = list[(at + dir + list.length) % list.length];
         setSelChainId(next.id);
         deck.setFxFocus(next.id);
+        // land inside the new chain: its first effect, or the ＋ when it has none
+        plusStopRef.current = false;
+        setPlusStop(false);
+        boardOps.current.aim();
         refresh();
       },
       selectKind: (kind) => {

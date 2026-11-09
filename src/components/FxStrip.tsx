@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { usePhone } from "../htl/state/usePhone";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
@@ -18,12 +18,14 @@ import { PromptModal } from "./Dialog";
 import { StemPicker, STEMS } from "./StemPicker";
 import { Menu, MenuFly } from "./ContextMenu";
 import { aimEnter } from "./lib/menuAim";
-import { back as boardBack, move as boardMove, openBoard, point as boardPoint, press as boardPress, top as boardTop, type BoardEffect, type BoardRow, type BoardState } from "./fxBoardMenu";
+import { back as boardBack, move as boardMove, openAdd as boardOpenAdd, openEdit as boardOpenEdit, press as boardPress, stepTabs, top as boardTop, type BoardEffect, type BoardRow, type BoardState } from "./fxBoardMenu";
 import { bankChainRows, chainOf, CHAIN_KIND, resolveFxRows, presetOf, isGroup, isRef, reorderTop, reorderInGroup, fileIntoGroup, moveOutOfGroup, moveBetweenGroups, addFxSection, deleteFxSection, deleteFxRow, revertFxRow, renameFxSection, materialiseFxRow, type FxRow, type FxLeaf, type FxPath } from "@htl/audio";
 
 // Every kind a chain can be given. The pad-FX bank plus the two channel devices — the same set
 // the rack has always known, now offered per chain instead of once globally.
 const ALL_KINDS = ["eq", "delay", "reverb", "saturator", "crush", "mod", "gate", "noise", "comp"] as const;
+// SHIFT+FX SELECT removes the selected effect on a SECOND press inside this window.
+const REMOVE_ARM_MS = 2000;
 
 import { MixFader } from "./MixFader";
 import { useLongPress } from "./useLongPress";
@@ -72,9 +74,11 @@ export interface FxStripCtl {
   openMenu: (kind: FxKind, x: number, y: number) => void; // that device's own menu, at a cursor
   cyclePreset: (dir: number) => void; // FX SELECT: step Default → factory bank → wrap, on the selected effect
   closeMenu: () => void; // dismiss the preset browse (hardware bypass/mix — a DJ never clicks the backdrop)
-  /** FX SELECT's board menu (fxBoardMenu.ts): PRESS = in / choose, SHIFT+PRESS = back / close,
-   *  BEAT ◀▶ = move. Opens on the selected effect's presets, with ＋ Add effect and ✕ Remove. */
-  boardMenu: { isOpen: () => boolean; open: () => void; press: () => void; back: () => void; move: (dir: number) => void };
+  /** FX SELECT drives the SAME menus the mouse opens (fxBoardMenu.ts). Closed: `open` opens the
+   *  selected effect's preset menu, or the add picker when the ＋ stop is selected; `remove` is
+   *  SHIFT+FX SELECT (arms, then removes on a second press). Open: `move` = BEAT ◀▶, `press` =
+   *  FX SELECT (in / choose), `back` = SHIFT+BEAT ◀ (out; at the top close, undoing an audition). */
+  boardMenu: { isOpen: () => boolean; open: () => void; press: () => void; back: () => void; move: (dir: number) => void; remove: () => void; plusStop: () => boolean };
 }
 
 /** Where a flyout hangs, and how wide it is. ★ THE WIDTH IS MEASURED, NOT CHOSEN — it comes off
@@ -363,6 +367,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // with the pre-restore value (the EQ) and overwrite the very thing it was about to read back.
   const select = (i: number) => {
     setSel(i);
+    setPlusStop(false);
     const k = deck.fxDevices[i]?.kind;
     if (k) {
       try {
@@ -530,84 +535,189 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     refresh();
   };
 
-  // ★ THE FX SELECT BOARD MENU (operator, 2026-11-08 — the agreed design; see fxBoardMenu.ts). Its
-  // own small menu in the shared Menu chrome, so the board's cursor has one honest list to walk:
-  // the selected effect's presets (sections drill in), then ＋ Add effect and ✕ Remove. Every
-  // apply / add / remove goes through the SAME functions the mouse menus use, so it syncs the same.
-  type Board = { st: BoardState; slot: number; x: number; y: number; orig: { params: Record<string, number>; name: string } };
+  // ★ FX SELECT DRIVES THE MENUS THE MOUSE OPENS (operator, 2026-11-08: "making the menus the same
+  // even the flyovers so there is not two menus"). The board used to draw its own small menu; now
+  // its cursor walks the right-click preset menu (and its section flyouts) and the ＋ add picker
+  // (and its effect → preset flyouts) — see fxBoardMenu.ts for the grammar. The highlighted row
+  // wears `.board-cursor`; a flyout the cursor lands on opens exactly as a hover opens it. Every
+  // apply / add / remove goes through the same functions the mouse uses, so it syncs the same.
+  type Board = { st: BoardState; slot: number; orig: { params: Record<string, number>; name: string } };
   const [board, setBoard] = useState<Board | null>(null);
   const boardLive = useRef<Board | null>(null);
   boardLive.current = board;
-  const boardMenuRef = useRef<HTMLDivElement | null>(null);
-  // Rows for an effect's presets as the arrangement shows them, sections nested one deep.
+  // The ＋ as one more stop on BEAT ◀▶ (after the last tab, wrapping): FX SELECT there opens the
+  // add picker. Selecting a tab by any route leaves it.
+  const [plusStop, setPlusStop] = useState(false);
+  const plusStopRef = useRef(false);
+  plusStopRef.current = plusStop;
+  const plusRef = useRef<HTMLButtonElement | null>(null);
+  // SHIFT+FX SELECT removes the selected effect — on the SECOND press within REMOVE_ARM_MS. The
+  // first one tints the tab and says so; any other gesture disarms. (A dialled effect is too much
+  // to lose to one stray SHIFT.)
+  const [armed, setArmed] = useState<number | null>(null);
+  const armTimer = useRef<number | undefined>(undefined);
+  const disarm = () => {
+    if (armTimer.current) clearTimeout(armTimer.current);
+    armTimer.current = undefined;
+    setArmed(null);
+  };
+  useEffect(() => () => { if (armTimer.current) clearTimeout(armTimer.current); }, []);
+  // An effect's arrangement as cursor rows: what the menu renders, in its order, each row carrying
+  // its index in that list (`at`) so the strip can mark the highlighted element.
   const boardRowsFor = (kind: string): BoardRow[] =>
-    resolveFxRows(kind).flatMap((r): BoardRow[] => {
+    resolveFxRows(kind).flatMap((r, i): BoardRow[] => {
       if (isGroup(r)) {
-        const items = r.items.flatMap((leaf): BoardRow[] => {
+        const items = r.items.flatMap((leaf, j): BoardRow[] => {
           const p = presetOf(kind, leaf);
-          return p ? [{ t: "preset", preset: p }] : [];
+          return p ? [{ t: "preset", at: j, preset: p }] : [];
         });
-        return [{ t: "section", name: r.name, items }];
+        return [{ t: "section", at: i, name: r.name, items }];
       }
       const p = presetOf(kind, r);
-      return p ? [{ t: "preset", preset: p }] : [];
+      return p ? [{ t: "preset", at: i, preset: p }] : [];
     });
+  const focusOthers = (): FxKind[] => {
+    const c = deck.fxChain(deck.fxFocus);
+    return c ? (ALL_KINDS.filter((k) => !c.devices.some((d) => d.kind === k)) as FxKind[]) : [];
+  };
+  const closeAdd = () => { setAddMenu(null); setAddHover(null); setAddFly(null); };
   // The live operations, re-bound every render (the ctl closure below is created once).
-  const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {} });
+  const boardOps = useRef({ open: () => {}, run: (_s: BoardState | null, _e?: BoardEffect) => {}, remove: () => {}, disarm: () => {}, focusOthers: (): FxKind[] => [] });
   boardOps.current = {
+    disarm,
+    focusOthers,
     open: () => {
       if (locked) return;
+      disarm();
+      cancelMenuTimer();
+      setRowMenu(null);
+      if (plusStopRef.current) {
+        const kinds = focusOthers();
+        if (!kinds.length) return;
+        const r = plusRef.current?.getBoundingClientRect();
+        setMenu(null);
+        setPresetFly(null);
+        setSelChainId(deck.fxFocus); // the picker lists what THIS chain can still take
+        setAddHover(null);
+        setAddFly(null);
+        setAddMenu({ x: r ? r.left : window.innerWidth / 2, y: r ? r.bottom + 4 : window.innerHeight / 3 });
+        setBoard({ st: boardOpenAdd(kinds.map((k, i): BoardRow => ({ t: "kind", at: i, kind: k }))), slot: -1, orig: { params: {}, name: "" } });
+        return;
+      }
       const slot = live.current.cur;
       const dev = deck.fxDeviceAt(slot);
       if (!dev) return;
-      cancelMenuTimer();
-      setMenu(null);
+      closeAdd();
       const tabEl = tabsRef.current?.children[tabAt(slot)] as HTMLElement | undefined;
       const r = tabEl?.getBoundingClientRect();
       const name = presetNameRef.current[dev.kind] ?? "";
-      setBoard({
-        st: openBoard(KIND_LABEL[dev.kind] ?? dev.kind.toUpperCase(), dev.kind, boardRowsFor(dev.kind), name),
-        slot,
-        x: r ? r.left : window.innerWidth / 2,
-        y: r ? r.bottom + 4 : window.innerHeight / 3,
-        orig: { params: dev.snapshotParams(), name },
-      });
+      setPresetFly(null);
+      setMenu({ slot, x: r ? r.left : window.innerWidth / 2, y: r ? r.bottom + 4 : window.innerHeight / 3 });
+      setBoard({ st: boardOpenEdit(boardRowsFor(dev.kind), name), slot, orig: { params: dev.snapshotParams(), name } });
     },
     run: (st, effect) => {
       const b = boardLive.current;
       if (!b) return;
-      const dev = deck.fxDeviceAt(b.slot);
-      if (effect && dev) {
-        if (effect.t === "audition") {
-          if (effect.row.t === "default") {
-            presetNameRef.current[dev.kind] = "";
-            applyDefault(b.slot);
-          } else if (effect.row.t === "preset") applyPresetNamed(b.slot, effect.row.preset);
-        } else if (effect.t === "revert" || effect.t === "restore") {
-          for (const k in b.orig.params) deck.setFxParam(b.slot, k, b.orig.params[k]);
-          presetNameRef.current[dev.kind] = b.orig.name;
-          armEq(dev, b.orig.name || "Default", b.orig.params);
-          syncDevice(dev);
-          refresh();
-        } else if (effect.t === "remove") {
-          const holder = deck.fxChainList.find((c) => c.devices.includes(dev));
-          removeDeviceFromChain(dev.kind, holder?.id ?? "master");
-        }
+      const dev = b.slot >= 0 ? deck.fxDeviceAt(b.slot) : null;
+      const restore = () => {
+        if (!dev) return;
+        for (const k in b.orig.params) deck.setFxParam(b.slot, k, b.orig.params[k]);
+        presetNameRef.current[dev.kind] = b.orig.name;
+        armEq(dev, b.orig.name || "Default", b.orig.params);
+        syncDevice(dev);
+        refresh();
+      };
+      if (effect?.t === "audition" && dev) {
+        if (effect.row.t === "default") {
+          presetNameRef.current[dev.kind] = "";
+          applyDefault(b.slot, false);
+        } else if (effect.row.t === "preset") applyPresetNamed(b.slot, effect.row.preset, false);
+      } else if (effect?.t === "restore" || effect?.t === "revert") restore();
+      else if (effect?.t === "add") addDeviceToChain(effect.kind as FxKind, deck.fxFocus, effect.preset ?? undefined);
+      if (st) return setBoard({ ...b, st });
+      // closing: whichever window the board had open goes with it
+      setBoard(null);
+      setPresetFly(null);
+      if (b.st.mode === "edit") closeMenu();
+      else closeAdd();
+    },
+    remove: () => {
+      if (locked || plusStopRef.current) return;
+      const slot = live.current.cur;
+      const dev = deck.fxDeviceAt(slot);
+      if (!dev) return disarm();
+      if (armed !== slot) {
+        if (armTimer.current) clearTimeout(armTimer.current);
+        setArmed(slot);
+        armTimer.current = window.setTimeout(() => { armTimer.current = undefined; setArmed(null); }, REMOVE_ARM_MS);
+        return;
       }
-      if (effect?.t === "add") addDeviceToChain(effect.kind as FxKind, deck.fxFocus, effect.preset ?? undefined);
-      setBoard(st ? { ...b, st } : null);
+      disarm();
+      const holder = deck.fxChainList.find((c) => c.devices.includes(dev));
+      removeDeviceFromChain(dev.kind, holder?.id ?? "master"); // refused (the master EQ): just disarmed
     },
   };
   const boardSource = {
-    addList: (): BoardRow[] => others.map((k) => ({ t: "kind", kind: k, label: KIND_LABEL[k] ?? k.toUpperCase() })),
-    kindRows: (kind: string): BoardRow[] => [{ t: "default" }, ...boardRowsFor(kind)],
+    kindRows: (kind: string): BoardRow[] | null => {
+      const rows = boardRowsFor(kind);
+      return rows.some((r) => r.t !== "section" || r.items.length > 0) ? rows : null;
+    },
   };
   const boardSourceRef = useRef(boardSource);
   boardSourceRef.current = boardSource;
-  // The highlighted row stays in view as the cursor walks a long bank.
+  // The mouse can close these menus by itself (a click applies and closes, the backdrop closes):
+  // the board's cursor goes with the window it was in.
   useEffect(() => {
-    boardMenuRef.current?.querySelector(".board-cursor")?.scrollIntoView({ block: "nearest" });
-  }, [board]);
+    if (board && ((board.st.mode === "edit" && !menu) || (board.st.mode === "add" && !addMenu))) setBoard(null);
+  }, [board, menu, addMenu]);
+  /** Where the highlight is, as the row index `win` renders — or null when it is in another window.
+   *  Windows: "p" the preset menu, "pf" its section flyout, "a" the add picker, "af" an effect's
+   *  presets beside it, "aff" a section inside those. */
+  const cursorAt = (win: "p" | "pf" | "a" | "af" | "aff"): number | null => {
+    if (!board) return null;
+    const depth = board.st.stack.length;
+    const want = board.st.mode === "edit" ? (win === "p" ? 1 : win === "pf" ? 2 : 0) : win === "a" ? 1 : win === "af" ? 2 : win === "aff" ? 3 : 0;
+    if (want !== depth) return null;
+    const l = boardTop(board.st);
+    return l.rows[l.cursor]?.at ?? null;
+  };
+  const bc = (win: "p" | "pf" | "a" | "af" | "aff", at: number) => (cursorAt(win) === at ? "board-cursor" : "");
+  // A flyout the cursor is on (or in) is open, exactly as a hover opens it — anchored on its row.
+  useLayoutEffect(() => {
+    if (!board) return;
+    const st = board.st;
+    const rowAt = (d: number) => st.stack[d]?.rows[st.stack[d].cursor];
+    const el = (sel: string) => document.querySelector<HTMLElement>(sel);
+    if (st.mode === "edit") {
+      const r = rowAt(0);
+      if (r?.t === "section") {
+        if (presetFly?.at !== r.at) {
+          const e = menuRef.current?.querySelector<HTMLElement>(`[data-fly-row="fx:${r.at}"]`);
+          if (e) setPresetFly({ at: r.at, name: r.name, ...flyFrom(e) });
+        }
+      } else if (presetFly) setPresetFly(null);
+    } else {
+      const k = rowAt(0);
+      if (k?.t === "kind") {
+        const has = boardSourceRef.current.kindRows(k.kind) != null;
+        if (!has) {
+          if (addHover) setAddHover(null);
+        } else if (addHover?.kind !== k.kind) {
+          const e = el(`[data-add-row="${k.kind}"]`);
+          if (e) { setAddFly(null); setAddHover({ kind: k.kind as FxKind, ...flyFrom(e) }); }
+        }
+      }
+      const r = st.stack.length >= 2 ? rowAt(1) : undefined;
+      if (r?.t === "section") {
+        if (addFly?.at !== r.at) {
+          const e = el(`[data-addfly-row="add:${r.at}"]`);
+          if (e) setAddFly({ at: r.at, name: r.name, ...flyFrom(e) });
+        }
+      } else if (addFly) setAddFly(null);
+    }
+    // the highlighted row stays in view inside its scroller (a 240px menu, a flyout)
+    requestAnimationFrame(() => document.querySelectorAll<HTMLElement>(".fx-preset-menu .board-cursor").forEach((e) => e.scrollIntoView({ block: "nearest" })));
+  });
 
   // The FLX BEAT FX section drives this strip over `ctlRef`. The rack is fixed-membership now
   // (EQ + the permanent pad-FX bank — no add/remove), so the section is a SINGLE-EFFECT unit over
@@ -625,14 +735,24 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       navSel: (dir) => {
         if (menuTimerRef.current) { clearTimeout(menuTimerRef.current); menuTimerRef.current = null; }
         setMenu(null); // moving to another effect closes the preset browse
+        boardOps.current.disarm();
         const c = deck.fxChain(deck.fxFocus);
-        if (!c || !c.devices.length) return;
-        const here = c.devices.findIndex((d) => d === deck.fxDeviceAt(live.current.cur));
-        const next = c.devices[Math.max(0, Math.min(c.devices.length - 1, (here < 0 ? 0 : here) + dir))];
-        const idx = deck.fxDevices.indexOf(next);
+        if (!c) return;
+        const n = c.devices.length;
+        // ★ THE ＋ IS ONE MORE STOP (operator, 2026-11-08: "making add accesible with the right left
+        // arrows"): after the last tab, wrapping — when the chain can still take an effect.
+        const plus = boardOps.current.focusOthers().length > 0;
+        const here = plusStopRef.current ? n : Math.max(0, c.devices.findIndex((d) => d === deck.fxDeviceAt(live.current.cur)));
+        const to = stepTabs(here, n, plus, dir);
+        if (to >= n) return setPlusStop(true);
+        const idx = deck.fxDevices.indexOf(c.devices[to]);
         if (idx >= 0) select(idx);
       },
-      moveSel: (dir) => moveSelBy(dir),
+      moveSel: (dir) => {
+        if (plusStopRef.current) return; // the ＋ is not a device: nothing to reorder
+        boardOps.current.disarm();
+        moveSelBy(dir);
+      },
       // Right-clicking an FX pad opens the DEVICE's menu, the way right-clicking a sampler pad
       // opens that pad's. Two banks side by side answering the same gesture two different ways was
       // the last thing separating them.
@@ -645,6 +765,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         setMenu({ slot, x, y });
       },
       stepChain: (dir) => {
+        if (plusStopRef.current) return;
+        boardOps.current.disarm();
         const list = deck.fxChainList;
         if (list.length < 2) return;
         const at = Math.max(0, list.findIndex((c) => c.id === deck.fxFocus));
@@ -708,10 +830,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       closeMenu,
       boardMenu: {
         isOpen: () => boardLive.current != null,
+        plusStop: () => plusStopRef.current,
+        remove: () => boardOps.current.remove(),
         open: () => boardOps.current.open(),
         move: (dir) => {
           const b = boardLive.current;
           if (!b) return;
+          boardOps.current.disarm();
           const r = boardMove(b.st, dir);
           boardOps.current.run(r.state, r.effect);
         },
@@ -938,7 +1063,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   const armEq = (d: { kind: FxKind; snapshotParams(): Record<string, number> }, name: string, params?: Record<string, number>) => {
     if (d.kind === "eq") deck.armEqPreset({ name, params: params ?? d.snapshotParams() });
   };
-  const applyPreset = (slot: number, p: { name: string; params: Record<string, number> }) => {
+  const applyPreset = (slot: number, p: { name: string; params: Record<string, number> }, close = true) => {
     if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
@@ -947,7 +1072,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     for (const k in p.params) if (k !== "mix") deck.setFxParam(slot, k, p.params[k]);
     armEq(d, p.name, p.params);
     syncDevice(d);
-    setMenu(null);
+    if (close) setMenu(null); // the board's audition keeps it open
     refresh();
   };
   // "Default" is the flat PRESET, and a preset never touches the blend or the on/off — same rule
@@ -969,14 +1094,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     refresh();
   };
 
-  const applyDefault = (slot: number) => {
+  const applyDefault = (slot: number, close = true) => {
     if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (!d) return;
     deck.resetFxParamsAt(slot);
     armEq(d, "Default"); // the device is AT its defaults now → snapshot them as the armed curve
     syncDevice(d);
-    setMenu(null);
+    if (close) setMenu(null);
     refresh();
   };
   const saveCurrent = (slot: number) => {
@@ -988,11 +1113,11 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   /** Apply a preset AND remember it by NAME. The cursor used to be the factory bank's INDEX, which
    *  stopped meaning anything the moment the list became reorderable, groupable and deletable —
    *  and would have silently browsed to the wrong preset rather than failing. */
-  const applyPresetNamed = (slot: number, p: { name: string; params: Record<string, number> }) => {
+  const applyPresetNamed = (slot: number, p: { name: string; params: Record<string, number> }, close = true) => {
     if (locked) return; // watch-only
     const d = deck.fxDeviceAt(slot);
     if (d) presetNameRef.current[d.kind] = p.name;
-    applyPreset(slot, p);
+    applyPreset(slot, p, close);
   };
 
   // --- shared toolbar (acts on the selected device) ---
@@ -1105,7 +1230,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           openRowMenu(menuDev.kind, e.clientX, e.clientY, path, false, p.name, factory);
         }}
       >
-        <button className={`fx-palette-item fx-preset-apply ${factory ? "is-factory" : ""}`} role="menuitem" title={`Apply ${p.name} — right-click for more, drag to reorder`} onClick={() => { if (presetDragged.current) return; applyPresetNamed(menu.slot, p); }}>
+        <button className={`fx-palette-item fx-preset-apply ${factory ? "is-factory" : ""} ${path.length === 1 ? bc("p", path[0]) : bc("pf", path[1])}`} role="menuitem" title={`Apply ${p.name} — right-click for more, drag to reorder`} onClick={() => { if (presetDragged.current) return; applyPresetNamed(menu.slot, p); }}>
           {p.name}
         </button>
       </div>
@@ -1154,12 +1279,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   }, [addMenu, others.join(","), presetTick]);
   const addGone = useMemo(() => (addHover ? loadFxBank(addHover.kind).gone.length : 0), [addHover, presetTick]);
   // One row, both windows — the same markup the preset menu uses for a leaf, minus the editing.
-  const addLeaf = (l: FxLeaf, key: string) => {
+  const addLeaf = (l: FxLeaf, key: string, cursor = "") => {
     if (!addHover) return null;
     const p = presetOf(addHover.kind, l);
     if (!p) return null;
     return (
-      <button key={key} className={`fx-palette-item fx-preset-apply ${isRef(l) ? "is-factory" : ""}`} role="menuitem" title={p.name} onClick={() => { addDeviceToChain(addHover.kind, selChainId, p); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
+      <button key={key} className={`fx-palette-item fx-preset-apply ${isRef(l) ? "is-factory" : ""} ${cursor}`} role="menuitem" title={p.name} onClick={() => { addDeviceToChain(addHover.kind, selChainId, p); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
         {p.name}
       </button>
     );
@@ -1178,7 +1303,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // closes them at all in that case. The peek is a KEEP for the chain one: it opens from a row
   // inside that window, and closing its parent out from under it is the same bug inverted.
   useHoverDismiss(
-    presetFly && !rowMenu && presetDrag.from == null && sectionDrag.from == null ? `pfly:${presetFly.at}` : null,
+    presetFly && !board && !rowMenu && presetDrag.from == null && sectionDrag.from == null ? `pfly:${presetFly.at}` : null,
     [".fx-menu-fly", `[data-fly-row="fx:${presetFly?.at ?? -1}"]`],
     () => setPresetFly(null),
   );
@@ -1188,12 +1313,12 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
     () => setChainFly(null),
   );
   useHoverDismiss(
-    addHover && !addFly ? `add:${addHover.kind}` : null,
+    addHover && !addFly && !board ? `add:${addHover.kind}` : null,
     [".fx-menu-fly", `[data-add-row="${addHover?.kind ?? ""}"]`],
     () => setAddHover(null),
   );
   useHoverDismiss(
-    addFly ? `addfly:${addFly.at}` : null,
+    addFly && !board ? `addfly:${addFly.at}` : null,
     [".fx-menu-fly", `[data-addfly-row="add:${addFly?.at ?? -1}"]`],
     () => setAddFly(null),
   );
@@ -1276,13 +1401,14 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                     {tabs.map((d, i) => (
                       <button
                         key={d.kind}
-                        className={`fx-tab ${cur === gi(i) ? "sel" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
+                        className={`fx-tab ${cur === gi(i) && !plusStop ? "sel" : ""} ${armed === gi(i) ? "remove-armed" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
                         onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); if (phone) onOpenFx?.(); }}
                         onContextMenu={(e) => { e.stopPropagation(); openPresetMenu(e, gi(i)); }}
                         {...tabLong.bind(gi(i))}
                         {...tabDrag.bind(i)}
                         role="tab"
                         aria-selected={cur === gi(i)}
+                        title={armed === gi(i) ? "SHIFT+FX SELECT again to remove" : undefined}
                       >
                         {KIND_LABEL[d.kind] ?? d.kind.toUpperCase()}
                       </button>
@@ -1295,7 +1421,8 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                       chain's own device list, the target is the thing you are looking at. */}
                   {others.length > 0 && (
                     <button
-                      className="fx-tab fx-tab-add"
+                      ref={plusRef}
+                      className={`fx-tab fx-tab-add ${plusStop ? "sel" : ""}`}
                       onClick={(e) => { cancelMenuTimer(); setMenu(null); setAddMenu({ x: e.clientX, y: e.clientY }); }}
                       aria-label="Add an effect to this chain"
                     >
@@ -1453,46 +1580,6 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
       )}
       </div>
 
-      {/* FX SELECT's board menu — see the block above `ctlRef`. The mouse points the same highlight
-          (no audition on hover) and a click is a PRESS on that row; clicking away keeps what is on. */}
-      {board && (() => {
-        const lvl = boardTop(board.st);
-        const kind = deck.fxDeviceAt(board.slot)?.kind;
-        const inUse = kind ? presetNameRef.current[kind] ?? "" : "";
-        const label = (r: BoardRow) =>
-          r.t === "default" ? "Default"
-          : r.t === "preset" ? r.preset.name
-          : r.t === "section" ? `${r.name}  ›`
-          : r.t === "add" ? "＋ Add effect"
-          : r.t === "remove" ? (board.st.confirmRemove ? "Press again to remove" : "✕ Remove")
-          : r.label;
-        return (
-          <Menu x={board.x} y={board.y} innerRef={boardMenuRef} head={board.st.stack.map((l) => l.title).join(" › ")} onClose={() => setBoard(null)}>
-            {lvl.rows.map((r, i) => {
-              const sel = lvl.mode === "edit" && ((r.t === "default" && inUse === "") || (r.t === "preset" && r.preset.name === inUse));
-              return (
-                <button
-                  key={`${lvl.title}:${i}`}
-                  className={`fx-palette-item ${i === lvl.cursor ? "board-cursor" : ""} ${sel ? "sel" : ""} ${r.t === "remove" ? "board-danger" : ""} ${r.t === "add" || r.t === "remove" ? "board-act" : ""}`}
-                  role="menuitem"
-                  onMouseEnter={() => setBoard((b) => (b ? { ...b, st: boardPoint(b.st, i) } : b))}
-                  onClick={() => {
-                    const b = boardLive.current;
-                    if (!b) return;
-                    const st = boardPoint(b.st, i);
-                    const res = boardPress(st, boardSourceRef.current);
-                    boardLive.current = { ...b, st };
-                    boardOps.current.run(res.state, res.effect);
-                  }}
-                >
-                  {label(r)}
-                </button>
-              );
-            })}
-          </Menu>
-        );
-      })()}
-
       {/* Preset menu — right-click an effect tab. Same FxMenu as the chain menu and the picker:
           one widget, one place to change it. */}
       {menu && menuDev && (
@@ -1508,7 +1595,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           // screen and no longer where the list happens to end.
           chin={
             <>
-              <button className={`fx-palette-item ${activePresetName === "" ? "sel" : ""}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
+              <button className={`fx-palette-item ${activePresetName === "" ? "sel" : ""} ${bc("p", -1)}`} role="menuitem" onClick={() => applyDefault(menu.slot)}>
                 Default
               </button>
               {/* The factory bank used to be pinned here as a second, read-only list. It is merged
@@ -1598,7 +1685,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                   {/* The COUNT LEADS, at a fixed width so every name starts on the same column —
                       a count that re-indents each heading by its own number of digits reads as a
                       ragged list. */}
-                  <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"} · right-click for more`} onClick={(e) => { if (presetDragged.current) return; setPresetFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
+                  <button className={`fx-palette-item fx-section-name ${bc("p", i)}`} role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"} · right-click for more`} onClick={(e) => { if (presetDragged.current) return; setPresetFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) }); }}>
                     <i className="fx-section-n">{r.items.length}</i>
                     <span className="fx-section-label">{r.name}</span>
                   </button>
@@ -1899,7 +1986,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
               <button
                 key={k}
                 data-add-row={k}
-                className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""}`}
+                className={`fx-palette-item ${addHover?.kind === k ? "hot" : ""} ${bc("a", others.indexOf(k))}`}
                 role="menuitem"
                 onMouseEnter={(e) => { const el = e.currentTarget; aimEnter(el, () => { if (has) openFly(el); else { setAddHover(null); setAddFly(null); } }); }}
                 onClick={() => { addDeviceToChain(k); setAddMenu(null); setAddHover(null); setAddFly(null); }}
@@ -1943,7 +2030,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           // different orders.
           chin={
             <>
-              <button className="fx-palette-item" role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
+              <button className={`fx-palette-item ${bc("af", -1)}`} role="menuitem" onClick={() => { addDeviceToChain(addHover.kind); setAddMenu(null); setAddHover(null); setAddFly(null); }}>
                 Default
               </button>
               {addGone > 0 && <div className="fx-preset-note">{addGone} hidden — Settings ▸ Audio</div>}
@@ -1958,13 +2045,13 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                 className={`fx-preset-row fx-section-row ${addFly?.at === i ? "hot" : ""}`}
                 onMouseEnter={(e) => { const el = e.currentTarget; aimEnter(el, () => setAddFly({ at: i, name: r.name, ...flyFrom(el) })); }}
               >
-                <button className="fx-palette-item fx-section-name" role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"}`} onClick={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) })}>
+                <button className={`fx-palette-item fx-section-name ${bc("af", i)}`} role="menuitem" title={`${r.name} — ${r.items.length} preset${r.items.length === 1 ? "" : "s"}`} onClick={(e) => setAddFly({ at: i, name: r.name, ...flyFrom(e.currentTarget.parentElement as HTMLElement) })}>
                   <i className="fx-section-n">{r.items.length}</i>
                   <span className="fx-section-label">{r.name}</span>
                 </button>
               </div>
             ) : (
-              addLeaf(r, `al:${i}`)
+              addLeaf(r, `al:${i}`, bc("af", i))
             ),
           )}
         </MenuFly>
@@ -1974,7 +2061,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
         if (!g || !isGroup(g)) return null;
         return (
           <MenuFly layer={3} anchor={addFly.anchor} head={g.name} onEnter={() => setAddFly(addFly)} onLeave={() => setAddFly(null)}>
-            {g.items.map((l, i) => addLeaf(l, `af:${i}`))}
+            {g.items.map((l, i) => addLeaf(l, `af:${i}`, bc("aff", i)))}
           </MenuFly>
         );
       })()}

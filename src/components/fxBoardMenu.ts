@@ -1,17 +1,20 @@
-// THE FX SELECT BOARD MENU (operator, 2026-11-08: FX SELECT press "to trigger the plus button, then
-// repurpose the left right arrows to allow me to select through the menu, another press would select
-// the effect…"). The design that was agreed fixes the plan's holes (an accidental SHIFT deleting a
-// dialled effect, no way out, a modifier that changed meaning by context, no back for the nesting,
-// and losing quick preset cycling) with ONE grammar that never changes meaning:
-//   PRESS        = go in / choose
-//   SHIFT+PRESS  = back one level; at the top, close (undoing an auditioned preset)
-//   BEAT ◀ / ▶   = move the highlight (wraps)
-// It opens on the SELECTED effect's own menu — its presets, the highlight on the one in use — with
-// "＋ Add effect" and "✕ Remove" under them. Landing on a preset AUDITIONS it (applies it live), so
-// "press, ▶, ▶" is quick preset browsing you can back out of. Remove takes a second press.
+// THE FX SELECT BOARD CURSOR (operator, 2026-11-08). The board drives the SAME menus the mouse
+// opens — the effect's right-click preset menu with its section flyouts, and the ＋ add picker with
+// its effect → preset flyouts. ("making the menus the same even the flyovers so there is not two
+// menus".) It used to draw a second, board-only menu; that is gone. This module is only the cursor:
+// which row of which window is highlighted, and what a gesture does. FxStrip owns the windows.
 //
-// This module is the pure state machine: no React, no deck. FxStrip renders the state and carries
-// out the `Effect`s it returns (apply / revert / add / remove / close).
+// The grammar, with a menu open:
+//   BEAT ◀ / ▶      = move the highlight through the window it is in (wraps)
+//   PRESS           = go in (a section / an effect opens its flyout) or choose (a preset)
+//   SHIFT+BEAT ◀    = back one window; at the top, close (undoing an audition)
+// In the preset menu, landing on a preset (or Default) AUDITIONS it — it is applied live — and
+// landing on anything else puts the effect back as it was when the menu opened. The add picker
+// never auditions: nothing is in the chain yet.
+//
+// Every row carries `at`, its index in the list the window actually renders (-1 = the pinned
+// Default in the chin), so the strip can mark the highlighted element without re-deriving the
+// order — and rows the window skips (a dangling factory reference) are simply absent here too.
 
 export interface PresetLike {
   name: string;
@@ -19,45 +22,39 @@ export interface PresetLike {
 }
 
 export type BoardRow =
-  | { t: "default" } // the device's own reset state
-  | { t: "preset"; preset: PresetLike }
-  | { t: "section"; name: string; items: BoardRow[] }
-  | { t: "add" } // ＋ Add effect
-  | { t: "remove" } // ✕ Remove (press twice)
-  | { t: "kind"; kind: string; label: string }; // an effect in the add list
+  | { t: "default"; at: -1 } // the device's own reset state, pinned in the window's chin
+  | { t: "preset"; at: number; preset: PresetLike }
+  | { t: "section"; at: number; name: string; items: BoardRow[] }
+  | { t: "kind"; at: number; kind: string }; // an effect in the add picker
 
 export interface BoardLevel {
-  /** What this level is about: "edit" = the selected effect's presets (auditioned live); "add" =
-   *  the effect list, or (with `kind`) a not-yet-added effect's presets (never auditioned). */
-  mode: "edit" | "add";
-  kind?: string;
-  title: string;
   rows: BoardRow[];
   cursor: number;
+  /** The effect this window's presets belong to (add picker flyouts: what PRESS adds). */
+  kind?: string;
 }
 
 export interface BoardState {
+  /** "edit" = the selected effect's preset menu; "add" = the ＋ picker. */
+  mode: "edit" | "add";
   stack: BoardLevel[];
-  /** "✕ Remove" was pressed once: the next press removes, any other gesture cancels. */
-  confirmRemove: boolean;
-  /** A preset is auditioned (the effect is not as it was when the menu opened). */
-  auditioning?: boolean;
+  /** A preset is auditioned: the effect is not as it was when the menu opened. */
+  auditioning: boolean;
 }
 
 /** What the strip must do as a result of a gesture. */
 export type BoardEffect =
-  | { t: "audition"; row: BoardRow } // apply a preset (or Default) to the selected effect, live
+  | { t: "audition"; row: BoardRow } // apply a preset (or Default) to the effect, live
+  | { t: "restore" } // stay open; put the effect back as it was when the menu opened
   | { t: "keep" } // close, keeping what is applied
-  | { t: "revert" } // close, restoring the effect to how it was when the menu opened
-  | { t: "restore" } // stay open, restoring the effect to how it was when the menu opened
-  | { t: "add"; kind: string; preset: PresetLike | null } // add the effect with that preset (null = Default)
-  | { t: "remove" }; // take the selected effect out of its chain, then close
+  | { t: "revert" } // close, putting the effect back as it was when the menu opened
+  | { t: "close" } // close (the add picker: nothing to undo)
+  | { t: "add"; kind: string; preset: PresetLike | null }; // add that effect with that preset (null = Default)
 
-/** What a press needs from the strip: the effects that can be added right now (not already in the
- *  chain), and a not-yet-added effect's preset rows (Default first). */
+/** An effect's preset rows for the add picker's flyout, or null when it has none (PRESS then adds
+ *  it straight away with Default, as a click on the name does). */
 export interface BoardSource {
-  addList: () => BoardRow[];
-  kindRows: (kind: string) => BoardRow[];
+  kindRows: (kind: string) => BoardRow[] | null;
 }
 
 export const top = (s: BoardState): BoardLevel => s.stack[s.stack.length - 1];
@@ -65,78 +62,91 @@ export const currentRow = (s: BoardState): BoardRow | undefined => {
   const l = top(s);
   return l?.rows[l.cursor];
 };
-
 const isPresetRow = (r: BoardRow | undefined) => r?.t === "preset" || r?.t === "default";
+const DEFAULT: BoardRow = { t: "default", at: -1 };
 
-/** Open on the selected effect: its rows, then ＋ Add / ✕ Remove, the highlight on `activeName`
- *  ("" = Default). */
-export function openBoard(title: string, kind: string, presetRows: BoardRow[], activeName: string): BoardState {
-  const rows: BoardRow[] = [{ t: "default" }, ...presetRows, { t: "add" }, { t: "remove" }];
-  let cursor = 0;
+/** Open the preset menu: its rows then Default (the chin), the highlight on `activeName` ("" =
+ *  Default) — inside its section when that is where it lives. */
+export function openEdit(rows: BoardRow[], activeName: string): BoardState {
+  const all = [...rows, DEFAULT];
+  const last = all.length - 1;
   if (activeName) {
-    const i = rows.findIndex((r) => r.t === "preset" && r.preset.name === activeName);
-    if (i >= 0) cursor = i;
+    const i = all.findIndex((r) => r.t === "preset" && r.preset.name === activeName);
+    if (i >= 0) return { mode: "edit", stack: [{ rows: all, cursor: i }], auditioning: false };
+    for (let s = 0; s < all.length; s++) {
+      const r = all[s];
+      if (r.t !== "section") continue;
+      const j = r.items.findIndex((x) => x.t === "preset" && x.preset.name === activeName);
+      if (j >= 0) return { mode: "edit", stack: [{ rows: all, cursor: s }, { rows: r.items, cursor: j }], auditioning: false };
+    }
   }
-  return { stack: [{ mode: "edit", kind, title, rows, cursor }], confirmRemove: false };
+  return { mode: "edit", stack: [{ rows: all, cursor: last }], auditioning: false };
 }
 
-/** Leaving the presets (onto a section, ＋ Add, ✕ Remove, or back out to one) puts the effect back
- *  as it was when the menu opened. ★ (operator, 2026-11-08: cycling past an ungrouped preset onto
- *  the next row "will get stuck on that mode instead of reverting … probably last state".) */
-function settle(state: BoardState, auditioning: boolean | undefined): { state: BoardState; effect?: BoardEffect } {
-  return auditioning ? { state: { ...state, auditioning: false }, effect: { t: "restore" } } : { state };
+/** Open the add picker on its first effect. */
+export function openAdd(kinds: BoardRow[]): BoardState {
+  return { mode: "add", stack: [{ rows: kinds, cursor: 0 }], auditioning: false };
 }
 
-/** BEAT ◀ / ▶. Wraps. In the edit level, landing on a preset auditions it, and landing on any
- *  other row undoes the audition. */
+/** What landing on `row` does in the preset menu. */
+function land(state: BoardState, row: BoardRow | undefined): { state: BoardState; effect?: BoardEffect } {
+  if (state.mode !== "edit") return { state };
+  if (isPresetRow(row)) return { state: { ...state, auditioning: true }, effect: { t: "audition", row: row! } };
+  return state.auditioning ? { state: { ...state, auditioning: false }, effect: { t: "restore" } } : { state };
+}
+
+/** BEAT ◀ / ▶. Wraps within the window the highlight is in. */
 export function move(s: BoardState, dir: number): { state: BoardState; effect?: BoardEffect } {
   const l = top(s);
   if (!l || !l.rows.length) return { state: s };
   const n = l.rows.length;
   const cursor = (((l.cursor + dir) % n) + n) % n;
-  const state: BoardState = { stack: [...s.stack.slice(0, -1), { ...l, cursor }], confirmRemove: false, auditioning: s.auditioning };
-  const row = l.rows[cursor];
-  if (l.mode !== "edit") return { state };
-  if (isPresetRow(row)) return { state: { ...state, auditioning: true }, effect: { t: "audition", row } };
-  return settle(state, s.auditioning);
+  if (cursor === l.cursor) return { state: s };
+  const state: BoardState = { ...s, stack: [...s.stack.slice(0, -1), { ...l, cursor }] };
+  return land(state, l.rows[cursor]);
 }
 
-/** Point the highlight at a row directly (the mouse). Never auditions — a hover is not a choice. */
-export function point(s: BoardState, index: number): BoardState {
-  const l = top(s);
-  if (!l || index < 0 || index >= l.rows.length || index === l.cursor) return s;
-  return { stack: [...s.stack.slice(0, -1), { ...l, cursor: index }], confirmRemove: false, auditioning: s.auditioning };
-}
-
-/** PRESS: go in, or choose. Returns `state: null` when the menu closes. */
+/** PRESS: go in, or choose. `state: null` = the menu closes. */
 export function press(s: BoardState, src: BoardSource): { state: BoardState | null; effect?: BoardEffect } {
   const l = top(s);
   const row = currentRow(s);
   if (!l || !row) return { state: s };
   switch (row.t) {
-    case "section":
-      return { state: { stack: [...s.stack, { mode: l.mode, kind: l.kind, title: row.name, rows: row.items, cursor: 0 }], confirmRemove: false, auditioning: s.auditioning } };
+    case "section": {
+      if (!row.items.length) return { state: s };
+      const state: BoardState = { ...s, stack: [...s.stack, { rows: row.items, cursor: 0, kind: l.kind }] };
+      return land(state, row.items[0]);
+    }
+    case "kind": {
+      const rows = src.kindRows(row.kind);
+      if (!rows || !rows.length) return { state: null, effect: { t: "add", kind: row.kind, preset: null } };
+      const all = [...rows, DEFAULT];
+      // The highlight starts on Default: the plain "just add it" answer is one press away.
+      return { state: { ...s, stack: [...s.stack, { rows: all, cursor: all.length - 1, kind: row.kind }] } };
+    }
     case "default":
     case "preset":
-      if (l.mode === "edit") return { state: null, effect: { t: "keep" } };
+      if (s.mode === "edit") return { state: null, effect: { t: "keep" } };
       return { state: null, effect: { t: "add", kind: l.kind ?? "", preset: row.t === "preset" ? row.preset : null } };
-    case "add":
-      return { state: { stack: [...s.stack, { mode: "add", title: "Add effect", rows: src.addList(), cursor: 0 }], confirmRemove: false, auditioning: s.auditioning } };
-    case "kind":
-      return { state: { stack: [...s.stack, { mode: "add", kind: row.kind, title: row.label, rows: src.kindRows(row.kind), cursor: 0 }], confirmRemove: false, auditioning: s.auditioning } };
-    case "remove":
-      if (s.confirmRemove) return { state: null, effect: { t: "remove" } };
-      return { state: { ...s, confirmRemove: true } };
   }
 }
 
-/** SHIFT+PRESS: back one level; at the top, close and undo any audition. */
+/** SHIFT+BEAT ◀: back one window; at the top, close (undoing an audition). */
 export function back(s: BoardState): { state: BoardState | null; effect?: BoardEffect } {
-  if (s.confirmRemove) return { state: { ...s, confirmRemove: false } }; // first, a pending remove is cancelled
   if (s.stack.length > 1) {
-    // back onto the section row: that is not a preset, so the audition made inside it is undone
-    const state: BoardState = { stack: s.stack.slice(0, -1), confirmRemove: false, auditioning: s.auditioning };
-    return top(state).mode === "edit" ? settle(state, s.auditioning) : { state };
+    const state: BoardState = { ...s, stack: s.stack.slice(0, -1) };
+    return land(state, currentRow(state)); // back onto the section row: not a preset, so restore
   }
-  return { state: null, effect: { t: "revert" } };
+  if (s.mode === "add") return { state: null, effect: { t: "close" } };
+  return { state: null, effect: s.auditioning ? { t: "revert" } : { t: "keep" } };
+}
+
+/** ◀▶ with the menus closed: the effect tabs, then the ＋ slot, wrapping. `at` = the selected tab
+ *  (or `n` for the ＋ slot); `n` tabs; `plus` = whether the ＋ slot exists (there is something
+ *  left to add). Returns the new position. */
+export function stepTabs(at: number, n: number, plus: boolean, dir: number): number {
+  const stops = n + (plus ? 1 : 0);
+  if (stops <= 0) return at;
+  const from = Math.max(0, Math.min(stops - 1, at));
+  return (((from + dir) % stops) + stops) % stops;
 }

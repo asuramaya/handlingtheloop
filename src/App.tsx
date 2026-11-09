@@ -1148,20 +1148,24 @@ function AppBody() {
         refresh();
       },
       // BEAT FX BEAT ◀▶ → move the selection (add candidate in add-mode). SHIFT → reorder the tab.
-      // While FX SELECT's board menu is open, BEAT ◀▶ walk its highlight instead of the tabs.
-      fxSelPrev: (_deck, id, s) => { const c = fxCtlFor(id); if (c?.boardMenu.isOpen()) { if (!s) c.boardMenu.move(-1); return; } s ? c?.moveSel(-1) : c?.navSel(-1); },
+      // While a menu FX SELECT opened is up, BEAT ◀▶ walk its highlight instead of the tabs, and
+      // SHIFT+◀ backs out (SHIFT+▶ does nothing). Closed, ◀▶ also stop on the ＋ after the last tab.
+      fxSelPrev: (_deck, id, s) => { const c = fxCtlFor(id); if (c?.boardMenu.isOpen()) { if (s) c.boardMenu.back(); else c.boardMenu.move(-1); return; } s ? c?.moveSel(-1) : c?.navSel(-1); },
       fxSelNext: (_deck, id, s) => { const c = fxCtlFor(id); if (c?.boardMenu.isOpen()) { if (!s) c.boardMenu.move(1); return; } s ? c?.moveSel(1) : c?.navSel(1); },
       // FX SELECT → step the BEAT-FX-selected effect through its presets, popping the same floaty
       // menu a tab right-click opens (with the applied preset highlighted). Plain = FORWARD,
       // SHIFT = BACKWARD. Press-only.
-      // ★ FX SELECT drives a board menu now (FxStrip / fxBoardMenu.ts): PRESS opens the selected
-      // effect's menu, then goes in / chooses; SHIFT+PRESS goes back, closing (and undoing an
-      // auditioned preset) at the top. It used to step presets; landing on one auditions it now.
+      // ★ FX SELECT drives the SAME menus the mouse opens (FxStrip / fxBoardMenu.ts; operator,
+      // 2026-11-08: "making the menus the same even the flyovers"). PRESS opens the selected
+      // effect's preset menu (or the add picker on the ＋ stop), then goes in / chooses. SHIFT+PRESS
+      // with nothing open REMOVES the selected effect on a second press; with a menu open it backs
+      // out, so it can never delete from inside a menu.
       fxSelectPress: (_deck, id, s) => {
         const m = fxCtlFor(id)?.boardMenu;
         if (!m) return;
         if (s) {
           if (m.isOpen()) m.back();
+          else m.remove();
         } else if (m.isOpen()) m.press();
         else m.open();
       },
@@ -1316,7 +1320,8 @@ function AppBody() {
       // over the board bus so the bank switch syncs + records (else replay shows the wrong pads).
       // SHIFT switches to the peer mode (mirrors the on-screen mode row + the FLX shift layer):
       // loop→roll, sampler→global, fx→fx2 (the FX latch layer). CUE has no shift peer (KEY retired).
-      chainPrev: (_deck, id) => { const c = fxCtlFor(id); if (!c?.boardMenu.isOpen()) c?.stepChain(-1); },
+      // SHIFT+BEAT ◀ with a menu open = back one window (SHIFT+▶ does nothing there).
+      chainPrev: (_deck, id) => { const c = fxCtlFor(id); if (c?.boardMenu.isOpen()) c.boardMenu.back(); else c?.stepChain(-1); },
       chainNext: (_deck, id) => { const c = fxCtlFor(id); if (!c?.boardMenu.isOpen()) c?.stepChain(1); },
       padModeCue: (deck, id, s) => padModeKey(deck, id, s ? "cue2" : "cue"), // SHIFT → hot cues 9–16
       padModeLoop: (deck, id, s) => padModeKey(deck, id, s ? "roll" : "loop"),

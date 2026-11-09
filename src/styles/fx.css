@@ -3847,21 +3847,23 @@ body:not(.no-glow) .fx-mix-fill::after {
   opacity: 0.75;
 }
 
-/* FX SELECT board menu (fxBoardMenu.ts): the board's cursor — the row BEAT ◀▶ is on and FX SELECT
-   would press. Brighter than a hover, so it reads from a step back; the acts sit under a rule. */
+/* FX SELECT's board cursor (fxBoardMenu.ts) on the SAME menus the mouse opens — the preset menu,
+   its section flyouts, the add picker and its flyouts: the row BEAT ◀▶ is on and FX SELECT would
+   press. Brighter than a hover, so it reads from a step back. */
 .fx-preset-menu .fx-palette-item.board-cursor {
   background: color-mix(in srgb, var(--accent) 30%, var(--panel));
   color: #fff;
   box-shadow: inset 3px 0 0 var(--accent);
 }
-.fx-preset-menu .fx-palette-item.board-act {
-  font-weight: 600;
-}
-.fx-preset-menu .fx-palette-item.board-act:first-of-type,
-.fx-preset-menu .fx-palette-item:not(.board-act) + .fx-palette-item.board-act {
-  border-top: 1px solid var(--line);
-  margin-top: 4px;
-}
-.fx-preset-menu .fx-palette-item.board-danger {
+/* SHIFT+FX SELECT armed a remove on this tab: a second press inside 2 s takes it out. */
+.fx-tab.remove-armed {
   color: #ff6b6b;
+  border-color: #ff5d73;
+  background: color-mix(in srgb, #ff5d73 18%, transparent);
+  animation: fx-remove-armed 0.5s steps(2, jump-none) infinite alternate;
+}
+@keyframes fx-remove-armed {
+  to {
+    background: color-mix(in srgb, #ff5d73 40%, transparent);
+  }
 }

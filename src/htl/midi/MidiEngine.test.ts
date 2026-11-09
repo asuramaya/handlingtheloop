@@ -351,6 +351,31 @@ describe("MidiEngine — pad-mode lamp blinks for a shifted layer", () => {
   });
 });
 
+// ★ operator, 2026-11-09: "in sampler mode, let the slots that are filled light up like cue mode".
+describe("MidiEngine — pad lamps light on the live bank's own notes", () => {
+  it("SAMPLER lights its filled slots on 0x30+i; a bank change re-sends all eight", async () => {
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    const base = { play: false, cue: false, sync: false, loop: false, loopIn: false, loopOut: false, cuePfl: false };
+    const pads = () => sent.filter((b) => b[0] === 0x97);
+    engine.setFeedback("A", { ...base, hotcues: [true, false, false, false, false, false, false, false], padMode: "cue" });
+    expect(pads()).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map((i) => [0x97, i, i === 0 ? 0x7f : 0x00])); // first frame: all eight
+    sent.length = 0;
+    engine.setFeedback("A", { ...base, hotcues: [false, true, true, false, false, false, false, false], padMode: "sampler" });
+    expect(pads()).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map((i) => [0x97, 0x30 + i, i === 1 || i === 2 ? 0x7f : 0x00]));
+    sent.length = 0;
+    engine.setFeedback("A", { ...base, hotcues: [false, true, true, true, false, false, false, false], padMode: "sampler" });
+    expect(pads()).toEqual([[0x97, 0x33, 0x7f]]); // same bank: only the change
+  });
+});
+
 describe("MidiEngine — Pause app lights (Debug lamp probing)", () => {
   it("paused, the app writes no lamp; resuming re-sends every lamp from scratch", async () => {
     const sent: number[][] = [];

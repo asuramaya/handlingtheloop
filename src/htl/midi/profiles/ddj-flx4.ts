@@ -256,6 +256,9 @@ export const DDJ_FLX4: DeviceProfile = {
     loopOut: 0x11, // manual loop OUT button lamp
     cuePfl: 0x54, // channel CUE (headphone PFL) button lamp
     hotcues: [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07],
+    // ★ SAMPLER PADS LIGHT LIKE CUES (operator, 2026-11-09: "in sampler mode, let the slots that are
+    // filled light up like cue mode"). Each bank's pads are their own notes (PAD_BANKS above).
+    padLampBase: { cue: 0x00, fx: 0x10, loop: 0x20, sampler: 0x30 },
     // Mode-button LEDs (same notes as the inputs). Lit when our software is in that bank,
     // so changing mode by keyboard / screen / gamepad / session reflects on the board —
     // IF the unit accepts incoming note-on for these (verify with the Debug output prober).

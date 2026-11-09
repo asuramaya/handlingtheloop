@@ -84,6 +84,10 @@ export interface MidiFeedbackMap {
   loopOut?: number; // manual loop-OUT button lamp
   cuePfl?: number; // channel CUE (headphone PFL) button lamp
   hotcues?: number[]; // pad data bytes for hot cues 1..8 (lit on the `padStatus`)
+  /** Per pad BANK, the offset added to `hotcues` — a board whose pads send a different note in each
+   *  mode (FLX4: HOT CUE 0x00, PAD FX 0x10, BEAT JUMP 0x20, SAMPLER 0x30) shows that bank's lamps
+   *  only on that bank's notes. Absent = every bank lights the hot-cue notes. */
+  padLampBase?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
   // Pad-bank MODE buttons (FLX4: HOT CUE / PAD FX1 / BEAT JUMP / SAMPLER). One note per
   // mode, lit on `noteStatus`; the active mode lights, the rest clear. Lets the board
   // reflect a mode change made anywhere (keyboard / on-screen / gamepad / session sync).
@@ -153,7 +157,7 @@ export interface DeckFeedback {
   loopIn: boolean; // manual loop in-point set / in-edge armed for adjust
   loopOut: boolean; // manual loop out-point set / out-edge armed for adjust
   cuePfl: boolean; // channel headphone PFL active (deck.cueLevel > 0)
-  hotcues: boolean[]; // length 8, true = slot set
+  hotcues: boolean[]; // length 8: the LIVE bank's pads that are filled (hot cues set / sampler slots loaded)
   padMode: "cue" | "loop" | "sampler" | "fx"; // active pad bank → lights the matching mode button
   padModeAlt?: boolean; // the bank's SHIFTED peer is live (CUE2 / FX2 / ROLL / GLOBAL) → that button BLINKS
 }

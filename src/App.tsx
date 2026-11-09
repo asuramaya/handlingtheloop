@@ -2820,6 +2820,8 @@ function AppBody() {
   // The sampler is lifted to App now (shared by the global strip AND each deck's SAMPLER
   // pad-mode): 12 global pads + 8 region pads per deck.
   const sampler = useSampler(engine, loaded, me, emit);
+  const samplerRef = useRef(sampler); // the board's pad lamps read it from a polled push
+  samplerRef.current = sampler;
   // A co-DJ's `sample` intent reaches applyIntent (defined far above) through this ref.
   useEffect(() => {
     samplerApplyRef.current = sampler.applyRemote;
@@ -2903,7 +2905,15 @@ function AppBody() {
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
-          hotcues: Array.from({ length: 8 }, (_, i) => d.hotCues[cueBankBase(d.padMode) + i] != null), // the live bank's pads
+          // The live bank's filled pads: hot cues in CUE / CUE2, loaded slots in SAMPLER (this deck's
+          // LOCAL bank) and GLOBAL, nothing in the banks with no per-pad state.
+          hotcues: Array.from({ length: 8 }, (_, i) => {
+            if (d.padMode === "cue" || d.padMode === "cue2") return d.hotCues[cueBankBase(d.padMode) + i] != null;
+            const pads = samplerRef.current?.pads;
+            if (d.padMode === "sampler") return (pads?.[deckPadBase(id) + i]?.kind ?? "empty") !== "empty";
+            if (d.padMode === "global") return (pads?.[i]?.kind ?? "empty") !== "empty";
+            return false;
+          }),
           // The shifted peer modes light their BASE button's lamp (roll→loop, global→sampler, …).
           padMode:
             d.padMode === "roll" ? "loop"

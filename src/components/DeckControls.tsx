@@ -702,7 +702,9 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           <Menu
             x={smpMenu.x}
             y={smpMenu.y}
-            head={`PAD ${smpMenu.i + 1}`}
+            // A pad's name is its BANK and its place in it (operator, 2026-11-09: "its not a pad its
+            // local n or global n"): pads 0-7 are the GLOBAL bank, 8-15 / 16-23 each deck's LOCAL one.
+            head={sampler.pads[smpMenu.i].route === "master" ? `GLOBAL ${smpMenu.i + 1}` : `LOCAL ${((smpMenu.i - 8) % 8) + 1}`}
             onClose={() => setSmpMenu(null)}
             acts={[
               // Glyphs, like every other menu in the app — these were sentences at the bottom of

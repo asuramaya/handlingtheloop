@@ -3853,7 +3853,6 @@ body:not(.no-glow) .fx-mix-fill::after {
 .fx-preset-menu .fx-palette-item.board-cursor {
   background: color-mix(in srgb, var(--accent) 30%, var(--panel));
   color: #fff;
-  box-shadow: inset 3px 0 0 var(--accent);
 }
 /* SHIFT+FX SELECT armed a remove on this tab: a second press inside 2 s takes it out. */
 .fx-tab.remove-armed {

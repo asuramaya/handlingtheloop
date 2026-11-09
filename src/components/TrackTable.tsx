@@ -254,9 +254,15 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   // on every scroll step let integer-rounded offsetHeight flip ±1px, and the top spacer (vStart *
   // rowH) multiplies that by thousands of rows → the scroll position jumps and jiggles. Functional
   // setter keeps rowH out of the deps (no stale-closure re-measure loop).
+  // ★ THE FRACTIONAL HEIGHT, NOT offsetHeight (operator, 2026-11-08: reopening the library, the
+  // cursor came back "after I scroll, not at open"). Rows are ~42.3px; offsetHeight said 42, and
+  // the cursor's computed position drifts 0.3px per row — 9px short by row 30. scrollCursorIntoView
+  // then judged a row cut off by the bottom edge as fully visible, so the restore left it half
+  // hidden and the first knob step or wheel jumped to it. getBoundingClientRect is exact, and still
+  // measured only here, so the per-scroll jiggle above cannot come back.
   useLayoutEffect(() => {
-    const h = firstRowRef.current?.offsetHeight;
-    if (h) setRowH((prev) => (Math.abs(h - prev) > 0.5 ? h : prev));
+    const h = firstRowRef.current?.getBoundingClientRect().height;
+    if (h) setRowH((prev) => (Math.abs(h - prev) > 0.01 ? h : prev));
   }, [scale, view.length]);
   // ── remembering where you were ───────────────────────────────────────────────────────────────
   // The find-controls are plain state and save on change. The SCROLL position cannot be: writing

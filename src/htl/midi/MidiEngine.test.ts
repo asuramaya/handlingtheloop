@@ -300,9 +300,9 @@ describe("MidiEngine — pad-mode lamp blinks for a shifted layer", () => {
       vi.setSystemTime(700);
       engine.setFeedback("A", { ...fb, padModeAlt: true }); // same phase: nothing
       engine.setFeedback("A", fb); // back to CUE: steady on, the shifted lamp dark
-      expect(cueLamp()).toEqual([0x7f, 0x00, 0x7f, 0x7f]);
+      expect(cueLamp()).toEqual([0x7f, 0x20, 0x7f, 0x7f]); // the low half is DIM (0x20), not dark
       // the shifted lamp (0x69, the note SHIFT+HOT CUE sends) blinks in step, and goes dark on leaving
-      expect(sent.filter((b) => b[0] === 0x90 && b[1] === 0x69).map((b) => b[2])).toEqual([0x00, 0x7f, 0x00]);
+      expect(sent.filter((b) => b[0] === 0x90 && b[1] === 0x69).map((b) => b[2])).toEqual([0x20, 0x7f, 0x00]);
     } finally {
       vi.useRealTimers();
     }

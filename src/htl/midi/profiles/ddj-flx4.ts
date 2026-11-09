@@ -264,6 +264,9 @@ export const DDJ_FLX4: DeviceProfile = {
     // 2026-11-08): in a shifted layer the firmware shows the button's SHIFTED lamp, addressed by the
     // note it sends with SHIFT held (HOT CUE 0x69, PAD FX 0x6B, BEAT JUMP 0x6D, SAMPLER 0x6F).
     padModesAlt: { cue: 0x69, fx: 0x6b, loop: 0x6d, sampler: 0x6f },
+    // The blink pulses dim ↔ bright, not off ↔ on (operator, 2026-11-08). First guess at the dim
+    // level; a board whose lamps are on/off only will show it as on, i.e. no blink at all.
+    padModeDim: 0x20,
   },
   // Channel LEVEL METERS: CC 0x02 on each deck's channel (0xB0 / 0xB1), 0–127 lights the column
   // bottom-up — the same message rekordbox / Mixxx drive them with. Fed from the deck's post-fader

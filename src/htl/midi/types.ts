@@ -91,6 +91,9 @@ export interface MidiFeedbackMap {
   /** The same buttons' SHIFTED lamp addresses (Pioneer: the note the button sends with SHIFT held).
    *  While a shifted layer is live the firmware may be showing THIS lamp, so the blink drives both. */
   padModesAlt?: Partial<Record<"cue" | "loop" | "sampler" | "fx", number>>;
+  /** The blink's LOW value: a dim glow rather than dark (operator: "standby dim lit to bright lit
+   *  not fully off"). Only meaningful on a board whose lamps take a brightness; 0 = off. */
+  padModeDim?: number;
 }
 
 export interface DeviceProfile {

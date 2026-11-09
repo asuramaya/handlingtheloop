@@ -11,6 +11,7 @@ import type { ControlSpec, DeckId, DeckFeedback, DeviceProfile, LearnedBinding, 
 // --- minimal Web MIDI typings (avoid depending on lib.dom having them) ---
 interface MidiMessage {
   data: Uint8Array;
+  timeStamp?: number; // when the message ARRIVED (performance.now() clock), not when we got to it
 }
 interface MidiPort {
   id: string;
@@ -199,6 +200,7 @@ export class MidiEngine {
     if (this.echoTimer != null) clearTimeout(this.echoTimer);
     this.echoTimer = null;
     this.echoPending = [];
+    this.echoReleased = [];
     this.keepAlive = null;
     if (this.access) {
       for (const input of this.access.inputs.values()) input.onmidimessage = null;
@@ -216,7 +218,7 @@ export class MidiEngine {
   private rescan(): void {
     if (!this.access) return;
     const inputs = Array.from(this.access.inputs.values());
-    for (const input of inputs) input.onmidimessage = (e) => this.onMessage(e.data);
+    for (const input of inputs) input.onmidimessage = (e) => this.onMessage(e.data, e.timeStamp);
     // Pick the actual controller, not an OS virtual port. On Linux Chrome also
     // enumerates "Midi Through Port-0" (and apps add RtMidi/IAC ports) — picking the
     // first input would wrongly match the FLX4's real port as "generic". So: prefer an
@@ -239,6 +241,7 @@ export class MidiEngine {
     this.lastMeter = { A: -1, B: -1 }; // a (re)connected board starts dark — resend whatever is current
     this.lampSent = null; // the board's lamp state is unknown after a (re)connect — resend it
     this.echoPending = [];
+    this.echoReleased = [];
     this.buildIndex();
     this.startKeepAlive();
     this.opts.onStatus({ state: "connected", device: chosen?.name ?? null, profile: profile?.name ?? null });
@@ -380,7 +383,7 @@ export class MidiEngine {
   }
 
   // --- inbound decode ---
-  private onMessage(data: Uint8Array): void {
+  private onMessage(data: Uint8Array, stamp?: number): void {
     if (data.length < 2) return;
     const status = data[0];
     const d1 = data[1];
@@ -407,7 +410,7 @@ export class MidiEngine {
       return;
     }
 
-    if (isCC && this.echoFilter(status, d1, d2)) return;
+    if (isCC && this.echoFilter(status, d1, d2, stamp && stamp > 0 ? stamp : nowMs())) return;
     const lamp = this.profile?.echoLamp?.lamp;
     if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
       this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
@@ -635,6 +638,12 @@ export class MidiEngine {
   private lampChangedAt = -Infinity;
   private lastSourceAt: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
   private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
+  // Held messages the flush let through, with the value each overwrote — so a COLOR message that
+  // turns up late (after a stall) can still claim them as echoes and put trim back.
+  private echoReleased: { deck: DeckId; status: number; d1: number; prev: number | undefined; t: number }[] = [];
+  // How late a COLOR message may claim an already-released message. Wider than windowMs: it only
+  // matters after a stall, and the cost of a false claim is one trim message re-sent a step back.
+  static readonly ECHO_RECLAIM_MS = 40;
   private echoTimer: ReturnType<typeof setTimeout> | null = null;
   static readonly LAMP_GRACE_MS = 600;
   // The lamp's own button: the firmware flips the lamp itself on press/release, after (or around)
@@ -653,6 +662,14 @@ export class MidiEngine {
     this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
   }
 
+  /** The last value a bound CC address took (a 14-bit half reads its own half), or undefined. */
+  private ccValue(status: number, cc: number): number | undefined {
+    const entry = this.ccIndex.get(addr(status, cc));
+    if (!entry || entry.binding.type !== "cc14") return undefined;
+    const key = addr(entry.binding.status, entry.binding.data);
+    return entry.isLsb ? this.lsb.get(key) : this.msb.get(key);
+  }
+
   private echoDeck(kind: "source" | "echoes", status: number, d1: number): DeckId | null {
     const l = this.profile?.echoLamp;
     if (!l) return null;
@@ -660,11 +677,16 @@ export class MidiEngine {
     return null;
   }
 
-  /** true = the message was consumed (dropped as an echo, or held to decide). */
-  private echoFilter(status: number, d1: number, d2: number): boolean {
+  /** true = the message was consumed (dropped as an echo, or held to decide). `t` is the message's
+   *  ARRIVAL time (MIDIMessageEvent.timeStamp). ★ TRIM BOTTOMING OUT (operator, 2026-11-08): this
+   *  used to be the time we HANDLED the message. A COLOR message and its echo arrive in the same ms,
+   *  but with the main thread busy (a render, a GC) they can be handled 20+ ms apart, so the echo
+   *  looked like a real turn and went through. The echo's value follows COLOR down to 0, so trim
+   *  dropped to 0. Arrival stamps fix the gap; the reclaim below covers the flush timer firing
+   *  before a stalled COLOR message is handled. */
+  private echoFilter(status: number, d1: number, d2: number, t: number = nowMs()): boolean {
     const l = this.profile?.echoLamp;
     if (!l) return false;
-    const t = nowMs();
     const active = this.lampSent === true || t - this.lampChangedAt < MidiEngine.LAMP_GRACE_MS;
     if (!active) return false;
     const src = this.echoDeck("source", status, d1);
@@ -672,6 +694,12 @@ export class MidiEngine {
       this.lastSourceAt[src] = t;
       // anything held for this deck arrived just before its COLOR message: an echo
       this.echoPending = this.echoPending.filter((p) => p.deck !== src || t - p.t > l.windowMs);
+      // and anything ALREADY let through just before it was an echo too: undo it, newest first
+      const claim = this.echoReleased.filter((p) => p.deck === src && Math.abs(t - p.t) <= MidiEngine.ECHO_RECLAIM_MS);
+      if (claim.length) {
+        this.echoReleased = this.echoReleased.filter((p) => !claim.includes(p));
+        for (const p of claim.reverse()) if (p.prev != null) this.dispatchCC(p.status, p.d1, p.prev);
+      }
       return false; // the COLOR message itself is real
     }
     const deck = this.echoDeck("echoes", status, d1);
@@ -686,10 +714,15 @@ export class MidiEngine {
     if (this.echoTimer != null) return;
     this.echoTimer = setTimeout(() => {
       this.echoTimer = null;
-      const cut = nowMs() - windowMs;
+      const now = nowMs();
+      const cut = now - windowMs;
       const due = this.echoPending.filter((p) => p.t <= cut);
       this.echoPending = this.echoPending.filter((p) => p.t > cut);
-      for (const p of due) this.dispatchCC(p.status, p.d1, p.d2);
+      this.echoReleased = this.echoReleased.filter((p) => now - p.t <= MidiEngine.ECHO_RECLAIM_MS);
+      for (const p of due) {
+        this.echoReleased.push({ deck: p.deck, status: p.status, d1: p.d1, prev: this.ccValue(p.status, p.d1), t: p.t });
+        this.dispatchCC(p.status, p.d1, p.d2);
+      }
       if (this.echoPending.length) this.scheduleEchoFlush(windowMs);
     }, windowMs + 1);
   }

@@ -244,6 +244,48 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
     expect(trim.filter((x) => inColor(x.t)).length).toBeGreaterThan(20);
   });
 
+  // ★ TRIM BOTTOMING OUT (operator, 2026-11-08): with the main thread busy, a COLOR message and its
+  // echo — same arrival ms — were HANDLED 20+ ms apart, and the echo (whose value follows COLOR
+  // down to 0) got through as a real trim turn.
+  describe("a stalled main thread does not let an echo through", () => {
+    async function rig() {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
+      const r = await flxOut();
+      r.engine.setEchoLamp(true);
+      vi.advanceTimersByTime(2000);
+      const input = (r.engine as unknown as { access: { inputs: Map<string, { onmidimessage: (e: { data: Uint8Array; timeStamp?: number }) => void }> } }).access.inputs.get("in")!;
+      const at = (ts: number, ...b: number[]) => input.onmidimessage({ data: new Uint8Array(b), timeStamp: ts });
+      const trims = () => r.events.filter(({ e }) => e.type === "fader" && e.target === "trim").map(({ e }) => (e as { value: number }).value);
+      return { ...r, at, trims };
+    }
+    afterEach(() => vi.useRealTimers());
+
+    it("COLOR then its echo, handled 25 ms apart: arrival stamps say same ms, so the echo is dropped", async () => {
+      const { at, trims } = await rig();
+      at(performance.now(), 0xb0, 0x04, 100); // a real trim setting first (held, then released)
+      vi.advanceTimersByTime(30);
+      expect(trims().length).toBe(1);
+      const arrived = performance.now();
+      at(arrived, 0xb6, 0x17, 2); // COLOR down low
+      vi.advanceTimersByTime(25); // a stall before the echo is handled
+      at(arrived, 0xb0, 0x04, 1); // its echo: trim → ~0
+      vi.advanceTimersByTime(30);
+      expect(trims().length).toBe(1);
+    });
+
+    it("echo first, the flush fires before the stalled COLOR is handled: COLOR puts trim back", async () => {
+      const { at, trims } = await rig();
+      at(performance.now(), 0xb0, 0x04, 100);
+      vi.advanceTimersByTime(30);
+      const arrived = performance.now();
+      at(arrived, 0xb0, 0x04, 1); // the echo, a hair BEFORE its COLOR
+      vi.advanceTimersByTime(25); // stall: the flush timer wins and lets it through
+      at(arrived + 1, 0xb6, 0x17, 2); // the COLOR message, finally handled
+      const v = trims();
+      expect(v[v.length - 1]).toBeCloseTo(v[0], 5); // back where the real turn left it
+    });
+  });
+
   it("setEchoLamp is diffed and resent after a reconnect", async () => {
     const { engine, sent } = await flxOut();
     sent.length = 0;

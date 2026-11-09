@@ -2895,6 +2895,7 @@ function AppBody() {
             : d.padMode === "fx2" ? "fx"
             : d.padMode === "cue2" ? "cue"
             : d.padMode,
+          padModeAlt: d.padMode === "roll" || d.padMode === "global" || d.padMode === "fx2" || d.padMode === "cue2",
         };
         midi.setFeedback(id, fb);
       });

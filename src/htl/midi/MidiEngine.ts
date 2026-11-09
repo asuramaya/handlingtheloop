@@ -89,6 +89,8 @@ export class MidiEngine {
   private keepAlive: ReturnType<typeof setInterval> | null = null;
   private learnArmed = false;
   private lastFb: Partial<Record<DeckId, DeckFeedback>> = {};
+  private padLampOn: Partial<Record<DeckId, boolean>> = {}; // the mode button's lamp as last sent (blink)
+  static readonly PAD_BLINK_MS = 300;
   private started = false;
   private starting = false; // a request is in flight (don't fire a second from the effect)
   // Last-attempt diagnostics for the Debug tab.
@@ -737,11 +739,21 @@ export class MidiEngine {
     // Pad-mode bank LEDs: when the active mode changed, light the new button and clear the
     // one we were on. (A no-op on a board whose firmware owns these LEDs — the send is
     // simply ignored — but lights the rest of the world for boards that accept it.)
-    if (f.padModes && noteStatus != null && fb.padMode !== prev?.padMode) {
+    // ★ A SHIFTED PEER BLINKS (operator, 2026-11-08: "when in a current mode they're lit up but when
+    // in cue2 or fx2 make them blink"). Lit steady = the base bank; blinking = its shifted layer
+    // (CUE2 / FX2 / ROLL / GLOBAL). The phase comes off the wall clock, so both decks blink together
+    // whatever the feedback cadence; only the flips are sent, and kept out of the Debug log.
+    if (f.padModes && noteStatus != null) {
       const lit = f.padModes[fb.padMode];
-      const off = prev ? f.padModes[prev.padMode] : undefined;
-      if (off != null && off !== lit) this.send([noteStatus, off, 0x00]);
-      if (lit != null) this.send([noteStatus, lit, 0x7f]);
+      const want = !fb.padModeAlt || Math.floor(Date.now() / MidiEngine.PAD_BLINK_MS) % 2 === 0;
+      if (fb.padMode !== prev?.padMode) {
+        const off = prev ? f.padModes[prev.padMode] : undefined;
+        if (off != null && off !== lit) this.send([noteStatus, off, 0x00]);
+        if (lit != null) this.send([noteStatus, lit, want ? 0x7f : 0x00]);
+      } else if (lit != null && want !== this.padLampOn[deck]) {
+        this.send([noteStatus, lit, want ? 0x7f : 0x00], false);
+      }
+      this.padLampOn[deck] = want;
     }
     this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues] };
   }

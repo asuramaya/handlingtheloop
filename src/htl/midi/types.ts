@@ -149,6 +149,7 @@ export interface DeckFeedback {
   cuePfl: boolean; // channel headphone PFL active (deck.cueLevel > 0)
   hotcues: boolean[]; // length 8, true = slot set
   padMode: "cue" | "loop" | "sampler" | "fx"; // active pad bank → lights the matching mode button
+  padModeAlt?: boolean; // the bank's SHIFTED peer is live (CUE2 / FX2 / ROLL / GLOBAL) → that button BLINKS
 }
 
 // Live connection status for the settings UI.

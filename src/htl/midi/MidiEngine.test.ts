@@ -273,3 +273,36 @@ describe("MidiEngine — FLX4 second hot-cue bank", () => {
     expect(events).toContainEqual(expect.objectContaining({ type: "button", action: "padModeCue", deck: "A", pressed: true, shift: true }));
   });
 });
+
+describe("MidiEngine — pad-mode lamp blinks for a shifted layer", () => {
+  it("lit steady on the base bank; blinking on its shifted peer (CUE2 / FX2 / ROLL / GLOBAL)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(0);
+      const sent: number[][] = [];
+      const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+      const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+      const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+      vi.stubGlobal("isSecureContext", true);
+      vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+      const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+      live.push(engine);
+      await engine.start();
+      const fb = { play: false, cue: false, sync: false, loop: false, loopIn: false, loopOut: false, cuePfl: false, hotcues: Array(8).fill(false), padMode: "cue" as const };
+      const cueLamp = () => sent.filter((b) => b[0] === 0x90 && b[1] === 0x1b).map((b) => b[2]);
+      engine.setFeedback("A", fb); // base bank: lit
+      vi.setSystemTime(310);
+      engine.setFeedback("A", fb); // still lit, nothing re-sent
+      expect(cueLamp()).toEqual([0x7f]);
+      engine.setFeedback("A", { ...fb, padModeAlt: true }); // CUE2: phase 1 → off
+      vi.setSystemTime(620);
+      engine.setFeedback("A", { ...fb, padModeAlt: true }); // phase 2 → on
+      vi.setSystemTime(700);
+      engine.setFeedback("A", { ...fb, padModeAlt: true }); // same phase: nothing
+      engine.setFeedback("A", fb); // back to CUE: steady on (already on: nothing)
+      expect(cueLamp()).toEqual([0x7f, 0x00, 0x7f]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

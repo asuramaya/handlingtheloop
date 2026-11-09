@@ -34,6 +34,8 @@ export interface UseMidi {
   send: (bytes: number[]) => void; // raw MIDI out (notes, CC, SysEx)
   outMonitor: () => OutMsg[]; // recent outgoing messages
   outputs: () => string[]; // names of connected output ports
+  pauseLamps: (on: boolean) => void; // Debug: stop the app writing any lamp, so a hand-poked value stays
+  lampsPaused: () => boolean;
   // Golden capture — record raw incoming bytes for the byte-replay tests.
   startCapture: () => void;
   stopCapture: () => MidiCapture | null;
@@ -124,11 +126,13 @@ export function useMidi({ enabled, learn, onEvent, onLearnChange }: UseMidiArgs)
   const jogCadence = useCallback(() => engineRef.current?.jogCadence() ?? { rate: 0, count: 0, medMs: 0, p95Ms: 0, maxGapMs: 0, burst: 0, avgTick: 0 }, []);
   const send = useCallback((bytes: number[]) => engineRef.current?.sendRaw(bytes), []);
   const outMonitor = useCallback(() => engineRef.current?.outMonitor() ?? [], []);
+  const pauseLamps = useCallback((on: boolean) => engineRef.current?.pauseLamps(on), []);
+  const lampsPaused = useCallback(() => engineRef.current?.lampsPaused ?? false, []);
   const outputs = useCallback(() => engineRef.current?.outputNames() ?? [], []);
   const startCapture = useCallback(() => engineRef.current?.startCapture(), []);
   const stopCapture = useCallback(() => engineRef.current?.stopCapture() ?? null, []);
 
   return { supported, status, connect, learningId, armLearn, clearLearn, setFeedback,
     setMeter,
-    setEchoLamp, info, monitor, describe, jogCadence, send, outMonitor, outputs, startCapture, stopCapture };
+    setEchoLamp, info, monitor, describe, jogCadence, send, outMonitor, outputs, pauseLamps, lampsPaused, startCapture, stopCapture };
 }

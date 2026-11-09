@@ -646,7 +646,7 @@ export class MidiEngine {
    *  every feedback tick. No-op on a board without one. */
   setEchoLamp(on: boolean): void {
     const l = this.profile?.echoLamp;
-    if (!l || !this.outputs.length) return;
+    if (!l || !this.outputs.length || this._lampsPaused) return;
     if (on === this.lampSent && nowMs() > this.lampReassertUntil) return;
     if (on !== this.lampSent) this.lampChangedAt = nowMs();
     this.lampSent = on;
@@ -699,7 +699,7 @@ export class MidiEngine {
   /** Drive a deck's channel level meter (0–127). Diffed, so a steady level costs nothing on the wire. */
   setMeter(deck: DeckId, value: number): void {
     const m = this.profile?.meter;
-    if (!m || !this.outputs.length) return;
+    if (!m || !this.outputs.length || this._lampsPaused) return;
     const v = Math.max(0, Math.min(127, Math.round(value)));
     if (v === this.lastMeter[deck]) return;
     this.lastMeter[deck] = v;
@@ -710,11 +710,29 @@ export class MidiEngine {
   }
 
   // --- LED feedback ---
+  // ★ PAUSE APP LIGHTS (Debug): while set, the app writes NO lamps at all (feedback, meters, the
+  // SMART CFX lamp), so a value poked by hand from the Debug panel stays on the board instead of
+  // being overwritten on the next 150 ms tick. For probing what a lamp can show (operator,
+  // 2026-11-08: the pad-mode blink went dark instead of to the idle dim glow). On resume the diff
+  // state is dropped, so every lamp is re-sent from scratch.
+  private _lampsPaused = false;
+  get lampsPaused() {
+    return this._lampsPaused;
+  }
+  pauseLamps(on: boolean): void {
+    this._lampsPaused = on;
+    if (!on) {
+      this.lastFb = {};
+      this.padLampOn = {};
+      this.lastMeter = { A: -1, B: -1 };
+      this.lampSent = null;
+    }
+  }
   /** Light the controller from app state. Diffs against the last frame so only
    *  changed lamps are sent. No-op without a profile feedback map / outputs. */
   setFeedback(deck: DeckId, fb: DeckFeedback): void {
     const p = this.profile;
-    if (!p?.feedback || !this.outputs.length) return;
+    if (!p?.feedback || !this.outputs.length || this._lampsPaused) return;
     const prev = this.lastFb[deck];
     const noteStatus = p.noteStatus?.[deck];
     const f = p.feedback;

@@ -74,6 +74,7 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
   }, [midi]);
 
   const outs = midi.outputs();
+  const [lampsPaused, setLampsPaused] = useState(() => midi.lampsPaused());
   const sendRaw = () => {
     const b = parseBytes(raw);
     if (b) midi.send(b);
@@ -150,6 +151,22 @@ export function MidiDebug({ midi }: { midi: UseMidi }) {
               visible rather than going behind an ⓘ. */}
           <span className="settings-head-note">{outs.length ? `→ ${outs.join(", ")}` : "no output port"}</span>
         </div>
+        {/* PAUSE APP LIGHTS — while on, the app writes no lamp at all, so a value sent below stays
+            on the board instead of being overwritten on the next feedback tick. Resuming re-sends
+            every lamp from scratch. */}
+        <label className="settings-row">
+          <span className="settings-label">Pause app lights</span>
+          <span className="settings-control">
+            <input
+              type="checkbox"
+              checked={lampsPaused}
+              onChange={(e) => {
+                midi.pauseLamps(e.target.checked);
+                setLampsPaused(e.target.checked);
+              }}
+            />
+          </span>
+        </label>
         <div className="midi-dbg-row">
           <input
             className="midi-dbg-hex"

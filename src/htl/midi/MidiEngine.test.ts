@@ -308,3 +308,29 @@ describe("MidiEngine — pad-mode lamp blinks for a shifted layer", () => {
     }
   });
 });
+
+describe("MidiEngine — Pause app lights (Debug lamp probing)", () => {
+  it("paused, the app writes no lamp; resuming re-sends every lamp from scratch", async () => {
+    const sent: number[][] = [];
+    const input = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+    const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+    const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+    vi.stubGlobal("isSecureContext", true);
+    vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+    const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+    live.push(engine);
+    await engine.start();
+    const fb = { play: true, cue: false, sync: false, loop: false, loopIn: false, loopOut: false, cuePfl: false, hotcues: Array(8).fill(false), padMode: "cue" as const };
+    engine.setFeedback("A", fb);
+    sent.length = 0;
+    engine.pauseLamps(true);
+    engine.setFeedback("A", { ...fb, play: false });
+    engine.setMeter("A", 100);
+    engine.setEchoLamp(true);
+    engine.sendRaw([0x90, 0x69, 0x10]); // a hand poke still goes out
+    expect(sent).toEqual([[0x90, 0x69, 0x10]]);
+    engine.pauseLamps(false);
+    engine.setFeedback("A", fb);
+    expect(sent).toContainEqual([0x90, 0x0b, 0x7f]); // PLAY re-lit from scratch
+  });
+});

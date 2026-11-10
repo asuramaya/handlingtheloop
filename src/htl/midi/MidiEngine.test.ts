@@ -242,10 +242,16 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
     expect(Math.max(...real)).toBeGreaterThan(0.98);
   });
 
-  it("dark: the same bytes DO move trim during the COLOR sweep (so the filter is what removes them)", async () => {
+  // ★ operator, 2026-11-10: trim still zeroed "on occasion". The board keeps its OWN Smart CFX state
+  // (its button flips it), so the app's lamp is no proof it is off: the filter must hold dark too.
+  it("dark: the COLOR sweep's trim echoes are STILL dropped, and the real TRIM sweep still drives trim", async () => {
     const { trim, sent } = await replay(false);
     expect(sent).not.toContainEqual([0x96, 0x00, 0x7f]);
-    expect(trim.filter((x) => inColor(x.t)).length).toBeGreaterThan(20);
+    expect(trim.filter((x) => inColor(x.t))).toEqual([]);
+    const real = trim.filter((x) => inTrim(x.t)).map((x) => x.v);
+    expect(real.length).toBeGreaterThan(100);
+    expect(Math.min(...real)).toBeLessThan(0.02);
+    expect(Math.max(...real)).toBeGreaterThan(0.98);
   });
 
   // ★ TRIM BOTTOMING OUT (operator, 2026-11-08): with the main thread busy, a COLOR message and its

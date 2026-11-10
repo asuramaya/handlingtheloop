@@ -415,7 +415,6 @@ export class MidiEngine {
     const lamp = this.profile?.echoLamp?.lamp;
     if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
       this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
-      this.lampChangedAt = nowMs(); // and the echo filter stays armed through the flip
     }
 
     if (isNote) {
@@ -633,11 +632,10 @@ export class MidiEngine {
   // --- Echo lamp (FLX4 SMART CFX) ---
   // Lit, the hardware feature makes the COLOR knob ALSO send TRIM. Every echo lands within a few ms
   // of a COLOR message, a hair before or after it; real TRIM turns never do. So while the lamp is lit
-  // (and briefly after it changes, in case the firmware lags), a TRIM-address message within
-  // windowMs AFTER a COLOR message is dropped at once, and one with no COLOR message yet is held for
-  // windowMs and dropped if one arrives. Trim gains ≤ windowMs of latency, only while lit.
+  // a TRIM-address message within windowMs AFTER a COLOR message is dropped at once, and one with
+  // no COLOR message yet is held for windowMs and dropped if one arrives. Armed ALWAYS, lit or not
+  // (see echoFilter): trim gains ≤ windowMs of latency.
   private lampSent: boolean | null = null;
-  private lampChangedAt = -Infinity;
   private lastSourceAt: Record<DeckId, number> = { A: -Infinity, B: -Infinity };
   private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
   // Held messages the flush let through, with the value each overwrote — so a COLOR message that
@@ -650,7 +648,6 @@ export class MidiEngine {
   // matters after a stall, and the cost of a false claim is one trim message re-sent a step back.
   static readonly ECHO_RECLAIM_MS = 40;
   private echoTimer: ReturnType<typeof setTimeout> | null = null;
-  static readonly LAMP_GRACE_MS = 600;
   // The lamp's own button: the firmware flips the lamp itself on press/release, after (or around)
   // our send, so for a while after any press/release every setEchoLamp call re-asserts the state.
   private lampReassertUntil = -Infinity;
@@ -662,7 +659,6 @@ export class MidiEngine {
     const l = this.profile?.echoLamp;
     if (!l || !this.outputs.length || this._lampsPaused) return;
     if (on === this.lampSent && nowMs() > this.lampReassertUntil) return;
-    if (on !== this.lampSent) this.lampChangedAt = nowMs();
     this.lampSent = on;
     this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
   }
@@ -692,8 +688,13 @@ export class MidiEngine {
   private echoFilter(status: number, d1: number, d2: number, t: number = nowMs()): boolean {
     const l = this.profile?.echoLamp;
     if (!l) return false;
-    const active = this.lampSent === true || t - this.lampChangedAt < MidiEngine.LAMP_GRACE_MS;
-    if (!active) return false;
+    // ★ ALWAYS ARMED (operator, 2026-11-10: the CFX knob still "zeroing [trim] out on occasion" after
+    // the arrival-time fix). It used to run only while WE had lit the lamp (or for 600 ms after a
+    // change). But the board keeps its own Smart CFX state — its button flips it in the firmware —
+    // so whenever the two disagreed the board echoed COLOR onto TRIM with the filter asleep, and the
+    // echo (which follows COLOR to 0) went straight through. Real trim turns essentially never land
+    // within windowMs of a COLOR message on the same deck (0 of 794 in the 2026-11-06 capture), so
+    // the filter costs nothing when the hardware feature is off and is never caught napping.
     const src = this.echoDeck("source", status, d1);
     if (src) {
       this.lastSourceAt[src] = t;

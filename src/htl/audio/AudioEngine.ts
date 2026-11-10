@@ -1393,6 +1393,19 @@ export class AudioEngine {
     // (A stopped follower is still placed here, bar-aligned: the auto-mixer and Smart Fader engage
     // and press play in the same moment and rely on this for phrase alignment. play() then re-checks
     // the BEAT phase at the real start, which is what a manual engage-then-play-later needs.)
+    // ★ A PLAYING FOLLOWER LOCKS TO THE NEAREST BEAT (operator, 2026-11-10: "when i sync beats there
+    // is a huge jump skip ahead in time interrupting the flow instead of just locking to the nearest
+    // beat"). Bar-level alignment moves up to HALF A BAR (~0.9 s at 128 bpm): fine for a deck no one
+    // hears yet, a skip in the music for one that is playing. A live deck moves at most half a beat
+    // (phaseAlignedStart, half/double-time aware), and not at all against a stopped master.
+    if (slave.playing) {
+      if (!master.playing) return;
+      const pos = slave.position();
+      const next = phaseAlignedStart({ grid: sg, pos, rate: slave.rate }, { grid: mg, pos: master.position(), rate: master.rate });
+      if (Math.abs(next - pos) > 1e-4) slave.seek(next);
+      event("sync.engage", { deck: sid, live: true, moveMs: Math.round((next - pos) * 1000) });
+      return;
+    }
     // Phase align: bar-level when both downbeats are known (the two "1"s land
     // together — a phrase-tight mix), else per-beat. Minimal move (wrap to nearest).
     if (sg.downbeat != null && mg.downbeat != null) {

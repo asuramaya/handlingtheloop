@@ -866,8 +866,8 @@ export class MidiEngine {
   //   steady    pressable (DeckFeedback.hotcues)
   //   blinking  sounding / engaged now (DeckFeedback.padBlink: a latched effect, a held move, the
   //             live loop size, a playing sample) — the same blink as a shifted mode button
-  //   held      a pad under the finger flips at once and blinks from that instant while held,
-  //             so every press shows, even on a dark pad
+  //   held      a pad under the finger shows at once: a dark one lights steady while held, a lit
+  //             one blinks from that instant (dark first), so every press shows
   private drawPads(deck: DeckId): void {
     const p = this.profile;
     const f = p?.feedback;
@@ -889,7 +889,7 @@ export class MidiEngine {
     for (let i = 0; i < f.hotcues.length; i++) {
       const on = !!fb.hotcues[i];
       const down = held.get(i);
-      const lit = down != null ? (Math.floor((now - down) / B) % 2 === 0 ? !on : on) : fb.padBlink?.[i] ? wall : on;
+      const lit = down != null ? !on || Math.floor((now - down) / B) % 2 === 1 : fb.padBlink?.[i] ? wall : on;
       v.push(lit ? 0x7f : 0x00);
       if (v[i] === last?.[i]) continue;
       const quiet = down != null || !!fb.padBlink?.[i]; // blink flips stay out of the Debug log

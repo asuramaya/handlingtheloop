@@ -2905,11 +2905,11 @@ function AppBody() {
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
-          // ★ One pad-light rule for every bank (MidiEngine.drawPads): lit = pressable, blinking =
-          // sounding now, dark = nothing there. Pressable: a set hot cue (CUE / CUE2), a loaded slot
-          // (SAMPLER = this deck's LOCAL bank, GLOBAL), a slot with an effect (FX), every move while
-          // the deck plays (FX2: a move on a stopped deck does nothing), every loop size on a loaded
-          // deck (LOOP / ROLL).
+          // ★ One pad-light rule for every bank (MidiEngine.drawPads): lit = there is something on
+          // the pad, blinking = sounding now, dark = nothing there. Lit: a set hot cue (CUE / CUE2), a
+          // loaded slot (SAMPLER = this deck's LOCAL bank, GLOBAL), a slot with an effect (FX), every
+          // move while the deck plays (FX2: a move on a stopped deck does nothing), the loop size
+          // that is looping (LOOP / ROLL).
           ...(() => {
             const lit: boolean[] = [];
             const blink: boolean[] = [];
@@ -2929,8 +2929,11 @@ function AppBody() {
                 lit.push(!!pad && (d.padMode === "fx" || (loaded && d.playing)));
                 blink.push(!!pad && fxPadIsOn(d, pad));
               } else {
-                lit.push(loaded);
-                blink.push(!!d.loop?.active && d.loop.beats === LOOP_BEATS[i]);
+                // LOOP / ROLL (operator, 2026-11-10: "it should stay lit if looped or light up when
+                // pressed in roll mode"): only the size that is looping is lit; a roll lasts as long
+                // as the press, so in ROLL that is exactly the held pad.
+                lit.push(!!d.loop?.active && d.loop.beats === LOOP_BEATS[i]);
+                blink.push(false);
               }
             }
             return { hotcues: lit, padBlink: blink };

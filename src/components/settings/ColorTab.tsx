@@ -218,7 +218,7 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           value={settings.markerThickness ?? 2}
           onChange={(v) => set({ markerThickness: v })}
           min={1}
-          max={6}
+          max={12}
           step={1}
           info="Width of the cue, hot-cue and loop marker bars. The beat grid's own weight is fixed."
         />

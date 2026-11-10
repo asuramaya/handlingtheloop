@@ -144,7 +144,7 @@ export interface Settings {
   bandFromDeck: boolean; // derive the three band colours as SHADES of the deck's own accent instead of three independent hues
   stemsFollowDeck: boolean; // stem LANES take shades of the deck's accent too, so a whole deck reads as one colour
   waveformDebrick: boolean; // re-expand local contrast on brick-walled (limited) masters so the waveform shows contour
-  markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars on the waveform (1–6)
+  markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars on the waveform (1–12)
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)

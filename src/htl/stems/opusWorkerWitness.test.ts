@@ -13,8 +13,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // across onerror.
 
 const planes = () => ({ planes: [new Float32Array(8), new Float32Array(8)], sampleRate: 48000 });
+const packedStem = (len = 8) => ({
+  L: new Int16Array(len),
+  R: new Int16Array(len),
+  length: len,
+  sampleRate: 48000,
+  base: { min: new Float32Array(1), max: new Float32Array(1), low: new Float32Array(1), mid: new Float32Array(1), high: new Float32Array(1), bucket: 256 },
+});
 vi.mock("./opus", () => ({
   decodeStemOpusPlanes: vi.fn(async () => planes()),
+  decodeStemOpusPacked: vi.fn(async (_b: ArrayBuffer, o: { limit?: number }) => packedStem(o?.limit ?? 8)),
   planesToBuffer: vi.fn(async () => ({}) as AudioBuffer),
 }));
 
@@ -144,5 +152,32 @@ describe("the stem decode worker says which thread it ran on", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("the PACKED int16 decode (mobile path) takes the same worker and the same witnessed fallback", async () => {
+    // Worker answers with int16: nothing float32 crosses, and the path says "worker".
+    const posted: unknown[] = [];
+    vi.stubGlobal("Worker", class {
+      onmessage?: (e: { data: unknown }) => void;
+      postMessage(m: { id: number; pack?: { limit?: number } }, transfer: unknown[]) {
+        posted.push({ pack: m.pack, transferred: transfer.length });
+        setTimeout(() => this.onmessage?.({ data: { id: m.id, packed: packedStem(m.pack?.limit ?? 8) } }), 0);
+      }
+      terminate() {}
+    });
+    let mod = await fresh();
+    const viaWorker = await mod.decodeStemPackedOffThread(bytes(), 12);
+    expect(viaWorker.length).toBe(12);
+    expect(viaWorker.L).toBeInstanceOf(Int16Array);
+    expect(mod.lastDecodePath()).toBe("worker");
+    expect(posted).toEqual([{ pack: { limit: 12 }, transferred: 1 }]); // the blob is transferred, not copied
+
+    // No worker → decoded inline, with the limit passed through, and the fallback is reported.
+    vi.stubGlobal("Worker", class { constructor() { throw new Error("no workers here"); } });
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    mod = await fresh();
+    const inline = await mod.decodeStemPackedOffThread(bytes(), 5);
+    expect(inline.length).toBe(5);
+    expect(mod.lastDecodePath()).toBe("inline");
   });
 });

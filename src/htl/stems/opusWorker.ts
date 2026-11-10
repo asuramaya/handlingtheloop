@@ -1,4 +1,5 @@
-import { decodeStemOpusPlanes, planesToBuffer } from "./opus";
+import { decodeStemOpusPlanes, decodeStemOpusPacked, planesToBuffer } from "./opus";
+import type { PackedStem } from "./stemPack";
 
 // Client side of the stem-decode worker (task #132), built on the patterns the ANALYSIS worker had
 // to learn the hard way rather than re-learning them here.
@@ -49,20 +50,22 @@ function fellBack(why: string): void {
   console.info(`[htl] stem decode worker unavailable (${why}) — decoding on the MAIN THREAD instead; expect a long frame at song load`);
 }
 
-type Pending = { resolve: (v: { planes: Float32Array[]; sampleRate: number }) => void; reject: (e: unknown) => void };
+type Planes = { planes: Float32Array[]; sampleRate: number };
+type Reply = { planes?: Float32Array[]; sampleRate?: number; packed?: PackedStem };
+type Pending = { resolve: (v: Reply) => void; reject: (e: unknown) => void };
 const pending = new Map<number, Pending>();
 
 function getWorker(): Worker | null {
   if (worker || failed) return worker;
   try {
     worker = new Worker(new URL("./opus.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent<{ id: number; planes?: Float32Array[]; sampleRate?: number; error?: string }>) => {
-      const { id, planes, sampleRate, error } = e.data;
+    worker.onmessage = (e: MessageEvent<{ id: number; planes?: Float32Array[]; sampleRate?: number; packed?: PackedStem; error?: string }>) => {
+      const { id, planes, sampleRate, packed, error } = e.data;
       const p = pending.get(id);
       if (!p) return;
       pending.delete(id);
-      if (error || !planes || sampleRate == null) p.reject(new Error(error ?? "stem decode failed"));
-      else p.resolve({ planes, sampleRate });
+      if (error || (!packed && (!planes || sampleRate == null))) p.reject(new Error(error ?? "stem decode failed"));
+      else p.resolve({ planes, sampleRate, packed });
     };
     worker.onerror = () => {
       // A Worker SURVIVES an uncaught error — measured in this repo's own Chromium: it fires
@@ -82,20 +85,25 @@ function getWorker(): Worker | null {
   }
 }
 
-/** Decode an htl-Opus blob to planes, off the main thread when possible. Never throws for a
- *  worker-side reason: every failure falls back to decoding inline, and says so once. */
-export async function decodeStemPlanesAsync(bytes: ArrayBuffer): Promise<{ planes: Float32Array[]; sampleRate: number }> {
-  const inline = async () => {
-    lastPath = "inline";
-    return decodeStemOpusPlanes(bytes);
-  };
+/** Run one decode request on the worker, falling back to `inline` (on a copy of the bytes) for any
+ *  worker-side reason. Shared by the plane decode and the packed int16 decode. */
+async function runOffThread<T>(
+  bytes: ArrayBuffer,
+  extra: Record<string, unknown>,
+  pick: (r: Reply) => T,
+  inline: (b: ArrayBuffer) => Promise<T>,
+): Promise<T> {
   const w = getWorker();
-  if (!w) return inline();
+  if (!w) {
+    lastPath = "inline";
+    return inline(bytes);
+  }
   const myGen = gen;
   const id = ++seq;
   // The blob is TRANSFERRED, so the caller's copy is detached — the inline fallback needs its own.
+  // (htl-Opus is ~1 MB per stem-minute: this copy is small next to the PCM it decodes to.)
   const forInline = bytes.slice(0);
-  return new Promise<{ planes: Float32Array[]; sampleRate: number }>((resolve, reject) => {
+  return new Promise<Reply>((resolve, reject) => {
     pending.set(id, { resolve, reject });
     setTimeout(() => {
       if (!pending.has(id)) return;
@@ -112,11 +120,11 @@ export async function decodeStemPlanesAsync(bytes: ArrayBuffer): Promise<{ plane
       }
       reject(new Error(myGen + 1 > HANG_RETRIES ? "stopped answering twice" : "stopped answering"));
     }, WORKER_BUDGET_MS);
-    w.postMessage({ id, bytes }, [bytes]);
+    w.postMessage({ id, bytes, ...extra }, [bytes]);
   })
     .then((r) => {
       lastPath = "worker";
-      return r;
+      return pick(r);
     })
     .catch((e: unknown) => {
       const m = String((e as Error)?.message);
@@ -128,8 +136,20 @@ export async function decodeStemPlanesAsync(bytes: ArrayBuffer): Promise<{ plane
             : "threw mid-flight — it survives and answers the next load, this one fell back",
       );
       lastPath = "inline";
-      return decodeStemOpusPlanes(forInline);
+      return inline(forInline);
     });
+}
+
+/** Decode an htl-Opus blob to planes, off the main thread when possible. Never throws for a
+ *  worker-side reason: every failure falls back to decoding inline, and says so once. */
+export async function decodeStemPlanesAsync(bytes: ArrayBuffer): Promise<Planes> {
+  return runOffThread(bytes, {}, (r) => ({ planes: r.planes!, sampleRate: r.sampleRate! }), (b) => decodeStemOpusPlanes(b));
+}
+
+/** Decode an htl-Opus blob straight to packed int16 + envelope (the mobile stem path), off the main
+ *  thread when possible — see decodeStemOpusPacked. `limit` pads/truncates to the set's length. */
+export async function decodeStemPackedOffThread(bytes: ArrayBuffer, limit?: number): Promise<PackedStem> {
+  return runOffThread(bytes, { pack: { limit } }, (r) => r.packed!, (b) => decodeStemOpusPacked(b, { limit }));
 }
 
 /** The app's stem-decode entry: off the main thread when possible, assembled here because an

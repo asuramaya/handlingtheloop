@@ -18,6 +18,7 @@ const OPUS_SR = 48000;
 const BITRATE = 128_000; // per stem; near-transparent, ~1 MB/min
 
 import { yieldToMain } from "../audio/yieldToMain";
+import { StemPacker, opusPacketSamples48k, type PackedStem } from "./stemPack";
 
 let _supported: Promise<boolean> | null = null;
 /** Whether this browser can both encode AND decode Opus via WebCodecs. Cached. */
@@ -233,6 +234,128 @@ export async function decodeStemOpusPlanes(
   }
   for (const d of frames) d.close();
   return { planes, sampleRate: sr };
+}
+
+/** The htl-Opus blob's stored sample rate (always OPUS_SR today) — read without decoding, so the
+ *  caller can tell whether the stem will need a resample to the context rate. */
+export function opusStemSampleRate(bytes: ArrayBuffer): number {
+  return new DataView(bytes).getUint32(4, true);
+}
+
+/** Decode an htl-Opus blob STRAIGHT TO PACKED INT16 + its waveform envelope — the mobile stem path.
+ *
+ *  ★ NO FULL-LENGTH FLOAT32 ANYWHERE. decodeStemOpusPlanes keeps every decoded frame until the
+ *  stream ends and then copies them into full-length planes, and the caller then copies those into
+ *  an AudioBuffer: three float32 copies of a stem at once (~690 MB for a ten-minute stem) for a
+ *  result that is going to be int16 anyway. Here each decoded frame is packed the moment it arrives
+ *  and closed, so the only full-length allocation is the int16 output (half of one float32 copy).
+ *
+ *  Backpressure: the decoder's output callbacks are TASKS, so a feed loop that never yields lets
+ *  every decoded frame pile up undelivered — which is the full float32 stem again, just held by the
+ *  decoder. The loop waits whenever more than OUT_LAG packets are in flight.
+ *
+ *  `limit` = pad/truncate to this many samples (a set's later stems must match the first one).
+ *  Runs in the decode worker; also the inline fallback on the main thread (then `sliceMs` keeps
+ *  frames under budget the same way the plane decoder does). */
+export async function decodeStemOpusPacked(
+  bytes: ArrayBuffer,
+  opts: { limit?: number; sliceMs?: number; yieldTo?: () => Promise<void> } = {},
+): Promise<PackedStem> {
+  const sliceMs = opts.sliceMs ?? 8;
+  const breathe = opts.yieldTo ?? yieldToMain;
+  const dv = new DataView(bytes);
+  const sr = dv.getUint32(4, true);
+  const ch = new Uint8Array(bytes)[8] || 2;
+  // Size the output from the packets' own TOC bytes (exact for a well-formed stream; the packer
+  // grows if it is ever short), so nothing is staged and nothing is grow-copied.
+  let est = 0;
+  for (let q = 12; q + 4 <= bytes.byteLength; ) {
+    const len = dv.getUint32(q, true);
+    q += 4;
+    if (len <= 0 || q + len > bytes.byteLength) break;
+    est += opusPacketSamples48k(new Uint8Array(bytes, q, Math.min(2, len)));
+    q += len;
+  }
+  if (sr !== OPUS_SR) est = Math.ceil((est * sr) / OPUS_SR);
+  const packer = new StemPacker(sr, est, opts.limit ?? Infinity);
+  let scratchL = new Float32Array(0);
+  let scratchR = new Float32Array(0);
+  let fed = 0;
+  let done = 0;
+  let failure: unknown = null;
+  // Packets in flight before the feed loop waits for the decoder's outputs to drain (~1.3 s of
+  // audio). The wait is woken BY an output, not by a timer or scheduler.yield: a yield continuation
+  // can be scheduled ahead of the codec's output tasks, which would let the feed loop run on while
+  // the frames it is supposed to wait for pile up. The 50 ms timer is only a guard against a stream
+  // whose packets yield no output at all.
+  const OUT_LAG = 64;
+  let wake: (() => void) | null = null;
+  const W = globalThis as unknown as { AudioDecoder: new (i: unknown) => Decoder; EncodedAudioChunk: new (i: unknown) => unknown };
+  const dec = new W.AudioDecoder({
+    output: (d: AudioDataLike) => {
+      try {
+        const n = d.numberOfFrames;
+        if (scratchL.length < n) {
+          scratchL = new Float32Array(n);
+          scratchR = new Float32Array(n);
+        }
+        const l = scratchL.subarray(0, n);
+        d.copyTo(l, { planeIndex: 0, format: "f32-planar" });
+        let r = l;
+        if (ch > 1) {
+          r = scratchR.subarray(0, n);
+          d.copyTo(r, { planeIndex: 1, format: "f32-planar" });
+        }
+        packer.push(l, r, n);
+      } catch (e) {
+        failure = e;
+      } finally {
+        d.close();
+        done++;
+        if (wake && fed - done <= OUT_LAG / 2) {
+          const w = wake;
+          wake = null;
+          w();
+        }
+      }
+    },
+    error: (e: Error) => {
+      failure = e;
+    },
+  });
+  dec.configure({ codec: "opus", sampleRate: sr, numberOfChannels: ch });
+  let slice = performance.now();
+  let p = 12;
+  let ts = 0;
+  while (p + 4 <= bytes.byteLength) {
+    const len = dv.getUint32(p, true);
+    p += 4;
+    if (len <= 0 || p + len > bytes.byteLength) break;
+    dec.decode(new W.EncodedAudioChunk({ type: "key", timestamp: ts, data: new Uint8Array(bytes, p, len) }));
+    fed++;
+    p += len;
+    ts += 20_000;
+    if (fed - done > OUT_LAG) {
+      await new Promise<void>((r) => {
+        wake = r;
+        setTimeout(() => {
+          if (wake === r) {
+            wake = null;
+            r();
+          }
+        }, 50);
+      });
+    }
+    if (performance.now() - slice > sliceMs) {
+      await breathe();
+      slice = performance.now();
+    }
+    if (failure) break;
+  }
+  await dec.flush();
+  dec.close();
+  if (failure) throw failure instanceof Error ? failure : new Error(String(failure));
+  return packer.finish();
 }
 
 /** Wrap decoded planes as an AudioBuffer for THIS context — the only part that needs one. */

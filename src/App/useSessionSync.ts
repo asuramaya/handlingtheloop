@@ -471,7 +471,11 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           }
           return; // diverged → never drive this deck
         }
-        if (!deck.buffer || scrubbing.current[id]) return; // don't fight a local scrub
+        // ★ "Can this deck play?", not "does it still hold the float32 mix". A phone RELEASES the mix
+        // once its stems are in the worklet (releaseMixBuffer), and `!deck.buffer` then switched off
+        // every follow tick for the rest of the track: a stemmed guest stopped starting, stopping and
+        // catching up with the host the moment its stems landed.
+        if (!deck.hasLocalPcm || scrubbing.current[id]) return; // still loading, or don't fight a local scrub
         // The drift-correction decision (see sessionFollow) → perform the named side effect.
         // A tick is a STALE snapshot of a moving clock and REAL rewinds arrive as seek INTENTS,
         // so a steady-playing follower is only ever pulled FORWARD (a lead is just latency, or a

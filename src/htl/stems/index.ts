@@ -13,9 +13,10 @@ import { getStemBlobs, putStemBlobs, hasStemBlobs } from "../persistence";
 import { separateNeural } from "./separate";
 export { setDemucsQuality } from "./separate";
 import { getStemModel, deviceSupportsModel, isChromium, LEGACY_STEM_IDS, type StemModel } from "./models";
-import { opusStemsSupported, encodeStemOpus, isOpusStem } from "./opus";
+import { opusStemsSupported, encodeStemOpus, isOpusStem, opusStemSampleRate } from "./opus";
 import { yieldToMain } from "../audio/yieldToMain";
-import { decodeStemOpusOffThread } from "./opusWorker";
+import { decodeStemOpusOffThread, decodeStemPackedOffThread } from "./opusWorker";
+import { StemPacker, type PackedStem as PackedOneStem } from "./stemPack";
 
 export * from "./models";
 export * from "./trace";
@@ -438,17 +439,20 @@ export interface PackedStems {
   base: Record<StemName, { min: Float32Array; max: Float32Array; low: Float32Array; mid: Float32Array; high: Float32Array; bucket: number }>;
 }
 
-const PACK_BUCKET = 256; // MUST match STEM_BASE_BUCKET in Deck.ts (the pyramid level-0 bucket)
 
 // CACHE-HIT NEURAL → PRE-PACKED int16, decoding ONE stem at a time. This is the OOM-safe twin of
 // the loadStems R2 cache-hit branch (lines ~228-242), which decodes all 4 stems into a full float32
 // `Stems` set; on mobile, loading a SECOND long stem track then crash-loops the tab — `Deck.load
 // EnginePcm` holds those 4 float32 (~460 MB) while building the 4 int16, briefly doubling the deck's
 // footprint into the ~1.5 GB iOS Gigacage. Here each stem is downloaded → decoded → packed to int16
-// + envelope → its float32 dropped before the next decode, so only ONE decoded stem is resident at a
-// time (peak ≈ 1 float32 + the int16 output, not 4 float32 + 4 int16). The result loads via
-// Deck.loadPackedStems with no float32 intermediate. Returns null when the R2 cache isn't complete
-// (or anything fails) → the caller falls back to the regular float32 loadStems path.
+// + envelope before the next one starts (decodePackStem). "One decoded stem at a time" turned out
+// not to be one copy: the decode itself held each stem as float32 THREE times (the worker's frames,
+// its planes, the main thread's AudioBuffer), and that swung renderer RSS by ~1 GB per stem — 3.9 GB
+// peak while the second deck of a 20-minute pair loaded. An Opus stem at the context rate now packs
+// to int16 frame by frame inside the worker, so the in-flight cost is the int16 itself (2026-11-10:
+// 1.98 GB peak, same track pair). The result loads via Deck.loadPackedStems with no float32
+// intermediate. Returns null when the R2 cache isn't complete (or anything fails) → the caller falls
+// back to the regular float32 loadStems path.
 export async function loadStemsPackedInt16(
   ctx: BaseAudioContext,
   videoId: string,
@@ -463,24 +467,22 @@ export async function loadStemsPackedInt16(
     const ns = manifest.ns ?? m.id;
     let sr = 0;
     let N = 0;
-    let gL: Int16Array[] = [];
-    let gR: Int16Array[] = [];
+    const gL: Int16Array[] = [];
+    const gR: Int16Array[] = [];
     const base = {} as PackedStems["base"];
     const wav: ArrayBuffer[] = []; // compressed bytes kept for the local cache (parity w/ loadStems)
     for (let gi = 0; gi < STEM_NAMES.length; gi++) {
       const bytes = await downloadStemBytes(videoId, STEM_NAMES[gi], ns);
       wav.push(bytes); // decode on a COPY so the original survives for saveStemsLocal
-      const buf = await decodeStemBlob(ctx, bytes.slice(0));
+      // The first stem sets the set's length; the rest are padded/truncated to it (as before).
+      const one = await decodePackStem(ctx, bytes.slice(0), gi === 0 ? undefined : N);
       if (gi === 0) {
-        sr = buf.sampleRate;
-        N = buf.length;
-        gL = STEM_NAMES.map(() => new Int16Array(N));
-        gR = STEM_NAMES.map(() => new Int16Array(N));
+        sr = one.sampleRate;
+        N = one.length;
       }
-      packStemInt16Full(buf, gi, N, sr, gL, gR, base);
-      // `buf` (this stem's float32) is now unreferenced; yield so GC reclaims it BEFORE the next
-      // decode — the whole point: never hold the full 4-stem float32 set on the phone.
-      await yieldToMain();
+      gL.push(one.L);
+      gR.push(one.R);
+      base[STEM_NAMES[gi]] = one.base;
       onProgress?.((gi + 1) / STEM_NAMES.length);
     }
     void saveStemsLocal(videoId, m.id, wav); // next refresh skips the download (parity w/ loadStems)
@@ -490,86 +492,28 @@ export async function loadStemsPackedInt16(
   }
 }
 
-// Pack one fully-decoded stem AudioBuffer into int16 output group `gi` + its level-0 min/max +
-// low/mid/high colour envelope (PACK_BUCKET-aligned, identical math to Deck's fused pack, so the
-// LOD pyramids match). Single read of the float32.
-function packStemInt16Full(
-  buf: AudioBuffer,
-  gi: number,
-  N: number,
-  sr: number,
-  gL: Int16Array[],
-  gR: Int16Array[],
-  base: PackedStems["base"],
-): void {
-  const fL = buf.getChannelData(0);
-  const fR = buf.numberOfChannels > 1 ? buf.getChannelData(1) : fL;
-  const n = Math.min(buf.length, N);
-  const buckets = Math.ceil(N / PACK_BUCKET);
-  const oL = gL[gi];
-  const oR = gR[gi];
-  const min = new Float32Array(buckets);
-  const max = new Float32Array(buckets);
-  const low = new Float32Array(buckets);
-  const mid = new Float32Array(buckets);
-  const high = new Float32Array(buckets);
-  const aLow = 1 - Math.exp((-2 * Math.PI * 200) / sr);
-  const aMid = 1 - Math.exp((-2 * Math.PI * 2000) / sr);
-  let lp200 = 0;
-  let lp2000 = 0;
-  let lSum = 0;
-  let mSum = 0;
-  let hSum = 0;
-  let maxLow = 1e-9;
-  let maxMid = 1e-9;
-  let maxHigh = 1e-9;
-  let bMin = 1;
-  let bMax = -1;
-  let cnt = 0;
-  let bi = 0;
-  for (let i = 0; i < n; i++) {
-    const l = fL[i];
-    const r = fR[i];
-    const sl = l * 32767;
-    const srr = r * 32767;
-    oL[i] = sl < -32767 ? -32767 : sl > 32767 ? 32767 : Math.round(sl);
-    oR[i] = srr < -32767 ? -32767 : srr > 32767 ? 32767 : Math.round(srr);
-    const mm = (l + r) * 0.5;
-    lp200 += aLow * (mm - lp200);
-    lp2000 += aMid * (mm - lp2000);
-    const lo = lp200;
-    const md = lp2000 - lp200;
-    const hi = mm - lp2000;
-    if (mm < bMin) bMin = mm;
-    if (mm > bMax) bMax = mm;
-    lSum += lo * lo;
-    mSum += md * md;
-    hSum += hi * hi;
-    if (++cnt >= PACK_BUCKET || i === n - 1) {
-      const lv = Math.sqrt(lSum / cnt);
-      const mv = Math.sqrt(mSum / cnt);
-      const hv = Math.sqrt(hSum / cnt);
-      min[bi] = bMin;
-      max[bi] = bMax;
-      low[bi] = lv;
-      mid[bi] = mv;
-      high[bi] = hv;
-      if (lv > maxLow) maxLow = lv;
-      if (mv > maxMid) maxMid = mv;
-      if (hv > maxHigh) maxHigh = hv;
-      bi++;
-      bMin = 1;
-      bMax = -1;
-      lSum = mSum = hSum = 0;
-      cnt = 0;
-    }
-  }
-  for (let i = 0; i < buckets; i++) {
-    low[i] /= maxLow;
-    mid[i] /= maxMid;
-    high[i] /= maxHigh;
-  }
-  base[STEM_NAMES[gi]] = { min, max, low, mid, high, bucket: PACK_BUCKET };
+/** ONE cached stem → int16 + envelope, holding as little float32 as the format allows.
+ *
+ *  htl-Opus at the context's rate (the normal case: stems are stored at 48 kHz and phones/desktops
+ *  run 48 kHz contexts) decodes in the worker STRAIGHT to int16, frame by frame — no full-length
+ *  float32 exists on either thread, and only the int16 crosses. Anything else (an Opus stem that
+ *  needs resampling to a 44.1 kHz context, or a legacy WAV) takes the AudioBuffer route, because the
+ *  resample is the OfflineAudioContext's job and only exists on this thread: one stem decoded, packed
+ *  through the same StemPacker, and dropped before the next one. Same samples either way. */
+export async function decodePackStem(ctx: BaseAudioContext, bytes: ArrayBuffer, limit?: number): Promise<PackedOneStem> {
+  if (isOpusStem(bytes) && opusStemSampleRate(bytes) === ctx.sampleRate) return decodeStemPackedOffThread(bytes, limit);
+  // The decoded AudioBuffer lives only inside this inner call, so nothing in the suspended outer
+  // frame can keep it alive across the yield below.
+  const out = await (async () => {
+    const buf = await decodeStemBlob(ctx, bytes);
+    const n = buf.length;
+    const packer = new StemPacker(buf.sampleRate, n, limit ?? n);
+    const fL = buf.getChannelData(0);
+    packer.push(fL, buf.numberOfChannels > 1 ? buf.getChannelData(1) : fL, n);
+    return packer.finish();
+  })();
+  await yieldToMain(); // let GC reclaim it BEFORE the next decode — never hold the 4-stem float32 set
+  return out;
 }
 
 

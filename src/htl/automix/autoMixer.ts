@@ -658,7 +658,7 @@ export class AutoMixer {
     if (this.phase !== "armed" && this.phase !== "preload" && this.phase !== "cueing") return null;
     const live = this.deps.engine.deck(this.liveId);
     // Track seconds ÷ tempo = seconds you will actually wait (at +8 % a 60 s gap is 55.6 s).
-    return Math.max(0, (this.mixOutTime - live.position()) / (live.rate > 0 ? live.rate : 1));
+    return Math.max(0, (this.exitPoint(live) - live.position()) / (live.rate > 0 ? live.rate : 1));
   }
 
   // The next track, once it is actually sitting on the idle deck.
@@ -1333,11 +1333,22 @@ export class AutoMixer {
     // A hand on the outgoing platter (or a pause) holds the mix: starting the incoming under a
     // scratch is not a transition. It goes the moment the deck is playing again.
     if (!live.playing) return;
+    const exitAt = this.exitPoint(live);
+    const pos = live.position();
     if (this.mixOutTime != null) {
-      const until = (this.mixOutTime - live.position()) / Math.max(0.25, live.rate || 1);
+      const until = (exitAt - pos) / Math.max(0.25, live.rate || 1);
       if (until <= FINE_AHEAD_S && until > -0.5) this.startFine();
     }
-    if (live.position() >= (this.mixOutTime ?? Infinity) - 0.004) {
+    // A wrap of a loop whose end IS the exit (exitAt above): the playhead jumped back from just
+    // short of it, which is the exit passing between two ticks.
+    const prev = this.lastCuePos;
+    this.lastCuePos = pos;
+    // From the loop's second half to its first: a wrap, not a hand seek within the loop.
+    const L = live.loop;
+    const mid = L ? (L.start + L.end) / 2 : 0;
+    const wrappedAtExit = exitAt !== this.mixOutTime && !!L && prev != null && prev >= mid && pos < mid;
+    if (pos >= exitAt - 0.004 || wrappedAtExit) {
+      this.lastCuePos = null;
       // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
       this.stemHold = this.shouldHoldForStems(live, idle);
@@ -1355,6 +1366,22 @@ export class AutoMixer {
       this.holdLoop = this.liveId;
     }
   }
+
+  // ★ WHERE THE OUTGOING ACTUALLY LEAVES (operator, 2026-11-10: a looping outgoing deck "never
+  // transitions … the loop rewinds the countdown … 3. 2. 1. 3. 2. 1"). The trigger waited for the
+  // playhead to reach mixOutTime, and a loop that ends at or before it (the loop-extend's own 4-beat
+  // hold, which closes one bar before the exit and so ends right ON it, or the DJ's loop) wraps the
+  // playhead back first, every pass, forever. While the deck is looping inside a loop that cannot
+  // reach the planned exit, the loop's END is the exit: the mix starts as the loop comes round.
+  private exitPoint(live: Deck): number {
+    const m = this.mixOutTime;
+    if (m == null) return Infinity;
+    const L = live.loop;
+    if (!L?.active || !(L.end > L.start) || L.end > m + 0.004) return m;
+    const pos = live.position();
+    return pos >= L.start - 0.05 && pos <= L.end + 0.05 ? L.end : m;
+  }
+  private lastCuePos: number | null = null; // the cueing tick's last playhead, to see a loop wrap
 
   // Within one bar of the planned exit — the point where a loop-extend has to close, since a loop
   // taken later would start mid-phrase.

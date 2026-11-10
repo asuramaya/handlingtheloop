@@ -109,11 +109,14 @@ class FakeDeck {
 
   // ── loops ──
   loopBeats = 0;
+  /** A real loop region (the rig wraps the playhead inside it while autoAdvance runs). */
+  loop: { active: boolean; start: number; end: number } | null = null;
   setBeatLoop(b: number): void {
     this.loopBeats = b;
   }
   exitLoop(): void {
     this.loopBeats = 0;
+    this.loop = null;
   }
   spinbacks = 0;
   spinback(): void {
@@ -398,7 +401,12 @@ class Rig {
     if (this.autoAdvance) {
       for (const id of ["A", "B"] as DeckId[]) {
         const d = this.engine.deck(id);
-        if (d.playing) d.setPos(d.position() + dtMs / 1000);
+        if (d.playing) {
+          let p = d.position() + dtMs / 1000;
+          const L = d.loop;
+          if (L?.active && p >= L.end) p = L.start + ((p - L.start) % (L.end - L.start));
+          d.setPos(p);
+        }
       }
     }
     await this.mixer.tick();
@@ -575,6 +583,40 @@ describe("AutoMixer machine — full transition path", () => {
     expect(r.engine.B.playing).toBe(true);
     expect(r.deckTracks.B).toBe(t2);
     expect(r.engine.A.playing).toBe(false); // outgoing paused at settle
+  });
+
+  // ★ operator, 2026-11-10: a looping outgoing deck "never transitions … 3. 2. 1. 3. 2. 1". A loop
+  // that ends at or before the planned exit wraps the playhead back before it ever gets there.
+  test("an outgoing deck looping SHORT of the mix point still transitions (at the loop's end)", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 60, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.mixer.enable();
+    // Let it plan and cue, then catch A in a 2 s loop that ends just short of the exit.
+    let mixOut: number | null = null;
+    for (let i = 0; i < 40 && mixOut == null; i++) {
+      await r.tick();
+      mixOut = r.mixer.getStatus().mixOutTime;
+    }
+    expect(mixOut).not.toBeNull();
+    const end = (mixOut as number) - 0.05;
+    r.engine.A.loop = { active: true, start: end - 2, end };
+    r.setPos("A", end - 1.5);
+    r.autoAdvance = true;
+    const counts: number[] = [];
+    let mixed = false;
+    for (let i = 0; i < 200 && !mixed; i++) {
+      await r.tick(100);
+      const c = r.mixer.getStatus().countdownSec;
+      if (r.phase === "cueing" && c != null) counts.push(c);
+      if (r.phaseHist.includes("mixing")) mixed = true;
+    }
+    expect(mixed).toBe(true);
+    // and the countdown pointed at the loop's end, so it never read more than the loop's 2 s
+    expect(Math.max(...counts)).toBeLessThanOrEqual(2.1);
   });
 
   test("the glide holds commandedRamp through the fade, then clears it (no rubato-FF fight → no mid-fade tempo jumps)", async () => {

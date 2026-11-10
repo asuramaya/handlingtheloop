@@ -80,11 +80,13 @@ describe("MidiEngine — FLX4 jog layers decode through the real profile", () =>
     send(CC_A, 0x21, 0x41); // +1
     send(CC_A, 0x21, 0x3d); // −3
     expect(events).toEqual([
-      { type: "jogBend", deck: "A", delta: 1 },
-      { type: "jogBend", deck: "A", delta: -1 },
-      { type: "jogBend", deck: "A", delta: 1 },
-      { type: "jogBend", deck: "A", delta: -3 },
+      expect.objectContaining({ type: "jogBend", deck: "A", delta: 1 }),
+      expect.objectContaining({ type: "jogBend", deck: "A", delta: -1 }),
+      expect.objectContaining({ type: "jogBend", deck: "A", delta: 1 }),
+      expect.objectContaining({ type: "jogBend", deck: "A", delta: -3 }),
     ]);
+    // timed like the scratch stream: a free-spinning platter's ticks measure its release speed
+    for (const e of events) expect(typeof (e as { ts?: number }).ts).toBe("number");
   });
 
   it("SHIFT+SYNC (0x60, shift fixed OFF) → keyMatch with shift:false and shiftFixed, though SHIFT is held", async () => {

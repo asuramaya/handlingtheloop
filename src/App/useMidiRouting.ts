@@ -3,7 +3,7 @@
 // App (sed-extracted); the App spine arrives via `deps`, destructured to the original names so the
 // closure + its useCallback dep array are unchanged. Consumed by useMidi + useGamepad in App.
 import { useCallback, useEffect, useRef } from "react";
-import { decideSpinFollow } from "./jogSpinFollow";
+import { decideSpinFollow, SPIN_MAX_MS, SPIN_STILL_MS } from "./jogSpinFollow";
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import { EQ_MIN_DB, EQ_MAX_DB, cueBankBase, type Deck, type DeckId, type SmartFader } from "@htl";
 import { useRoom } from "@htl/room";
@@ -110,6 +110,11 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
   // latest tick, so a long deliberate search is not cut off mid-turn.
   const spinFollow = useRef<Record<DeckId, { released: number; lastTick: number; search?: boolean } | null>>({ A: null, B: null });
   const spinTimer = useRef<number | null>(null);
+  // A PLAYING deck's throw is handed to JogEngine's motor catch once measured (SPIN_MEASURE_MS), but
+  // the FLX4 platter keeps spinning free for up to a few seconds after. Those 0x21 ticks are not a
+  // ring nudge, so they are swallowed (no tempo bend) until the platter goes still. `lastTick` is
+  // performance.now() ms.
+  const spinDrain = useRef<Record<DeckId, { lastTick: number; from: number } | null>>({ A: null, B: null });
   // The latest jog callbacks/engine, for the timer (which outlives any one render's closure).
   const spinDeps = useRef({ engine, onJogEnd });
   spinDeps.current = { engine, onJogEnd };
@@ -120,6 +125,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     spinFollow.current[id] = null;
     const deck = spinDeps.current.engine.deck(id);
     if (deck.grabbing) {
+      if (deck.jogReturnsToPlay) spinDrain.current[id] = { lastTick: performance.now(), from: performance.now() };
       deck.scrubEnd();
       spinDeps.current.onJogEnd(id);
     }
@@ -569,6 +575,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // so resting a finger to nudge no longer halts playback.
           const deck = engine.deck(ev.deck);
           jogTouched.current[ev.deck] = ev.down;
+          if (ev.down) spinDrain.current[ev.deck] = null; // the hand is back on the platter
           if (ev.down) {
             if (spinFollow.current[ev.deck] && deck.grabbing) {
               // The hand caught the still-spinning platter: the grab never ended, so just stop
@@ -657,6 +664,15 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           // drive it audibly and visibly (scratch resampler, 1:1 like the platter), and it lets go
           // once the ring has been still for the follow's still window (jogSpinFollow.ts), resting
           // where it stopped. SHIFT + jog remains the coarse fast search.
+          const drain = spinDrain.current[ev.deck];
+          if (drain) {
+            const now = performance.now();
+            if (now - drain.lastTick < SPIN_STILL_MS && now - drain.from < SPIN_MAX_MS) {
+              drain.lastTick = now; // still the thrown platter spinning out: not a nudge
+              break;
+            }
+            spinDrain.current[ev.deck] = null;
+          }
           if (!spinFollow.current[ev.deck] && !deck.playing && !deck.jogging) {
             deck.scrubBegin();
             onJogStart(ev.deck);
@@ -666,7 +682,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           }
           if (spinFollow.current[ev.deck] && deck.grabbing) {
             const sec = ev.delta * SEC_PER_TICK;
-            deck.scrubMove(sec);
+            deck.scrubMove(sec, ev.ts);
             emitJog(ev.deck, sec);
             const f = spinFollow.current[ev.deck]!;
             f.lastTick = performance.now();

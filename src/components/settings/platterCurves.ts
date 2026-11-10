@@ -3,7 +3,7 @@
 // deck's own knob mappings (platterTaus, platterDrag, RING_BEND). Nothing here is a hand-drawn
 // approximation: if a curve on screen and the deck disagree, one of those exports changed and
 // this follows it.
-import { brakeFriction, platterDrag, platterTaus, servoStep } from "@htl/audio/JogEngine";
+import { brakeFriction, motorStep, platterDrag, platterTaus, servoStep } from "@htl/audio/JogEngine";
 import { RING_BEND, stepBend } from "@htl/audio/bendPhysics";
 import { simulateSyncRecovery, SYNC_TRIM_MAX } from "@htl/audio/syncLoop";
 
@@ -40,6 +40,17 @@ function servo(v0: number, target: number, tau: number): number[] {
   for (let i = 0; i < n; i++) {
     out.push(s.v);
     s = servoStep(s, target, DT, tau);
+  }
+  return out;
+}
+
+/** A released record caught by the slipmat: constant torque (motorStep), linear to `target`. */
+function slip(v0: number, target: number, accel: number): number[] {
+  const out: number[] = [];
+  let v = v0;
+  for (let i = 0; i < n; i++) {
+    out.push(v);
+    v = motorStep(v, target, DT, accel);
   }
   return out;
 }
@@ -84,8 +95,8 @@ export function platterCurves(k: PlatterKnobs): Curve[] {
       key: "letGo",
       title: "Let go",
       lines: [
-        // Grabbed and held still on a playing deck, then released: the servo catches it up.
-        { label: "playing", v: servo(0, 1, platterTaus.catchUp(k.mass)) },
+        // Grabbed and held still on a playing deck, then released: the slipmat catches it up.
+        { label: "playing", v: slip(0, 1, platterTaus.catchAccel(k.mass)) },
         // Pushed and released on a paused deck: friction glides it to a stop.
         { label: "paused", v: brake(FLING, platterTaus.glide(k.mass, platterDrag(k.mass))) },
       ],
@@ -97,7 +108,7 @@ export function platterCurves(k: PlatterKnobs): Curve[] {
     {
       key: "backSpin",
       title: "Back spin",
-      lines: [{ label: "throw + catch", v: servo(-strength, 1, platterTaus.backSpin(k.backSpin)) }],
+      lines: [{ label: "throw + catch", v: slip(-strength, 1, platterTaus.backSpinAccel(k.backSpin)) }],
       yMin: -14.5,
       yMax: 2,
       rest: 1,

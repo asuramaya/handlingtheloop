@@ -28,12 +28,24 @@
 //
 //   node scripts/joglab/scratchwav.mjs --pcm track.f32 [--out dir] [--only 00-steady-1x,01-microjogs]
 //   (track.f32 = interleaved stereo float32 at 48 kHz, e.g. ffmpeg -i x -ac 2 -ar 48000 -f f32le x.f32)
+//
+// --backspin: THROWS AND BACKSPINS (forward 1.5x/3x, backward 3x/6x/10x, a classic backspin, the
+// operator's captured one, the spinback button, a paused throw). A release is decided by JogEngine and
+// the FLX4 routing's free-spin follow, so these run through the real JogEngine (backspin.mjs) rather
+// than a hand-made message stream; it needs --experimental-transform-types (JogEngine has TS
+// parameter properties):
+//   node --experimental-transform-types scripts/joglab/scratchwav.mjs --backspin --pcm track.f32 \
+//        [--src <checkout root>] [--tag after] [--out dir] [--only back-10x]
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { SCRATCH_WORKLET_SRC } from "../../src/htl/audio/scratchWorklet.ts";
 
 const args = process.argv.slice(2);
+if (args.includes("--backspin")) {
+  await import("./backspin.mjs");
+  process.exit(0);
+}
 const opt = (k) => (args.includes(k) ? args[args.indexOf(k) + 1] : undefined);
 const SR = 48000;
 const Q = 128;

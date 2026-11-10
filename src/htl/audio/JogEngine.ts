@@ -111,18 +111,45 @@ export function brakeFriction(state: BrakeState, dt: number, tau: number): Brake
   return { v: next, z };
 }
 
+// --- A released record on a turning platter: CONSTANT torque, not a servo ---
+// Operator, 2026-11-10 (FLX4, vinyl mode): "the backspin on rekordbox is more aggressive and I can't
+// quite match the feel or sound of it". A thrown record is not driven by a speed controller. On a
+// real deck the motor holds the heavy platter at speed and the record slips on the slipmat; kinetic
+// (Coulomb) friction is the same at any slip speed, so the record's speed changes at a CONSTANT rate
+// until it matches the platter and locks: a backward throw slows LINEARLY through zero and on up to
+// play speed, a forward throw faster than play slows linearly down to it. The servo used before gave a
+// backspin a long soft exponential tail around zero (measured: about 0.3 s of creeping under 0.3x), and
+// the FLX4's own free spin (exponential, ~0.145 s, measured on the operator's capture) gave it a
+// second one. Numbers: a 180 g record (I = 2.0e-3 kg m^2) on felt (mu_k ~0.3, contact radius ~0.1 m)
+// has ~0.053 N m of drag, ~26 rad/s^2, i.e. about 7.5x play speed per second at 33 1/3; DJ slipmats
+// run 6-16x/s across mats and needle weights. The mass knob picks within that (platterTaus.catchAccel),
+// and Back spin length picks the triggered spinback's (platterTaus.backSpinAccel).
+// `accel` is in play-speeds per second (× realtime per second).
+export function motorStep(v: number, target: number, dt: number, accel: number): number {
+  if (!(accel > 0)) return target;
+  const m = accel * dt;
+  const dv = target - v;
+  return dv > m ? v + m : dv < -m ? v - m : target;
+}
+
 // --- The knob → time-constant mappings, exported so Settings ▸ Platter can draw the deck's own
 // curves with the deck's own numbers (servoStep/brakeFriction above + these). One definition; a
 // graph that re-derived them would be a second copy free to drift.
 export const platterTaus = {
-  /** Released while playing: the servo's settle time back up to play speed. */
-  catchUp: (weight: number) => lerp(0.025, 0.12, weight),
+  /** Released while playing: the slipmat's catch, in play-speeds per second (motorStep). 0→1x takes
+   *  60 ms featherweight … 160 ms heavy (100 ms at the default mass), so a 10x backspin runs ~1.1 s. */
+  catchAccel: (weight: number) => 1 / lerp(0.06, 0.16, weight),
   /** Released and settling to a stop (paused, or too gentle to catch up): friction time. */
   glide: (weight: number, drag: number) => lerp(0.6, 0.1, drag) * lerp(0.7, 1.3, weight),
   brake: (b: number) => lerp(0.02, 0.5, b),
   start: (s: number) => lerp(0.02, 0.45, s),
+  /** The FX2 SPIN move's wind-down to rest (friction, brakeFriction). */
   backSpin: (b: number) => lerp(0.12, 0.6, b),
   backSpinStrength: (b: number) => lerp(4, 14, b),
+  /** A spinback's catch (a triggered one, or a hard backward jog throw), play-speeds per second:
+   *  Short = a grippy mat, Long = a slippery one. With the strength above a triggered spinback runs
+   *  0.3 s (Short, 4x) … 0.9 s (default, 9x) … 2.1 s (Long, 14x) back to play. */
+  backSpinAccel: (b: number) => lerp(16, 7, b),
 };
 /** Settings ▸ Platter has ONE "mass" knob (operator, 2026-11-02: weight and drag merged). A heavier
  *  platter both catches up slower AND glides longer, so drag falls as mass rises; 0.8 − mass keeps
@@ -138,14 +165,14 @@ export const platterDrag = (mass: number) => Math.max(0, Math.min(1, 0.8 - mass)
 // union of actions — the caller (scrubEnd) performs the side effect the action names.
 export type ReleaseAction =
   | { kind: "slip"; pos: number } // SLIP was armed — snap straight to the shadow, no coast at all
-  | { kind: "spinback"; vel: number; tau: number } // a hard backward flick while playing — the dramatic back-spin-and-catch curve
+  | { kind: "spinback"; vel: number; accel: number } // a hard backward flick while playing — the dramatic back-spin-and-catch curve
   | { kind: "coast"; vel: number }; // a normal release — hand the platter its fling velocity
 
 export interface ReleaseInput {
-  handVel: number; // the finger's last smoothed velocity at release
+  handVel: number; // the platter's speed at release (timestamped ticks, else the frame-smoothed finger)
   jogReturnToPlay: boolean; // was the deck playing when grabbed
   slipPos: number | null; // SLIP shadow position, or null (not armed)
-  backSpinTau: number; // the tuned back-spin-and-catch time
+  backSpinAccel: number; // the spinback's catch (play-speeds per second, platterTaus.backSpinAccel)
   maxCoast: number; // release-speed cap (× realtime)
   spinbackFlick: number; // backward-flick speed past which a release counts as a spinback gesture
 }
@@ -155,7 +182,7 @@ export function decideRelease(p: ReleaseInput): ReleaseAction {
   const vel = Math.max(-p.maxCoast, Math.min(p.maxCoast, p.handVel));
   // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the native
   // gesture is a hard BACKWARD flick of the jog while playing.
-  if (p.jogReturnToPlay && vel < -p.spinbackFlick) return { kind: "spinback", vel, tau: p.backSpinTau };
+  if (p.jogReturnToPlay && vel < -p.spinbackFlick) return { kind: "spinback", vel, accel: p.backSpinAccel };
   return { kind: "coast", vel };
 }
 
@@ -163,8 +190,17 @@ export function decideRelease(p: ReleaseInput): ReleaseAction {
 // platter grab/coast + the Vinyl Speed Adjust motor ramps (brake / soft-start / spinback).
 // Extracted from Deck so the scratch surface is debuggable on its own; behaviour is 1:1.
 export class JogEngine {
-  private static readonly MAX_COAST = 3; // cap on release speed (× realtime)
+  // Cap on release speed (× realtime). It was 3, which turned every hard throw into a 3x one: a real
+  // 33 1/3 platter flung backward reaches 8-15x, and the operator's FLX4 capture spins free at 13-16x
+  // right after a backspin. 20 keeps headroom under the scratch resampler's 24x granular switch.
+  private static readonly MAX_COAST = 20;
+  // Pointer drags (no controller timestamps) keep the old cap: a waveform drag zoomed out reads tens
+  // of x and, let go on a paused deck, would glide seconds of audio away.
+  private static readonly POINTER_MAX_COAST = 3;
   private static readonly SPINBACK_FLICK = 2.2; // release speed (× realtime) past which a BACKWARD jog flick = a spinback
+  // The release speed of a controller jog is the least-squares slope of its timestamped ticks over
+  // this much of the latest motion (frame-rate smoothing of the hand underestimated a fast flick).
+  static readonly FLING_WINDOW_MS = 25;
 
   private jogPhase: "off" | "grab" | "coast" | "reverse" | "motor" | "pattern" = "off"; // "motor" = a worklet-owned brake/spinback/soft-start ramp
   private jogPos = 0; // platter position (track sec) — authoritative while jogging
@@ -190,7 +226,12 @@ export class JogEngine {
   private _backSpin = 0.5; // 0..1 → spinback length + strength
   private _ramping: "start" | "brake" | "spinback" | null = null; // a motor ramp is in flight
   private _coastTau = 0; // >0 overrides the jog-physics coast tau (= a motor ramp time)
-  private _servoA = 0; // servoStep's acceleration state (JS-side coast, catch-up-to-play only)
+  private _catchAccel = 0; // >0 overrides the mass knob's catch (a jog spinback uses the Back spin knob's)
+  // Timestamped hand samples [ts ms, unwrapped hand position sec, ...] for the release speed, from
+  // moves that carried a controller timestamp. trailTs = whether the LATEST move had one.
+  private trail: number[] = [];
+  private trailPos = 0;
+  private trailTs = false;
   private _brakeZ = 0; // brakeFriction's bristle-deflection state (JS-side coast, decay-to-stop only)
 
   // The continuous scrub resampler (attached by AudioEngine), owned here. It reads PCM
@@ -306,6 +347,9 @@ export class JogEngine {
   private backSpinStrength() {
     return platterTaus.backSpinStrength(this._backSpin);
   }
+  private backSpinAccel() {
+    return platterTaus.backSpinAccel(this._backSpin);
+  }
 
   // --- state readers (Deck forwards these) ---
 
@@ -368,8 +412,12 @@ export class JogEngine {
     this.handPos = this.handLast = this.jogPos;
     this.jogVel = 0;
     this._coastTau = 0;
+    this._catchAccel = 0;
     this._ramping = null;
     this.handVel = 0;
+    this.trail = [];
+    this.trailPos = 0;
+    this.trailTs = false;
     this.jogInputAt = this.ctx.currentTime;
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "grab";
@@ -395,16 +443,82 @@ export class JogEngine {
     this.handPos = this.jogPos = p;
     this.host.setStartOffset(p);
     this.scratchMove(ts); // per-input-sample worklet push
+    // The hand's own motion (unwrapped, unclamped), timed by the controller, for the release speed.
+    this.trailTs = ts != null;
+    if (ts != null) {
+      this.trailPos += deltaSec;
+      const H = this.trail;
+      H.push(ts, this.trailPos);
+      while (H.length > 512 || (H.length > 6 && ts - H[0] > 200)) H.splice(0, 2);
+    }
   }
 
-  scrubEnd() {
+  /** The platter's speed at the moment of release (× realtime): the least-squares slope of the
+   *  timestamped hand samples over the last FLING_WINDOW_MS (at least 3 samples within 100 ms), so a
+   *  flick reads at the speed it actually reached, not at a frame-rate EMA that is still catching up.
+   *  A hand that stopped before letting go cannot be faster than one step per the time since its last
+   *  sample. null = no usable timestamped motion (pointer drags): the caller falls back to handVel. */
+  releaseVelocity(now: number): number | null {
+    const H = this.trail;
+    if (!this.trailTs || H.length < 4) return null;
+    const lastT = H[H.length - 2];
+    // ★ DELIVERY STALLS. A fast-spinning FLX4's ticks stop arriving for 10-20 ms and then land as a
+    // burst stamped with one time (all four backspins in the operator's capture do it), so a fit
+    // across a stall reads the platter slower (the stall) or faster (the burst) than it turned. Fit
+    // the latest unbroken RUN of ticks instead, or the one before a stall if the latest run is
+    // still too short to fit; ticks after the stall prove the platter is still moving.
+    const gaps: number[] = [];
+    for (let i = H.length - 2; i >= 2 && gaps.length < 12 && lastT - H[i - 2] <= 100; i -= 2) gaps.push(H[i] - H[i - 2]);
+    const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[gaps.length >> 1] : 0;
+    const stall = Math.max(5, 4 * med);
+    const runStart = (end: number) => {
+      let i = end;
+      while (i >= 2 && H[i] - H[i - 2] <= stall && lastT - H[i - 2] <= 100) i -= 2;
+      return i;
+    };
+    let end = H.length - 2;
+    let start = runStart(end);
+    if ((end - start) / 2 + 1 < 3 || H[end] - H[start] < 4) {
+      if (start >= 2 && lastT - H[start - 2] <= 100) {
+        end = start - 2;
+        start = runStart(end);
+      }
+    }
+    let i0 = end;
+    while (i0 > start && H[end] - H[i0 - 2] <= JogEngine.FLING_WINDOW_MS) i0 -= 2;
+    while ((end - i0) / 2 + 1 < 3 && i0 > start) i0 -= 2;
+    const n = (end - i0) / 2 + 1;
+    if (n < 2) return null;
+    const t0 = H[end], x0 = H[end + 1];
+    let st = 0, sp = 0, stt = 0, stp = 0;
+    for (let i = i0; i <= end; i += 2) {
+      const t = H[i] - t0, x = H[i + 1] - x0;
+      st += t; sp += x; stt += t * t; stp += t * x;
+    }
+    const den = n * stt - st * st;
+    let v = den > 1e-9 ? ((n * stp - st * sp) / den) * 1000 : 0;
+    // A hand that stopped before letting go: no faster than its last step per the time since.
+    // (Not before 16 ms, the stalls above.)
+    const gap = (H[end] - H[i0]) / (n - 1);
+    const since = now - lastT;
+    if (since > 1.5 * gap && since > 16) {
+      const step = Math.abs(H[H.length - 1] - H[H.length - 3]);
+      const vMax = (step / since) * 1000;
+      if (Math.abs(v) > vMax) v = Math.sign(v) * vMax;
+    }
+    return v;
+  }
+
+  /** Let go. `now` = when (performance.now() clock), for the timestamped release speed. */
+  scrubEnd(now?: number) {
     if (this.jogPhase !== "grab") return;
+    const tracked = this.releaseVelocity(now ?? performance.now());
     const action = decideRelease({
-      handVel: this.handVel,
+      handVel: tracked ?? this.handVel,
       jogReturnToPlay: this.jogReturnToPlay,
       slipPos: this.host.slipReleasePos(),
-      backSpinTau: this.backSpinTau(),
-      maxCoast: JogEngine.MAX_COAST,
+      backSpinAccel: this.backSpinAccel(),
+      maxCoast: tracked != null ? JogEngine.MAX_COAST : JogEngine.POINTER_MAX_COAST,
       spinbackFlick: JogEngine.SPINBACK_FLICK,
     });
     if (action.kind === "slip") {
@@ -422,14 +536,14 @@ export class JogEngine {
       return;
     }
     this.jogVel = action.vel;
+    this._coastTau = 0;
     if (action.kind === "spinback") {
-      this._coastTau = action.tau;
+      this._catchAccel = action.accel;
       this._ramping = "spinback";
     } else {
-      this._coastTau = 0;
+      this._catchAccel = 0;
       this._ramping = null;
     }
-    this._servoA = 0;
     this._brakeZ = 0;
     this.jogLast = this.ctx.currentTime;
     this.jogPhase = "coast";
@@ -443,7 +557,7 @@ export class JogEngine {
 
   /** Seed the coast from `initialVel`, heading either UP to play (resumePlay) or DOWN to
    *  a stop, over `tau`, voiced on the resampler. Shared by brake/softStart/spinback. */
-  private enterMotorCoast(initialVel: number, resumePlay: boolean, tau: number, kind: "start" | "brake" | "spinback") {
+  private enterMotorCoast(initialVel: number, resumePlay: boolean, tau: number, kind: "start" | "brake" | "spinback", accel = 0) {
     if (!this.host.loaded()) return;
     if (this.ctx.state === "suspended") void this.ctx.resume();
     this.host.clearBend();
@@ -485,6 +599,9 @@ export class JogEngine {
       // headed to a stop is a hand/pad FRICTION braking it (brakeFriction) — two different
       // physical processes, never the same curve. See the models above JogHost.
       servo: resumePlay,
+      // accel > 0: a thrown record caught by the slipmat instead (motorStep, constant torque) — the
+      // spinback. Soft-start keeps the servo: that is the motor spinning the whole platter up.
+      accel,
       pos: this.jogPos * this.ctx.sampleRate,
       loopStart: loop ? loop.start * this.ctx.sampleRate : -1,
       loopEnd: loop ? loop.end * this.ctx.sampleRate : -1,
@@ -596,7 +713,7 @@ export class JogEngine {
   spinback(strength?: number) {
     if (!this.host.loaded()) return;
     const s = strength != null ? Math.abs(strength) : this.backSpinStrength();
-    this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback");
+    this.enterMotorCoast(-s, true, this.backSpinTau(), "spinback", this.backSpinAccel());
   }
 
   // --- sustained reverse / censor ---
@@ -738,22 +855,23 @@ export class JogEngine {
   // time comes from the Vinyl Speed knob instead of the jog weight/drag.
   private stepCoast(dt: number) {
     if (this.jogReturnToPlay) {
-      // Catch back up to play speed (jog release, soft-start, or a spinback's recovery): a
-      // motor servo, not friction — servoStep, not brakeFriction.
+      // Released on a playing deck: the record slips on the still-turning platter and the slipmat's
+      // constant friction brings it to play speed (motorStep, see above): linear, through zero for a
+      // backspin, and locked exactly on the play rate. Trapezoidal position, so the platter travels
+      // what the speed ramp says even at a 50 ms frame.
       const rate = this.host.rate();
-      const tau = this._coastTau > 0 ? this._coastTau : platterTaus.catchUp(this._jogWeight);
-      const next = servoStep({ v: this.jogVel, a: this._servoA }, rate, dt, tau);
-      this.jogVel = next.v;
-      this._servoA = next.a;
-      this.jogPos = this.wrapLoop(this.jogPos + this.jogVel * dt);
+      const accel = this._catchAccel > 0 ? this._catchAccel : platterTaus.catchAccel(this._jogWeight);
+      const v0 = this.jogVel;
+      this.jogVel = motorStep(v0, rate, dt, accel);
+      this.jogPos = this.wrapLoop(this.jogPos + ((v0 + this.jogVel) / 2) * dt);
       this.clampJog();
-      if (Math.abs(this.jogVel - rate) < 0.03) {
+      if (this.jogVel === rate) {
         // Hand the platter back to normal playback, continuing seamlessly: fade the
         // resampler out as the buffer source fades in (both declick).
         this.jogPhase = "off";
         this._ramping = null;
         this._coastTau = 0;
-        this._servoA = 0;
+        this._catchAccel = 0;
         this.scratchStop();
         this.host.setStartOffset(this.jogPos);
         this.host.spawnSource(this.jogPos);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideSpinFollow, SPIN_MAX_MS, SPIN_STILL_MS, type SpinFollowInput } from "./jogSpinFollow";
+import { decideSpinFollow, SPIN_MAX_MS, SPIN_MEASURE_MS, SPIN_STILL_MS, type SpinFollowInput } from "./jogSpinFollow";
 
 const base: SpinFollowInput = { returnsToPlay: true, vel: 0, rate: 1, msSinceTick: 0, msSinceRelease: 0 };
 const d = (o: Partial<SpinFollowInput>) => decideSpinFollow({ ...base, ...o });
@@ -37,6 +37,14 @@ describe("decideSpinFollow: the physical platter stays in charge until it settle
   it("the hard cap ends a runaway spin even while ticks keep coming", () => {
     expect(d({ vel: 5, msSinceRelease: SPIN_MAX_MS })).toBe("handoff");
     expect(d({ returnsToPlay: false, vel: 2, msSinceRelease: SPIN_MAX_MS })).toBe("handoff");
+  });
+
+  it("a PLAYING deck's throw is followed only long enough to measure it, then the motor catches it", () => {
+    expect(d({ vel: -9, msSinceRelease: SPIN_MEASURE_MS - 1 })).toBe("follow");
+    expect(d({ vel: -9, msSinceRelease: SPIN_MEASURE_MS })).toBe("handoff");
+    expect(d({ vel: 3, msSinceRelease: SPIN_MEASURE_MS })).toBe("handoff");
+    // a paused deck has no motor: its free spin is followed to rest as before
+    expect(d({ returnsToPlay: false, vel: -9, msSinceRelease: SPIN_MEASURE_MS * 10 })).toBe("follow");
   });
 
   it("a release with the hand held still hands back immediately (no added latency)", () => {

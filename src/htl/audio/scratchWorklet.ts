@@ -125,7 +125,7 @@ class Scratch extends AudioWorkletProcessor {
     // 1 kHz timer; here it's per output sample). Reports position back for the visual playhead.
     this.ramping = false; this.rampTarget = 0; this.rampTau = 0.1; this.rampSince = 0;
     this.rampLoopStart = -1; this.rampLoopEnd = -1; // -1,-1 = no active loop (ramp runs to the track edge)
-    this.rampServo = true; this.rampA = 0; this.rampZ = 0; // servoStep / brakeFriction state
+    this.rampServo = true; this.rampA = 0; this.rampZ = 0; this.rampAccel = 0; // servoStep / brakeFriction / motorStep state
     // HAND TRAJECTORY state (see the move handler): a queue of { to, dur } segments in samples,
     // dur -1 = a first tick still waiting to learn its pace (at = when it arrived, on this.clk).
     this.clk = 0;          // output samples processed, the worklet's own clock
@@ -387,7 +387,8 @@ class Scratch extends AudioWorkletProcessor {
         this.curStep = d.vel;
         this.rampTarget = d.target;
         this.rampTau = Math.max(0.001, d.tau);
-        this.rampServo = d.servo; // true = motor servo (spinback/soft-start), false = friction brake
+        this.rampServo = d.servo; // true = motor servo (soft-start), false = friction brake
+        this.rampAccel = d.accel > 0 ? d.accel / sampleRate : 0; // > 0 = constant-torque catch (spinback), per sample
         this.rampA = 0; this.rampZ = 0; // fresh state per ramp — see servoStep/brakeFriction in JogEngine.ts
         this.ramping = true; this.granular = false; this.rampSince = 0; this.traj = false;
         this.active = true; this.gainTarget = 1;
@@ -516,7 +517,13 @@ class Scratch extends AudioWorkletProcessor {
         // Motor ramp: ease the read velocity toward the target every sample. Two DIFFERENT
         // physical processes, not one curve (kept in sync by hand with servoStep/brakeFriction
         // in JogEngine.ts; a worklet can't import a TS module — see the design notes there).
-        if (this.rampServo) {
+        if (this.rampAccel > 0) {
+          // A thrown record caught by the slipmat (motorStep in JogEngine.ts): kinetic friction is
+          // constant, so the speed moves at a constant rate, linearly through zero, and locks on
+          // the play rate exactly.
+          const dv = this.rampTarget - this.curStep, m = this.rampAccel;
+          this.curStep = dv > m ? this.curStep + m : dv < -m ? this.curStep - m : this.rampTarget;
+        } else if (this.rampServo) {
           // Catch-up-to-play: a torque-driven 2nd-order servo step response, anchored to the
           // real Technics SL-1200 spec (0.7s standstill-to-speed) — omegaN*tau ~= 6.64 at
           // zeta=1.05 reproduces that, verified by simulation across this exact dt range.

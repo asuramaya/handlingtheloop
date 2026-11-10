@@ -542,7 +542,8 @@ export class MidiEngine {
       // filter now: rest jitter alternates ±1 and nets to zero travel, and the bend's own inertia
       // (bendPhysics RING_TAU) averages it away.
       const delta = centeredDelta(val);
-      if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta });
+      // ts: a free-spinning platter's ticks time its release speed (JogEngine.releaseVelocity).
+      if (delta !== 0) this.opts.onEvent({ type: "jogBend", deck: b.deck, delta, ts: this.curStamp });
     } else if (c.kind === "jogSearch" && b.deck) {
       // SHIFT + platter (the FLX4 sends this on a distinct CC) → fast seek/scan.
       const delta = centeredDelta(val);

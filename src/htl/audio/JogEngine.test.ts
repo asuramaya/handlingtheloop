@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { JogEngine, servoStep, brakeFriction, decideRelease, type JogHost } from "./JogEngine";
+import { describe, it, expect, vi } from "vitest";
+import { JogEngine, servoStep, brakeFriction, decideRelease, motorStep, platterTaus, type JogHost } from "./JogEngine";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // CI for a HARDWARE-driven subsystem, without the hardware — and honest about the boundary.
@@ -406,7 +406,7 @@ describe("brakeFriction — hand/pad friction braking to a stop", () => {
 // union action, no host/AudioContext needed). Named scenarios, not just coverage — each one
 // pins a real branch a caller could otherwise get wrong.
 describe("decideRelease — what a lifted finger should do (the scrubEnd() decision)", () => {
-  const base = { handVel: 0, jogReturnToPlay: true, slipPos: null as number | null, backSpinTau: 0.4, maxCoast: 3, spinbackFlick: 2.2 };
+  const base = { handVel: 0, jogReturnToPlay: true, slipPos: null as number | null, backSpinAccel: 11, maxCoast: 3, spinbackFlick: 2.2 };
 
   it("SLIP armed wins over everything else, even a flick hard enough to look like a spinback", () => {
     const action = decideRelease({ ...base, handVel: -5, slipPos: 42 });
@@ -415,7 +415,7 @@ describe("decideRelease — what a lifted finger should do (the scrubEnd() decis
 
   it("a hard backward flick while playing is a spinback gesture", () => {
     const action = decideRelease({ ...base, handVel: -3, jogReturnToPlay: true });
-    expect(action).toEqual({ kind: "spinback", vel: -3, tau: 0.4 });
+    expect(action).toEqual({ kind: "spinback", vel: -3, accel: 11 });
   });
 
   it("the SAME hard backward flick while the deck was PAUSED is just a coast, not a spinback", () => {
@@ -443,5 +443,113 @@ describe("decideRelease — what a lifted finger should do (the scrubEnd() decis
   it("the spinback threshold is exclusive — exactly at the flick speed is still a plain coast", () => {
     const action = decideRelease({ ...base, handVel: -2.2, jogReturnToPlay: true, spinbackFlick: 2.2 });
     expect(action.kind).toBe("coast");
+  });
+});
+
+// THROWS AND BACKSPINS (operator, 2026-11-10: "the backspin on rekordbox is more aggressive"). A record
+// let go on a playing deck carries the speed the hand gave it — measured from the controller's own
+// timestamped ticks — and the slipmat's constant friction brings it to play speed: linearly, through
+// zero, locking exactly on the play rate (motorStep), not a servo's soft tail.
+describe("motorStep — constant-torque catch", () => {
+  it("changes speed at a constant rate and lands exactly on the target (no tail, no overshoot)", () => {
+    let v = -10;
+    const seq: number[] = [v];
+    for (let i = 0; i < 200 && v !== 1; i++) seq.push((v = motorStep(v, 1, 0.01, 10)));
+    expect(seq.at(-1)).toBe(1);
+    for (let i = 1; i < seq.length - 1; i++) expect(seq[i] - seq[i - 1]).toBeCloseTo(0.1, 6); // linear, through zero
+    expect(Math.abs(seq.length - 1 - 110)).toBeLessThanOrEqual(1); // (1 - -10) / 10 per s = 1.1 s at 10 ms (± float)
+  });
+  it("brings a forward throw faster than play DOWN to it the same way", () => {
+    expect(motorStep(3, 1, 0.05, 10)).toBeCloseTo(2.5, 9);
+    expect(motorStep(1.2, 1, 0.05, 10)).toBe(1);
+  });
+});
+
+describe("JogEngine — a jog throw on a playing deck (timestamped ticks, constant-torque catch)", () => {
+  const TICK = 0.0025; // FLX4: seconds of audio per tick
+  // FLX4 ticks at `speed` × realtime for `ms`, each stamped with its own time; returns the end time.
+  function turn(je: JogEngine, speed: number, fromMs: number, ms: number): number {
+    const perStep = (Math.abs(speed) / 1000 / TICK) * 0.25; // ticks per 0.25 ms
+    let acc = 0;
+    let t = fromMs;
+    for (; t < fromMs + ms; t += 0.25) {
+      acc += perStep;
+      while (acc >= 1) {
+        acc -= 1;
+        je.scrubMove(Math.sign(speed) * TICK, t);
+      }
+    }
+    return t;
+  }
+
+  it("a 10x backward release reaches >= 8x reverse at once, then decelerates linearly through zero to 1x within the catch time", () => {
+    const h = harness({ start: 30, playing: true });
+    const q: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => q.push(cb));
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const ctx = (h.je as unknown as { ctx: { currentTime: number } }).ctx;
+    try {
+      h.je.scrubBegin();
+      const t = turn(h.je, -10, 1000, 120);
+      h.je.scrubEnd(t + 1);
+      q.length = 0; // the grab's own loop; the coast's loop is restarted below
+      const speeds: number[] = [];
+      let last = h.s.start;
+      (h.je as unknown as { jogRaf: number }).jogRaf = 0;
+      (h.je as unknown as { startJogLoop: () => void }).startJogLoop();
+      for (let f = 0; f < 300 && h.je.jogging; f++) {
+        ctx.currentTime += 1 / 60;
+        const cb = q.shift();
+        if (!cb) break;
+        cb(0);
+        speeds.push((h.s.start - last) * 60);
+        last = h.s.start;
+      }
+      expect(speeds[0]).toBeLessThanOrEqual(-8); // the throw's own speed, not the old 3x cap
+      expect(h.je.jogging).toBe(false); // caught and handed back to play
+      expect(h.calls.setPlaying.at(-1)).toBe(true);
+      // A hard backward throw is a spinback: caught at the Back spin knob's rate (default 0.5).
+      const accel = platterTaus.backSpinAccel(0.5);
+      expect(speeds.length / 60).toBeLessThan(11 / accel + 0.1); // -10x → 1x at that rate, + a frame
+      // Linear: the speed changes by the same step every frame (first and lock frames aside).
+      const mid = speeds.slice(1, -1);
+      for (let i = 1; i < mid.length; i++) expect(mid[i] - mid[i - 1]).toBeCloseTo(accel / 60, 6);
+      expect(mid.some((v) => Math.abs(v) < accel / 60)).toBe(true); // straight through zero
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("measures the release speed from the timestamped ticks, latest motion first", () => {
+    const h = harness({ start: 30, playing: true });
+    h.je.scrubBegin();
+    const t = turn(h.je, -12, 1000, 60);
+    expect(h.je.releaseVelocity(t)).toBeCloseTo(-12, 0);
+    const f = turn(h.je, 2, t, 40);
+    expect(h.je.releaseVelocity(f)).toBeCloseTo(2, 0);
+  });
+
+  it("a hand that stopped before letting go releases at (nearly) zero, not at its last stroke's speed", () => {
+    const h = harness({ start: 30, playing: true });
+    h.je.scrubBegin();
+    const t = turn(h.je, -8, 1000, 50);
+    expect(Math.abs(h.je.releaseVelocity(t + 120)!)).toBeLessThan(0.05);
+  });
+
+  it("a USB delivery stall (17 ms without ticks, then one) does not read as the platter slowing", () => {
+    // The operator's capture: a 16x backspin's free spin stalled 6808 → 6825 ms between steady ticks.
+    const h = harness({ start: 30, playing: true });
+    h.je.scrubBegin();
+    const t = turn(h.je, -16, 1000, 30);
+    h.je.scrubMove(-7 * TICK, t + 17);
+    expect(h.je.releaseVelocity(t + 18)!).toBeLessThan(-14);
+  });
+
+  it("pointer drags (no timestamps) fall back to the frame-smoothed fling", () => {
+    const h = harness({ start: 30, playing: false });
+    h.je.scrubBegin();
+    h.je.scrubMove(1);
+    h.je.scrubMove(1);
+    expect(h.je.releaseVelocity(0)).toBeNull();
   });
 });

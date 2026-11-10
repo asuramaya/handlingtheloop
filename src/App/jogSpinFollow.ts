@@ -39,6 +39,18 @@ export const SPIN_MAX_MS = 6000;
  *  it. Small enough that the physical spinback is heard, not cut short. */
 export const SPIN_CATCH_FRACTION = 0.08;
 
+/** ★ A PLAYING deck's throw is followed only this long (operator, 2026-11-10: "the backspin on
+ *  rekordbox is more aggressive"). Following the FLX4's free spin to a near stop gave every backspin
+ *  the jog's OWN decay: a light motorless wheel, exponential with tau ~0.145 s (measured on the
+ *  capture), so a hard throw was half gone in 0.1 s and then crept backward under 0.3x for ~0.3 s
+ *  before the catch. On a turntable the motor is running: the record slows at the slipmat's constant
+ *  friction instead (JogEngine motorStep). So the follow now lasts just long enough for the free-spin
+ *  ticks to MEASURE the speed the hand actually gave the platter (the capture spins free at 13-16x
+ *  right after a release whose last 30 ms of touched ticks read ~10x: the final push lands as the
+ *  touch lifts), and JogEngine's release takes it from there. The rest of the free spin is swallowed
+ *  by the router (it would otherwise bend the tempo). */
+export const SPIN_MEASURE_MS = 30;
+
 export function decideSpinFollow(i: SpinFollowInput): SpinFollowAction {
   if (i.msSinceRelease >= SPIN_MAX_MS) return "handoff";
   if (i.msSinceTick >= SPIN_STILL_MS) return "handoff"; // the platter has stopped
@@ -48,6 +60,8 @@ export function decideSpinFollow(i: SpinFollowInput): SpinFollowAction {
     if (i.vel > 0 && i.vel <= rate) return "handoff";
     // Backward (a spinback) that has nearly stopped: the motor catches it from here.
     if (i.vel <= 0 && -i.vel < SPIN_CATCH_FRACTION * rate) return "handoff";
+    // A throw (faster than play, or backward): measured, now the motor's.
+    if (i.msSinceRelease >= SPIN_MEASURE_MS) return "handoff";
   }
   // Paused decks follow until the platter stops (covered above). Playing decks keep following a
   // spin that is still faster than play, or still travelling backward.

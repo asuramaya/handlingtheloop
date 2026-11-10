@@ -141,7 +141,7 @@ export type MidiEvent =
   | { type: "knob"; target: FaderTarget; deck?: DeckId; delta: number } // relative encoder nudge (signed fraction of full range)
   | { type: "jogTouch"; deck: DeckId; down: boolean }
   | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean; ts?: number } // delta = signed ticks; ts = the tick's ARRIVAL time (MIDIMessageEvent.timeStamp, performance.now() clock)
-  | { type: "jogBend"; deck: DeckId; delta: number } // outer-ring nudge → pitch-bend / paused search
+  | { type: "jogBend"; deck: DeckId; delta: number; ts?: number } // outer-ring nudge → pitch-bend / paused search; ts as jogTurn's
   | { type: "jogSearch"; deck: DeckId; delta: number } // SHIFT + jog → fast seek through the track
   | { type: "browse"; delta: number }
   | { type: "zoom"; deck?: DeckId; delta: number } // encoder → zoom the focused deck's waveform

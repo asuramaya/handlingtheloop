@@ -253,6 +253,12 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           info="Size of the cue, loop and section marks on the song overview strips: their lines, letters and how close a tap has to be to jump to one."
         />
         <ToggleRow
+          label="Waveforms meet in the middle"
+          info="Deck B's header goes below its waveform, so the two waveforms touch and lining up beats, bars and cues is a straight line across both."
+          on={settings.lanesMeet ?? true}
+          onToggle={() => set({ lanesMeet: !(settings.lanesMeet ?? true) })}
+        />
+        <ToggleRow
           label="Dark edge on markers"
           info="A thin dark outline around cue, loop and hot-cue bars and the playhead, so they stand out over a bright waveform."
           on={settings.markerOutline ?? true}

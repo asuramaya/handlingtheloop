@@ -149,6 +149,7 @@ export interface Settings {
   gridWeight: number; // beat grid weight multiplier (0.5–3): line widths, and opacity above 1
   markerOutline: boolean; // dark edge around markers + playhead so they read over a bright waveform
   overviewMarkerScale: number; // song overview rail markers: tick, letter, label box and tap target (1–2.5)
+  lanesMeet: boolean; // deck B's header below its waveform (A's caption above its own) so the two waveforms touch
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
@@ -359,6 +360,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gridWeight: 1,
   markerOutline: true, // on: marks over a full-height single-track waveform were hard to see
   overviewMarkerScale: 1,
+  lanesMeet: true, // the operator's experiment (2026-11-10): on, so it can be seen; off in Settings ▸ Colours ▸ Markers
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   deckArtAccent: true, // themes the deck accent to the track's artwork; toggle off for a fixed accent

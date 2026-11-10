@@ -13,7 +13,7 @@ export const SECTION_KEYS: Record<SectionKey, (keyof Settings)[]> = {
     "accentA", "accentB", "bgColor", "textColor", "borderColor", "selectorColor", "loopColor", "markerColor", "shiftColor", "slipMoveColor",
     "stripColor", "stemDrumsColor", "stemBassColor", "stemVocalsColor", "stemOtherColor", "freqLowColor", "freqMidColor",
     "freqHighColor", "glow", "freqColors", "freqVividness", "bandLayers", "bandFromDeck", "stemsFollowDeck", "waveformDebrick",
-    "markerThickness", "playheadWidth", "gridWeight", "markerOutline", "overviewMarkerScale", "uiContrast", "inheritRoomColor", "deckArtAccent",
+    "markerThickness", "playheadWidth", "gridWeight", "markerOutline", "overviewMarkerScale", "lanesMeet", "uiContrast", "inheritRoomColor", "deckArtAccent",
     "libraryDock", "settingsDock", "peopleDock", "sessionDock", "panelOrder", "panelDim",
   ],
   controls: ["wheelSeeks", "keyHints", "keyBindings", "autoPerformance", "beatlockRangePct"],

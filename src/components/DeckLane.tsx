@@ -48,6 +48,8 @@ interface DeckLaneProps {
   glow: boolean;
   markerThickness: number;
   markerStyle?: MarkerStyle;
+  /** The two waveforms meet: A keeps its header on top, B's goes below (Settings ▸ Markers). */
+  lanesMeet?: boolean;
   stemColors: Record<string, string>;
   meta: DeckMeta;
   status: StemBadge | null;
@@ -144,7 +146,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, markerStyle, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, markerStyle, lanesMeet, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
   // PHONE: the DECK header is a FOCUS control, not an expand control. Expanding solos one lane
   // by hiding the other — it buys waveform height by spending the second waveform, which is a
   // fair trade on a desktop and a bad one here: the phone already shows only ONE deck's controls
@@ -213,7 +215,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
 
   return (
     <section
-      className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${dropActive ? "drop-target" : ""}`}
+      className={`lane ${focused ? "focused" : ""} ${expanded ? "expanded" : ""} ${collapsed ? "collapsed" : ""} ${dropActive ? "drop-target" : ""} ${lanesMeet ? (id === "B" ? "meet-bottom" : "meet-top") : ""}`}
       style={{ ["--accent" as string]: accent }}
       onPointerDownCapture={onFocus}
       onDrop={(e) => {

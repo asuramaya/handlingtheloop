@@ -4104,6 +4104,7 @@ function AppBody() {
               glow={settings.glow}
               markerThickness={settings.markerThickness}
               markerStyle={markerStyle}
+              lanesMeet={settings.lanesMeet ?? true}
               stemColors={{ drums: settings.stemDrumsColor, bass: settings.stemBassColor, vocals: settings.stemVocalsColor, other: settings.stemOtherColor }}
               meta={meta[id]}
               status={terseStem(status[id])}

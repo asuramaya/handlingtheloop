@@ -283,6 +283,35 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
       expect(trims().length).toBe(1);
     });
 
+    // ★ operator, 2026-11-10: "pressing the cfx button is what zeros out the trim, and when pressed
+    // again it goes back to old state" — the board snaps TRIM on a Smart CFX toggle, with no COLOR.
+    it("a SMART CFX press: the board's trim snap right after it is dropped; a later real turn still works", async () => {
+      const { at, trims } = await rig();
+      at(performance.now(), 0xb0, 0x04, 100); // trim set by hand
+      vi.advanceTimersByTime(30);
+      const t = performance.now();
+      at(t, 0x96, 0x00, 0x7f); // SMART CFX press
+      at(t + 2, 0xb0, 0x04, 0); // the firmware's snap: trim → 0
+      vi.advanceTimersByTime(30);
+      expect(trims().length).toBe(1); // nothing but the hand's setting
+      vi.advanceTimersByTime(400);
+      at(performance.now(), 0xb0, 0x04, 90); // a real turn, after the quiet window
+      vi.advanceTimersByTime(30);
+      expect(trims().length).toBe(2);
+    });
+
+    it("a trim snap that slipped through just BEFORE the button is undone", async () => {
+      const { at, trims } = await rig();
+      at(performance.now(), 0xb0, 0x04, 100);
+      vi.advanceTimersByTime(30);
+      const t = performance.now();
+      at(t, 0xb0, 0x04, 0); // the snap lands first, held then released by a stalled flush
+      vi.advanceTimersByTime(25);
+      at(t + 3, 0x96, 0x00, 0x00); // the button, handled late
+      const v = trims();
+      expect(v[v.length - 1]).toBeCloseTo(v[0], 5); // back to the hand's value
+    });
+
     it("echo first, the flush fires before the stalled COLOR is handled: COLOR puts trim back", async () => {
       const { at, trims } = await rig();
       at(performance.now(), 0xb0, 0x04, 100);

@@ -415,6 +415,7 @@ export class MidiEngine {
     const lamp = this.profile?.echoLamp?.lamp;
     if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
       this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
+      this.cfxButton(this.curStamp);
     }
 
     if (isNote) {
@@ -710,10 +711,31 @@ export class MidiEngine {
     }
     const deck = this.echoDeck("echoes", status, d1);
     if (!deck) return false;
+    if (t < this.cfxQuietUntil) return true; // the board's own snap on a SMART CFX toggle (cfxButton)
     if (t - this.lastSourceAt[deck] <= l.windowMs) return true; // right after COLOR: an echo
     this.echoPending.push({ deck, status, d1, d2, t });
     this.scheduleEchoFlush(l.windowMs);
     return true;
+  }
+
+  // ★ THE SMART CFX BUTTON ITSELF ZEROES TRIM (operator, 2026-11-10: "pressing the cfx button is
+  // what zeros out the trim, and when pressed again it goes back to old state"). Toggling the
+  // board's Smart CFX makes the firmware SNAP the TRIM CC: engaging sends the value Smart CFX derives
+  // from the COLOR knob (in stem mode that knob is the INST volume, often low → trim ~0), and
+  // disengaging sends the real trim knob back. No COLOR message comes with it — the knob did not
+  // move — so the timing filter took it for a real turn. The trim knob did not move either, so for a
+  // moment around every press/release trim-address messages are dropped, held ones are discarded,
+  // and one that already slipped through just before the button is undone.
+  private cfxQuietUntil = -Infinity;
+  static readonly CFX_QUIET_MS = 300;
+  private cfxButton(t: number): void {
+    this.cfxQuietUntil = t + MidiEngine.CFX_QUIET_MS;
+    this.echoPending = [];
+    const claim = this.echoReleased.filter((p) => Math.abs(t - p.t) <= MidiEngine.ECHO_RECLAIM_MS);
+    if (claim.length) {
+      this.echoReleased = this.echoReleased.filter((p) => !claim.includes(p));
+      for (const p of claim.reverse()) if (p.prev != null) this.dispatchCC(p.status, p.d1, p.prev);
+    }
   }
 
   private scheduleEchoFlush(windowMs: number): void {

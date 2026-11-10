@@ -13,6 +13,7 @@ import { nextSkip, skipLabel, skipTitle, TEMPO_RANGES, PITCH_RANGES } from "@htl
 import { ValueCell } from "./ValueCell";
 import { useLongPress } from "./useLongPress";
 import { FxStrip, type FxStripCtl } from "./FxStrip";
+import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./quantizedTransport";
 import { LevelFader } from "./LevelFader";
 
 // Per-stem cells (under the PITCH foot). Each is a level knob AND the mute toggle:
@@ -316,8 +317,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
       deck.seek(0);
       emit({ kind: "transport", deck: id, action: "seek", position: 0 });
     } else if (deck.playing) {
-      deck.jumpToCue();
-      emitSeek();
+      quantizedJumpToCue(deck, id, emit, refresh);
     } else {
       deck.setCue();
       emit({ kind: "cue", deck: id, position: deck.cuePoint });
@@ -572,8 +572,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                     deck.clearHotCue(i);
                     emit({ kind: "hotcue", deck: id, slot: i, action: "clear" });
                   } else {
-                    deck.hotCue(i);
-                    emit({ kind: "hotcue", deck: id, slot: i, action: "press" });
+                    quantizedHotCue(deck, id, i, emit, refresh);
                   }
                   refresh();
                 }}
@@ -818,8 +817,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                 emit({ kind: "control", deck: id, param: "level", value: 1 });
                 emitControls(id);
               } else {
-                deck.togglePlay();
-                emit({ kind: "transport", deck: id, action: deck.playing ? "play" : "pause" });
+                quantizedTogglePlay(deck, id, emit, refresh);
               }
               refresh();
             }}

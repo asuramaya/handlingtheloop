@@ -12,6 +12,7 @@ import { stepSkip, type Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
 import { pickupStep } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
+import { quantizedPlay } from "../components/quantizedTransport";
 import { useSpine } from "./spine";
 import { fxParamIntent } from "@htl/room/fxWire";
 
@@ -339,9 +340,8 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           handlersRef.current[ev.action]?.(deck, id, sh); // sets / resizes / EXITS the loop (shared toggle)
           // Triggering an existing cue, or NEWLY engaging a loop, while paused launches
           // playback (firm hit only). EXITING a loop (now inactive) must not start it.
-          if (wasPaused && !sh && firm && !deck.playing && (hadCue || (isLoop && deck.loop?.active))) {
-            deck.play();
-            emitRef.current({ kind: "transport", deck: id, action: "play" });
+          if (wasPaused && !sh && firm && !deck.playing && !deck.quantizePending && (hadCue || (isLoop && deck.loop?.active))) {
+            quantizedPlay(deck, id, (i) => emitRef.current(i), refresh); // grid lock: the launch lands in step
           }
           refresh();
           break;

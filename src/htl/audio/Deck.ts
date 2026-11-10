@@ -2,6 +2,8 @@ import type { ScratchKind } from "./scratchPatterns";
 import type { Beatgrid, KeyInfo, Pyramid, PyramidLevel } from "../analysis/analyze";
 import { perfWork } from "../debug/perfCapture";
 import { barAnchor, beatTimeOffset, shiftKey } from "../analysis/analyze";
+import { quantizeStep, type QuantizeRef } from "./quantize";
+import { event } from "../debug/trace";
 import { rackDelta } from "./fxSnapshotReconcile";
 import { chainPlan } from "./fxChainReconcile";
 import { isSameStemApply, stemApplyId } from "./stemApply";
@@ -387,6 +389,9 @@ export class Deck {
   /** AudioEngine hook: where this deck should really START (play, or a jump while playing) so a
    *  SYNC pair starts in phase. Returns the position unchanged when not synced. See syncAlign.ts. */
   startAlign?: (pos: number) => number;
+  /** The OTHER deck as a quantize reference while it is playing, else null (AudioEngine). */
+  quantizeRef?: () => QuantizeRef | null;
+  private qTimer: ReturnType<typeof setTimeout> | null = null;
   onRateChange?: () => void; // Sampler hook — region voices ride the deck tempo; fired at the end of setTempo
   keyRole: SyncRole = "off"; // harmonic (KEY) lock role — same gate as syncRole
   onPitchChange?: () => void; // AudioEngine hook, fired at the end of setPitch
@@ -407,6 +412,7 @@ export class Deck {
   private _bendAcc = 0; // roll distance banked since the last physics frame (bendPhysics.ts)
   private _ringVel = 0; // the ring's smoothed velocity (bendPhysics.ts)
   private _bendScale = 1; // user multiplier on BEND_GAIN (pitch-bend strength)
+  private _bendMax: number = RING_BEND.max; // the ring's bend clamp, fraction of tempo (= the tempo range)
   // Gain / decay / clamp of the ring bend live in bendPhysics (RING_BEND), shared with the
   // Settings ▸ Turntable graph so the curve drawn there is this deck's own.
   private static readonly BEND_SEARCH = 6; // paused: scale a bend nudge into a frame-search seek
@@ -896,6 +902,7 @@ export class Deck {
     this._playing = false;
     this.startOffset = 0;
     this._syncTrim = 0; // a new track invalidates any inherited phase-lock trim
+    this.cancelQuantized(); // a start or jump queued for the old track
     this.loops.reset();
     this.jog.reset(); // cancel any platter coast + stale the scratch PCM
     // Drop any decaying pitch-bend (the platter reset above handled the jog half).
@@ -1678,6 +1685,7 @@ export class Deck {
     this._playing = true;
   }
   pause() {
+    this.cancelQuantized(); // a jump queued while playing is called off by stopping
     this.jog.cancelJog();
     this.clearBend();
     this.moveCancel();
@@ -1733,6 +1741,13 @@ export class Deck {
   /** Tune the platter feel. Both 0..1. weight = inertia, drag = coast friction. */
   setJogPhysics(weight: number, drag: number) {
     this.jog.setJogPhysics(weight, drag);
+  }
+
+  /** ★ The ring can bend at most as far as the tempo fader reaches (operator, 2026-11-10: "the outer
+   *  wheel tempo limits to line up with the setting on the tempo range"). `range` is the tempo
+   *  range's ± fraction (0.08 for ±8 %); the ring's own physics clamp stays the ceiling. */
+  setBendMax(range: number) {
+    this._bendMax = Math.max(0.005, Math.min(RING_BEND.max, range));
   }
 
   /** Scale how hard a pitch-bend nudge pushes the tempo (0.25..2, 1 = default). */
@@ -2024,7 +2039,7 @@ export class Deck {
         const next = stepBend({ bend: this._bend, ringVel: this._ringVel }, this._bendAcc, dt, {
           gain: RING_BEND.gain * this._bendScale,
           decay: RING_BEND.decay,
-          max: RING_BEND.max,
+          max: this._bendMax,
         });
         this._bendAcc = 0;
         this._ringVel = next.ringVel;
@@ -2084,6 +2099,45 @@ export class Deck {
   }
   setQuantize(on: boolean) {
     this.quantizeOn = on;
+    if (!on) this.cancelQuantized();
+  }
+
+  // --- Quantize (quantize.ts) ---
+  /** A quantized action is waiting for its moment. */
+  get quantizePending() {
+    return this.qTimer != null;
+  }
+  cancelQuantized() {
+    if (this.qTimer != null) clearTimeout(this.qTimer);
+    this.qTimer = null;
+  }
+  /** Run `run` so that landing at `target` is in step: with grid lock on, at the moment the
+   *  reference (the other deck playing, else this one) reaches target's place in a cycle of the
+   *  deck's grid size; `run` gets the exact position to land on (the target, or a little in when
+   *  the moment is already a hair past). Grid lock off, or nothing playing: at once, at `target`.
+   *  A new quantized action replaces a pending one. */
+  quantized(target: number, run: (pos: number) => void): void {
+    this.cancelQuantized();
+    const asked = performance.now();
+    const go = (fired: boolean) => {
+      const g = this.beatgrid;
+      const other = this.quantizeOn && g ? (this.quantizeRef?.() ?? null) : null;
+      const ref = other ?? (this.quantizeOn && g && this._playing ? { grid: g, pos: this.position(), rate: this.rate } : null);
+      if (!g || !ref) return run(target);
+      const r = quantizeStep(g, target, ref, this.skipBeats, fired);
+      if (r.waitSec > 0.002) {
+        this.qTimer = setTimeout(() => {
+          this.qTimer = null;
+          go(true);
+        }, Math.max(0, r.waitSec * 1000 - 1));
+        return;
+      }
+      const pos = Math.max(0, Math.min(this.duration, r.pos));
+      // the reference's place in its own cycle at the moment of firing: should match the target's
+      event("quantize.fire", { target: +target.toFixed(3), pos: +pos.toFixed(3), waitedMs: Math.round(performance.now() - asked), unit: this.skipBeats, ref: other ? "other" : "self" });
+      run(pos);
+    };
+    go(false);
   }
 
   // --- Slip mode ---

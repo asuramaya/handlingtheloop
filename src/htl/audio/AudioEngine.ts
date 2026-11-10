@@ -222,6 +222,13 @@ export class AudioEngine {
     this.deckB.onTempoChange = () => this.onDeckTempo("B");
     this.deckA.startAlign = (pos) => this.syncedStart("A", pos);
     this.deckB.startAlign = (pos) => this.syncedStart("B", pos);
+    // Quantize lines a deck up with the OTHER deck while that one is playing (quantize.ts).
+    for (const id of ["A", "B"] as const) {
+      this.deck(id).quantizeRef = () => {
+        const o = this.deck(other(id));
+        return o.playing && o.beatgrid && !o.jogging ? { grid: o.beatgrid, pos: o.position(), rate: o.rate } : null;
+      };
+    }
     // Key-lock follow/release: any pitch change routes through the KEY machine.
     this.deckA.onPitchChange = () => this.onDeckPitch("A");
     this.deckB.onPitchChange = () => this.onDeckPitch("B");

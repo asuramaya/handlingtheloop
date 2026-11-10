@@ -16,6 +16,7 @@ import { crossfadeGainsDb } from "./components/Crossfader";
 import { BoardBar } from "./components/BoardBar";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadIsOn, fxPadPress, fxPadRelease, padsForDeck } from "./components/fxPads";
+import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./components/quantizedTransport";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
@@ -1072,8 +1073,7 @@ function AppBody() {
           emitRef.current({ kind: "hotcue", deck: id, slot, action: "clear" });
         }
       } else {
-        deck.hotCue(slot);
-        emitRef.current({ kind: "hotcue", deck: id, slot, action: "press" });
+        quantizedHotCue(deck, id, slot, (i) => emitRef.current(i), refresh); // grid lock = quantized
       }
     };
     const HANDLERS: Record<string, (deck: DeckRef, id: DeckId, s: boolean) => void> = {
@@ -1082,8 +1082,7 @@ function AppBody() {
           resetChannel(deck); // Shift+Space = reset the channel (tempo/pitch/EQ/filter/level/stems)
           emitDeckRef.current(id);
         } else {
-          deck.togglePlay();
-          emitRef.current({ kind: "transport", deck: id, action: deck.playing ? "play" : "pause" });
+          quantizedTogglePlay(deck, id, (i) => emitRef.current(i), refresh); // grid lock = quantized start
         }
       },
       cue: (deck, id, s) => {
@@ -1091,8 +1090,7 @@ function AppBody() {
           deck.seek(0);
           emitRef.current({ kind: "transport", deck: id, action: "seek", position: 0 });
         } else if (deck.playing) {
-          deck.jumpToCue();
-          emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
+          quantizedJumpToCue(deck, id, (i) => emitRef.current(i), refresh);
         } else {
           deck.setCue();
           emitRef.current({ kind: "cue", deck: id, position: deck.cuePoint });
@@ -1470,6 +1468,8 @@ function AppBody() {
     engine.deckB.setJogPhysics(settings.jogWeight, platterDrag(settings.jogWeight));
     engine.deckA.setBendStrength(settings.jogBendStrength);
     engine.deckB.setBendStrength(settings.jogBendStrength);
+    engine.deckA.setBendMax(settings.tempoRange / 100); // the ring bends within the tempo range
+    engine.deckB.setBendMax(settings.tempoRange / 100);
     for (const d of [engine.deckA, engine.deckB]) {
       d.setVinylSpeed(true, settings.vinylBrakeTime, settings.vinylStartTime); // a time of 0 = instant
       d.setBackSpinLength(settings.backSpinLength);

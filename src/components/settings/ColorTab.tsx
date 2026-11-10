@@ -220,7 +220,43 @@ export function ColorTab({ settings, set }: { settings: Settings; set: (patch: P
           min={1}
           max={12}
           step={1}
-          info="Width of the cue, hot-cue and loop marker bars. The beat grid's own weight is fixed."
+          info="Width of the cue, hot-cue and loop marker bars on the deck waveform."
+        />
+        <Slider
+          label="Playhead"
+          hint={`${settings.playheadWidth ?? 2}px`}
+          value={settings.playheadWidth ?? 2}
+          onChange={(v) => set({ playheadWidth: v })}
+          min={1}
+          max={8}
+          step={1}
+          info="Width of the line in the middle of the deck waveform that marks where you are."
+        />
+        <Slider
+          label="Beat grid weight"
+          hint={`${(settings.gridWeight ?? 1).toFixed(1)}×`}
+          value={settings.gridWeight ?? 1}
+          onChange={(v) => set({ gridWeight: v })}
+          min={0.5}
+          max={3}
+          step={0.1}
+          info="How heavy the bar, beat and phrase lines are. Above 1× they also get more opaque."
+        />
+        <Slider
+          label="Overview markers"
+          hint={`${(settings.overviewMarkerScale ?? 1).toFixed(1)}×`}
+          value={settings.overviewMarkerScale ?? 1}
+          onChange={(v) => set({ overviewMarkerScale: v })}
+          min={1}
+          max={2.5}
+          step={0.1}
+          info="Size of the cue, loop and section marks on the song overview strips: their lines, letters and how close a tap has to be to jump to one."
+        />
+        <ToggleRow
+          label="Dark edge on markers"
+          info="A thin dark outline around cue, loop and hot-cue bars and the playhead, so they stand out over a bright waveform."
+          on={settings.markerOutline ?? true}
+          onToggle={() => set({ markerOutline: !(settings.markerOutline ?? true) })}
         />
       </div>
 

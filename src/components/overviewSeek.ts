@@ -60,6 +60,8 @@ export interface OverviewGeom {
   side: "left" | "right";
   /** A coarse pointer (finger/stylus) is driving. Widens the snap radius. */
   coarse?: boolean;
+  /** Overview marker size (Settings ▸ Markers, 1 = as designed): a bigger mark is a bigger target. */
+  scale?: number;
 }
 
 /**
@@ -105,10 +107,11 @@ export function hitMarker(
   // one column drops the lane requirement from the hit-test: wide rail, two precise columns;
   // narrow rail, one target and nearest-wins. The lanes stay a visual separation either way,
   // because a TICK is 1.3px and always fits.
-  const laneFree = labelsShareColumn(geom.width);
+  const k = geom.scale ?? 1;
+  const laneFree = labelsShareColumn(geom.width, k);
   const lane = laneAtX(clientX, geom);
   const t = railTime(clientY, geom);
-  const tol = ((geom.coarse ? MARKER_SNAP_TOUCH_PX : MARKER_SNAP_PX) / height) * duration;
+  const tol = (((geom.coarse ? MARKER_SNAP_TOUCH_PX : MARKER_SNAP_PX) * k) / height) * duration;
   let best: number | null = null;
   let bestDist = Infinity;
   let bestPri = -1;
@@ -213,8 +216,8 @@ export const LABEL_MIN_LANE_PX = 26;
  * that can keeps doing its job. Everything still resolves through resolveLabels, which is handed
  * `shared` so two labels from OPPOSITE lanes cannot overprint once they share the column.
  */
-export function labelsShareColumn(railWidth: number): boolean {
-  return railWidth / 2 < LABEL_MIN_LANE_PX;
+export function labelsShareColumn(railWidth: number, scale = 1): boolean {
+  return railWidth / 2 < LABEL_MIN_LANE_PX * scale;
 }
 
 /**
@@ -230,8 +233,8 @@ export function labelsShareColumn(railWidth: number): boolean {
  * A region too small to be a region is a POINT. Collapsed, a short loop draws once, labels once,
  * and registers ONE snap target, so there is nothing to fight over.
  */
-export function loopIsCollapsed(startY: number, endY: number): boolean {
-  return Math.abs(endY - startY) < LABEL_BOX_PX;
+export function loopIsCollapsed(startY: number, endY: number, scale = 1): boolean {
+  return Math.abs(endY - startY) < LABEL_BOX_PX * scale;
 }
 
 /**
@@ -257,6 +260,8 @@ export function resolveLabels(
   /** True when both lanes' labels are drawn in ONE column (a narrow rail — see
    *  labelsShareColumn), so a section and a cue can collide with each other too. */
   shared = false,
+  /** Overview marker size: a bigger label claims a bigger box. */
+  scale = 1,
 ): boolean[] {
   const out = new Array<boolean>(marks.length).fill(false);
   // Deterministic order: strongest claim first, then top of the rail down, then input order —
@@ -269,7 +274,7 @@ export function resolveLabels(
     const m = marks[i];
     if (!m.label) continue; // an unlabelled tick reserves nothing — it cannot block a real label
     const lane = claimed[shared ? "markers" : m.lane];
-    if (lane.some((y) => Math.abs(y - m.y) < LABEL_BOX_PX)) continue;
+    if (lane.some((y) => Math.abs(y - m.y) < LABEL_BOX_PX * scale)) continue;
     lane.push(m.y);
     out[i] = true;
   }

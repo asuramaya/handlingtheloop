@@ -6,6 +6,7 @@ import { hexRGB, bandRamp, tiltLuma, sampleBands, debrick } from "@htl/analysis"
 import { CUE_COLORS, trackPeak, trackEnergyPeak, shape, BAND_TILT } from "./WaveformViewport";
 import { TRACK_DND_MIME } from "./TrackTable";
 import { useTouchDropTarget } from "../htl/state/touchDrag";
+import { MARK_EDGE, type MarkerStyle } from "./markerStyle";
 import { LABEL_BOX_PX, MARKER_SNAP_PX, labelsShareColumn, hitMarker, insetMark, laneRect, loopIsCollapsed, markerLane, markerPriority, overviewSeekTime, resolveLabels, type OverviewMarker } from "./overviewSeek";
 
 // ★ THE REKORDBOX "OVERVIEW" STRIP — but VERTICAL, one per deck, running the full height of
@@ -57,6 +58,8 @@ interface SongOverviewProps {
   // switch a touch on the main waveform already does (DeckLane's onFocus), so reaching for
   // either waveform (main or overview) has the same effect.
   onFocus?: () => void;
+  /** Overview marker size, playhead width and dark edges (Settings ▸ Colours ▸ Markers). */
+  markerStyle?: MarkerStyle;
 }
 
 const MAX_DPR = 2;
@@ -401,7 +404,12 @@ export function SongOverview(props: SongOverviewProps) {
     // the waveform) for cues, OUTWARD (toward the app's edge) for phrases, so the families
     // never collide on a dense track. Each one is ALSO recorded to markersRef for the
     // click-to-seek snap below — "special click zones that skip to them precisely". ----
-    ctx.font = `bold ${9 * dpr}px ui-monospace, monospace`;
+    // ★ ONE SCALE FOR THE WHOLE MARK (operator, 2026-11-10: rail markers "super thin on mobile",
+    // hard to see and to hit). Tick, letter, its gap, its label box and the tap radius (geomOf)
+    // all grow together, so a bigger mark is also a bigger target and labels still resolve.
+    const k = Math.max(1, p.markerStyle?.overview ?? 1);
+    const edged = p.markerStyle?.outline ?? true;
+    ctx.font = `bold ${9 * k * dpr}px ui-monospace, monospace`;
     ctx.textBaseline = "middle";
 
     const marks: Marker[] = [];
@@ -423,11 +431,19 @@ export function SongOverview(props: SongOverviewProps) {
       // edge, so half of it lands outside the canvas and reads as a clipped rail. A LABELLED mark
       // is as tall as its letter, not as tall as its line — inset by the glyph's box or the top
       // one still loses half its "A".
-      const box = (label ? LABEL_BOX_PX : thickness) * dpr;
+      thickness *= k;
+      const box = (label ? LABEL_BOX_PX * k : thickness) * dpr;
       const cy = insetMark(y, box, h) + box / 2;
       const top = cy - (thickness * dpr) / 2;
-      ctx.fillStyle = color;
+      // A dark edge above and below the tick, so it reads over a bright waveform (Settings ▸ Markers).
+      const edge = (x0: number, x1: number) => {
+        if (!edged || x1 <= x0) return;
+        ctx.fillStyle = MARK_EDGE;
+        ctx.fillRect(x0, top - dpr, x1 - x0, thickness * dpr + 2 * dpr);
+      };
       if (!label) {
+        edge(lane.x, lane.x + lane.w);
+        ctx.fillStyle = color;
         ctx.fillRect(lane.x, top, lane.w, thickness * dpr);
         return;
       }
@@ -437,12 +453,15 @@ export function SongOverview(props: SongOverviewProps) {
       // 1.3px and always fits); only the glyph box widens, and resolveLabels is told they now
       // share one column so a section and a cue cannot overprint each other.
       const labelBox = shareCol ? { x: 0, w } : lane;
-      const gap = label.length * 6.5 * dpr + 7 * dpr;
+      const gap = (label.length * 6.5 + 7) * k * dpr;
       const gx = labelBox.x + (labelBox.w - gap) / 2;
       // The line is this mark's own lane MINUS whatever the gap covers of it — the gap can now
       // straddle the seam, so "left piece, right piece" has to be computed against the lane.
       const l0 = lane.x;
       const l1 = lane.x + lane.w;
+      edge(l0, Math.min(gx, l1));
+      edge(Math.max(gx + gap, l0), l1);
+      ctx.fillStyle = color;
       ctx.fillRect(l0, top, Math.max(0, Math.min(gx, l1) - l0), thickness * dpr);
       ctx.fillRect(Math.max(gx + gap, l0), top, Math.max(0, l1 - Math.max(gx + gap, l0)), thickness * dpr);
       // ★ THE LETTER GETS A HALO, NOT A BLOCK — and full ink. The gap puts the glyph over the
@@ -453,7 +472,7 @@ export function SongOverview(props: SongOverviewProps) {
       ctx.textAlign = "center";
       ctx.lineJoin = "round";
       ctx.miterLimit = 2;
-      ctx.lineWidth = 3 * dpr;
+      ctx.lineWidth = 3 * k * dpr;
       ctx.strokeStyle = "rgba(4,6,10,0.9)";
       const lcx = (shareCol ? 0 : lane.x) + (shareCol ? w : lane.w) / 2;
       ctx.strokeText(label, lcx, cy);
@@ -465,7 +484,7 @@ export function SongOverview(props: SongOverviewProps) {
     // ask "is anything already occupying this glyph's space?", because the answer changed
     // depending on where you asked from. Everything is gathered first; resolveLabels then settles
     // the whole lane at once.
-    const shareCol = labelsShareColumn(w / dpr);
+    const shareCol = labelsShareColumn(w / dpr, k);
     const tick = (t: number, color: string, label: string | undefined, thickness: number, kind: Marker["kind"]) => {
       if (t < 0 || t > dur) return;
       marks.push({ t, kind, label: label ?? "", color, thickness });
@@ -485,7 +504,7 @@ export function SongOverview(props: SongOverviewProps) {
       ctx.fillRect(ll.x, y0, ll.w, Math.max(1, y1 - y0));
       // A region too small to BE a region is a point — see loopIsCollapsed. One tick, one label,
       // one snap target, so the two edges cannot overprint each other or race for the same pixel.
-      if (loopIsCollapsed(y0, y1)) {
+      if (loopIsCollapsed(y0, y1, k)) {
         tick(loop.start, rgba(p.loopColor, 0.95), "\u21bb", 1.6, "loop"); // ↻, the glyph the saved-loop PAD wears
       } else {
         tick(loop.start, rgba(p.loopColor, 0.95), "\u25b6", 1.6, "loop"); // ▶, as the main waveform flags it
@@ -529,7 +548,7 @@ export function SongOverview(props: SongOverviewProps) {
       // Same collapse rule: a saved loop shorter than its own label has no second edge worth
       // drawing, and an unlabelled tick a pixel away from a labelled one is just noise you
       // cannot aim at.
-      if (!loopIsCollapsed(y0, y1)) tick(l.end, rgba(c, 0.7), undefined, 1, "sloop");
+      if (!loopIsCollapsed(y0, y1, k)) tick(l.end, rgba(c, 0.7), undefined, 1, "sloop");
     });
     if (deck.cuePoint != null) tick(deck.cuePoint, "#ff8a3c", "C", 1.3, "cue");
     deck.hotCues.forEach((t, i) => {
@@ -537,14 +556,20 @@ export function SongOverview(props: SongOverviewProps) {
     });
     // ---- ONE RESOLVED PAINT ----------------------------------------------------------------
     // Ticks first (every mark keeps its line and stays snappable), then only the labels that fit.
+    // ★ WHERE THE LABEL IS DRAWN, IN CSS PX. resolveLabels measures against LABEL_BOX_PX (CSS px),
+    // but was handed canvas px (× dpr), so on a 2–3× phone screen labels were let through at a half
+    // or a third of the spacing they need; and the edge inset (insetMark) moves a label at the very
+    // top or bottom, so two marks near an end could both pass and then overprint where they landed.
+    const lbox = LABEL_BOX_PX * k * dpr;
     const labelled = resolveLabels(
       marks.map((m) => ({
-        y: (m.t / dur) * h,
+        y: (insetMark((m.t / dur) * h, lbox, h) + lbox / 2) / dpr,
         lane: markerLane(m.kind),
         priority: markerPriority(m.kind),
         label: m.label,
       })),
       shareCol,
+      k,
     );
     for (let i = 0; i < marks.length; i++) {
       const m = marks[i];
@@ -616,27 +641,28 @@ export function SongOverview(props: SongOverviewProps) {
       // object. Its centre is computed FIRST, because the zone band below has to sit on the same
       // line the letter does; a band centred on the raw y while the mark was nudged down for its
       // label would put the "you are in the zone" cue a few px off the thing it belongs to.
-      const hoverH = Math.max(2.4, m.thickness * 2) * dpr;
-      const hbox = (m.label ? LABEL_BOX_PX + 2 : Math.max(2.4, m.thickness * 2)) * dpr;
+      const ko = Math.max(1, p.markerStyle?.overview ?? 1);
+      const hoverH = Math.max(2.4, m.thickness * 2) * ko * dpr;
+      const hbox = (m.label ? LABEL_BOX_PX * ko + 2 : Math.max(2.4, m.thickness * 2) * ko) * dpr;
       const cy = insetMark(y, hbox, h) + hbox / 2;
       const top = cy - hoverH / 2;
       // A soft band the height of the SNAP ZONE itself — the answer to "am I in the right place
       // to hit this?" is a picture of the zone, not a brighter line.
-      const zoneH = MARKER_SNAP_PX * 2 * dpr;
+      const zoneH = MARKER_SNAP_PX * ko * 2 * dpr;
       ctx.fillStyle = rgba(m.color, 0.13);
       ctx.fillRect(lx, Math.max(0, Math.min(h - zoneH, cy - zoneH / 2)), lw, zoneH);
       ctx.fillStyle = m.color;
       if (m.label) {
-        ctx.font = `bold ${10 * dpr}px ui-monospace, monospace`;
+        ctx.font = `bold ${10 * ko * dpr}px ui-monospace, monospace`;
         ctx.textBaseline = "middle";
-        const gap = m.label.length * 7 * dpr + 8 * dpr;
+        const gap = (m.label.length * 7 + 8) * ko * dpr;
         const gx = lx + (lw - gap) / 2;
         ctx.fillRect(lx, top, Math.max(0, gx - lx), hoverH);
         ctx.fillRect(gx + gap, top, Math.max(0, lx + lw - gx - gap), hoverH);
         ctx.textAlign = "center";
         ctx.lineJoin = "round";
         ctx.miterLimit = 2;
-        ctx.lineWidth = 3.5 * dpr;
+        ctx.lineWidth = 3.5 * ko * dpr;
         ctx.strokeStyle = "rgba(4,6,10,0.92)";
         ctx.strokeText(m.label, lx + lw / 2, cy);
         ctx.fillStyle = opaque(m.color);
@@ -647,8 +673,14 @@ export function SongOverview(props: SongOverviewProps) {
     }
 
     // ---- live playhead ----
+    const ph = Math.max(1, p.markerStyle?.playhead ?? 2) * dpr;
+    const py = insetMark((pos / dur) * h, ph, h);
+    if (p.markerStyle?.outline ?? true) {
+      ctx.fillStyle = MARK_EDGE;
+      ctx.fillRect(0, py - dpr, w, ph + 2 * dpr);
+    }
     ctx.fillStyle = p.selectorColor;
-    ctx.fillRect(0, insetMark((pos / dur) * h, 2 * dpr, h), w, 2 * dpr);
+    ctx.fillRect(0, py, w, ph);
   };
 
   useEffect(() => {
@@ -706,7 +738,7 @@ export function SongOverview(props: SongOverviewProps) {
     const el = canvasRef.current;
     if (!el || !(deck.duration > 0)) return null;
     const r = el.getBoundingClientRect();
-    return { top: r.top, height: r.height, duration: deck.duration, left: r.left, width: r.width, side, coarse: coarseRef.current };
+    return { top: r.top, height: r.height, duration: deck.duration, left: r.left, width: r.width, side, coarse: coarseRef.current, scale: Math.max(1, props.markerStyle?.overview ?? 1) };
   };
   const seekAt = (clientX: number, clientY: number, snap: boolean) => {
     if (locked) return;

@@ -4,6 +4,7 @@ import type { Pyramid } from "@htl/analysis";
 import { hexRGB, bandRamp, tiltLuma, debrick, sampleBands } from "@htl/analysis";
 import { deckShades } from "../htl/state/randomPalette";
 import { GRID_ALPHA, GRID_W, gridLod } from "./gridLod";
+import { MARK_EDGE, type MarkerStyle } from "./markerStyle";
 import { pickLevel, envelope } from "./waveformEnvelope";
 import { perfWork } from "@htl/debug/perfCapture";
 
@@ -31,6 +32,7 @@ interface WaveformViewportProps {
   debrick: boolean; // re-expand local contrast on brick-walled masters (see debrick())
   glow: boolean; // neon bloom halo behind the waveform
   markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars
+  markerStyle?: MarkerStyle; // playhead width, grid weight, dark edges (Settings ▸ Colours ▸ Markers)
   gridSize: number;
   // A replacement stem set is being computed (model switch / enhance), as a 0–100 %, or
   // null when idle. Only dims/overlays when stems are ALREADY shown — the FIRST separation
@@ -1165,14 +1167,17 @@ export function WaveformViewport(props: WaveformViewportProps) {
       // suite also asserts the tiers this replaced FAIL both guarantees, so it can actually fail.
       const lod = gridLod(pxPerBeat, beatsPerBar, subs);
       const { barStep, halfFade, beatFade, subFade, showLabels } = lod;
-      const subCol = (f: number) => rgba(p.markerColor, GRID_ALPHA.sub * f);
-      const beatCol = (f: number) => rgba(p.markerColor, GRID_ALPHA.beat * f);
-      const barCol = (f = 1) => rgba(p.markerColor, GRID_ALPHA.bar * f);
+      // Beat grid weight (Settings ▸ Markers): widths scale, and above 1× the ink deepens too.
+      const gw = Math.max(0.25, p.markerStyle?.grid ?? 1);
+      const ga = (a: number) => Math.min(1, gw > 1 ? a * gw : a);
+      const subCol = (f: number) => rgba(p.markerColor, ga(GRID_ALPHA.sub) * f);
+      const beatCol = (f: number) => rgba(p.markerColor, ga(GRID_ALPHA.beat) * f);
+      const barCol = (f = 1) => rgba(p.markerColor, ga(GRID_ALPHA.bar) * f);
 
       const vline = (t: number, wpx: number, color: string, top = 0, frac = 1) => {
         if (t < 0 || t > dur || t < left || t > right) return;
         ctx.fillStyle = color;
-        ctx.fillRect(toX(t) - (wpx * dpr) / 2, top, Math.max(1, wpx * dpr), h * frac);
+        ctx.fillRect(toX(t) - (wpx * gw * dpr) / 2, top, Math.max(1, wpx * gw * dpr), h * frac);
       };
       // Time of a (possibly fractional) beat index — interpolated between tracked beats so
       // sub-beat / coarse lines ride the real groove; extrapolated past the ends.
@@ -1257,11 +1262,11 @@ export function WaveformViewport(props: WaveformViewportProps) {
           // loose from that slider (see gridLod.ts) the phrase bars were left as the heaviest
           // thing on the lane by a factor of six. Fixed weight, sized against the bar line it
           // sits above: strongest tier in the grid, roughly 2× a bar, not a wall.
-          const pw = GRID_W.phrase * dpr;
+          const pw = GRID_W.phrase * gw * dpr;
           // Same reason as the rail's: the deck accent IS the waveform's own hue, so a phrase
           // line drawn in it disappears into the loudest part of the track — exactly where the
           // structure you want to see usually is.
-          ctx.fillStyle = rgba(p.markerColor, GRID_ALPHA.phrase);
+          ctx.fillStyle = rgba(p.markerColor, ga(GRID_ALPHA.phrase));
           ctx.fillRect(x - pw / 2, 0, pw, h);
           // ★ THE LETTER IS INK, THE LINE IS A WASH. The label was inheriting the bar's own
           // translucency and sitting on top of the waveform at 10px — thin strokes at 0.72 alpha
@@ -1282,17 +1287,32 @@ export function WaveformViewport(props: WaveformViewportProps) {
 
     // Markers.
     const mt = Math.max(1, p.markerThickness || 2); // user marker-bar width (px), centred on the point
+    // ★ A DARK EDGE EITHER SIDE (Settings ▸ Markers, on by default): a flat coloured bar on a bright,
+    // full-height single-track waveform has nothing separating it from the wave behind it.
+    const edged = p.markerStyle?.outline ?? true;
+    const bar = (x: number, wpx: number, color: string) => {
+      if (edged) {
+        ctx.fillStyle = MARK_EDGE;
+        ctx.fillRect(x - wpx / 2 - dpr, 0, wpx + 2 * dpr, h);
+      }
+      ctx.fillStyle = color;
+      ctx.fillRect(x - wpx / 2, 0, wpx, h);
+    };
     const flag = (t: number, color: string, label?: string) => {
       if (t < left || t > left + trackWindow) return;
       const x = toX(t);
-      const tab = 13 * dpr;
+      const tab = Math.max(13, mt + 9) * dpr; // the tab grows with a thick bar so it still reads as a flag
+      bar(x, mt * dpr, color);
+      if (edged) {
+        ctx.fillStyle = MARK_EDGE;
+        ctx.fillRect(x, 0, tab + dpr, tab + dpr);
+      }
       ctx.fillStyle = color;
-      ctx.fillRect(x - (mt * dpr) / 2, 0, mt * dpr, h);
       ctx.fillRect(x, 0, tab, tab);
       if (label) {
         ctx.fillStyle = "#06080c";
-        ctx.font = `bold ${9.5 * dpr}px ui-monospace, monospace`;
-        ctx.fillText(label, x + 2.5 * dpr, 10 * dpr);
+        ctx.font = `bold ${(tab / dpr) * 0.73 * dpr}px ui-monospace, monospace`;
+        ctx.fillText(label, x + (tab / dpr) * 0.19 * dpr, tab * 0.77);
       }
     };
     // ★ SAVED LOOPS WERE ON NO SURFACE AT ALL HERE. `deck.hotCues` was drawn and `deck.hotLoops`
@@ -1351,9 +1371,8 @@ export function WaveformViewport(props: WaveformViewportProps) {
       ctx.fillText(label, lx, 4 * dpr);
     }
 
-    // Centre playhead.
-    ctx.fillStyle = p.selectorColor;
-    ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h);
+    // Centre playhead (width: Settings ▸ Markers ▸ Playhead).
+    bar(w / 2, Math.max(1, p.markerStyle?.playhead ?? 2) * dpr, p.selectorColor);
 
     // (The "separating" % is shown ONCE, in the deck header — the dim above is the only
     // on-waveform cue that a replacement stem set is pending.)

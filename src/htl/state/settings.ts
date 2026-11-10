@@ -145,6 +145,10 @@ export interface Settings {
   stemsFollowDeck: boolean; // stem LANES take shades of the deck's accent too, so a whole deck reads as one colour
   waveformDebrick: boolean; // re-expand local contrast on brick-walled (limited) masters so the waveform shows contour
   markerThickness: number; // px width of the cue/loop/hot-cue + phrase marker bars on the waveform (1–12)
+  playheadWidth: number; // px width of the waveform playhead (1–8)
+  gridWeight: number; // beat grid weight multiplier (0.5–3): line widths, and opacity above 1
+  markerOutline: boolean; // dark edge around markers + playhead so they read over a bright waveform
+  overviewMarkerScale: number; // song overview rail markers: tick, letter, label box and tap target (1–2.5)
   uiContrast: number; // UI "ink" depth: 0 = soft/grey panel fills, 1 = inky (deep fills + brighter text)
   inheritRoomColor: boolean; // contextual: while in a shared session, take on the HOST's accent (the room "vibe")
   deckArtAccent: boolean; // theme each deck's accent to the LOADED track's album-art palette (opt-in art feature)
@@ -351,6 +355,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // content the de-brick remap normalises every section to a uniform height band, which reads AS a
   // brick wall — so it's opt-in, for genuinely limited masters that flat-top into a solid block.
   markerThickness: 2, // default marker-bar width (px) — matches the old hard-coded cue/loop bar
+  playheadWidth: 2, // the old hard-coded playhead
+  gridWeight: 1,
+  markerOutline: true, // on: marks over a full-height single-track waveform were hard to see
+  overviewMarkerScale: 1,
   uiContrast: DEFAULT_CONTRAST, // inky-but-readable fills by default (deeper than a flat grey)
   inheritRoomColor: true, // catch the host's vibe in a shared session by default
   deckArtAccent: true, // themes the deck accent to the track's artwork; toggle off for a fixed accent

@@ -17,6 +17,7 @@ import { BoardBar } from "./components/BoardBar";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadIsOn, fxPadPress, fxPadRelease, padsForDeck } from "./components/fxPads";
 import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./components/quantizedTransport";
+import { markerStyleOf } from "./components/markerStyle";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
@@ -879,6 +880,12 @@ function AppBody() {
   const resyncAt = useRef<Record<DeckId, number | null>>({ A: null, B: null });
   // Consecutive resync attempts per deck since it last landed the anchor's track → the backoff.
   const resyncTries = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // Marker weights for the deck waveforms and the overview rails (Settings ▸ Colours ▸ Markers).
+  const markerStyle = useMemo(
+    () => markerStyleOf(settings),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settings.markerThickness, settings.playheadWidth, settings.gridWeight, settings.markerOutline, settings.overviewMarkerScale],
+  );
 
   const cycleTempoRange = useCallback(() => {
     const i = TEMPO_RANGES.indexOf(settings.tempoRange);
@@ -4053,6 +4060,7 @@ function AppBody() {
           background={surfaceColor(settings.bgColor, settings.uiContrast)}
           selectorColor={settings.selectorColor}
           markerColor={settings.markerColor}
+          markerStyle={markerStyle}
           loopColor={settings.loopColor}
           freqColors={settings.freqColors}
           freqLow={settings.freqLowColor || FREQ_LOW_DEFAULT}
@@ -4095,6 +4103,7 @@ function AppBody() {
               debrick={settings.waveformDebrick}
               glow={settings.glow}
               markerThickness={settings.markerThickness}
+              markerStyle={markerStyle}
               stemColors={{ drums: settings.stemDrumsColor, bass: settings.stemBassColor, vocals: settings.stemVocalsColor, other: settings.stemOtherColor }}
               meta={meta[id]}
               status={terseStem(status[id])}
@@ -4133,6 +4142,7 @@ function AppBody() {
           background={surfaceColor(settings.bgColor, settings.uiContrast)}
           selectorColor={settings.selectorColor}
           markerColor={settings.markerColor}
+          markerStyle={markerStyle}
           loopColor={settings.loopColor}
           freqColors={settings.freqColors}
           freqLow={settings.freqLowColor || FREQ_LOW_DEFAULT}

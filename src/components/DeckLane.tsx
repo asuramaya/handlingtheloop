@@ -6,7 +6,7 @@ import type { TrackMeta } from "@htl/library";
 import { gridLabel, stepSkip } from "@htl/state";
 import { WaveformViewport } from "./WaveformViewport";
 import { CaptionBar } from "./CaptionBar";
-import { useLongPress } from "./useLongPress";
+import type { MarkerStyle } from "./markerStyle";
 import { usePhone } from "../htl/state/usePhone";
 import { TRACK_DND_MIME } from "./TrackTable";
 import { displayTrack, fmtTime } from "../util/format";
@@ -47,6 +47,7 @@ interface DeckLaneProps {
   debrick: boolean;
   glow: boolean;
   markerThickness: number;
+  markerStyle?: MarkerStyle;
   stemColors: Record<string, string>;
   meta: DeckMeta;
   status: StemBadge | null;
@@ -143,7 +144,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, markerStyle, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
   // PHONE: the DECK header is a FOCUS control, not an expand control. Expanding solos one lane
   // by hiding the other — it buys waveform height by spending the second waveform, which is a
   // fair trade on a desktop and a bad one here: the phone already shows only ONE deck's controls
@@ -152,8 +153,10 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
   // control surface is showing (the lane's own capture handler already does the focusing) and
   // leaves both lanes up. Expansion stays reachable, on the gesture this app already uses as
   // touch's alt-action everywhere else — a long press, with its haptic tick.
+  // ★ A TAP, ON EVERY DEVICE (operator, 2026-11-10: "press hold on deck a/b for focus expand is too
+  // clumsy and id rather leave it at normal tap"). The phone's long press is gone: tapping DECK A/B
+  // focuses that deck (the lane's capture handler) and expands / restores it, as on desktop.
   const phone = usePhone();
-  const expandLong = useLongPress(() => onToggleExpand());
   // The deck is showing the single mix waveform while a NEURAL split is computed or
   // fetched — surface that transition right on the lane so it's obvious stems are
   // coming (vs. just "stuck" on the big waveform). DSP/idle states show nothing.
@@ -195,7 +198,6 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
       e.preventDefault();
       return;
     }
-    expandLong.cancel(); // a drag that starts anyway owns the press — don't also fire the hold
     const track: TrackMeta = {
       videoId: meta.videoId,
       title: meta.name,
@@ -264,17 +266,8 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         >
           <button
             className={`lane-id ${expanded ? "on" : ""}`}
-            onClick={() => { if (!phone) onToggleExpand(); }}
-            {...(phone ? expandLong.bind(undefined) : {})}
-            title={
-              phone
-                ? expanded
-                  ? "Showing this deck's controls · hold to restore both lanes"
-                  : "Showing this deck's controls · hold to expand this lane"
-                : expanded
-                  ? "Restore both decks"
-                  : "Expand to single-deck view"
-            }
+            onClick={() => onToggleExpand()}
+            title={expanded ? "Restore both decks" : "Expand to single-deck view"}
             aria-pressed={expanded}
           >
             DECK {id}
@@ -380,6 +373,7 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         stemsFollowDeck={stemsFollowDeck}
         debrick={debrick}
         markerThickness={markerThickness}
+        markerStyle={markerStyle}
         glow={glow}
         stemColors={stemColors}
         gridSize={deck.skipBeats}

@@ -52,9 +52,30 @@ if (!globalThis.__htlPcm) globalThis.__htlPcm = new Map();
 // recorder stores whole milliseconds, which adds jitter longer windows average away, so the real
 // capture is biased toward longer windows; 640 rather than its preferred 768 is the hedge.)
 const MIN_INTERVAL = 640;
-// How far a move from rest may travel and still be a MICRO JOG (seconds of audio), for the arrival
-// stop below. A nudge is a few ticks (2.5 ms each); a scratch sweeps tens of milliseconds and more.
+// How far a move from rest may travel and still be a MICRO JOG (seconds of audio), played as the
+// hand's own trajectory (see HAND TRAJECTORY below). A nudge is a few ticks (2.5 ms each); a scratch
+// sweeps tens of milliseconds and more.
 const MICRO_SPAN = 0.06;
+// HAND TRAJECTORY timing (seconds), all from the operator's FLX4 capture (fixtures/flx4-jog-real-
+// 2026-11-02.json, every start of motion after >= 30 ms of stillness):
+//  TJ_WAIT    how long the first tick after rest waits for a second one to learn the hand's pace.
+//             The gap from the first to the second tick was 0-6 ms in 17 of 20 starts, then 14, 15
+//             and 23 ms, so 6.5 ms catches the common case and costs nothing more than that wait.
+//  TJ_SINGLE  the duration given to a tick whose follower did not come inside TJ_WAIT: a slow
+//             finger. Over all 47 starts in the capture (after stillness or at a reversal), the 13
+//             first gaps longer than TJ_WAIT were 7-23 ms, median 10, so a lone tick plays over
+//             10 ms (0.25x).
+//  TJ_MIN     the shortest segment: ticks share a 1 ms USB frame, so a gap under 1 ms is timestamp
+//             quantisation, not a faster hand.
+//  TJ_CONT    a gap below this (or below 2.5x the previous gap, up to TJ_CONT_MAX) is the hand still
+//             moving, played over its real length; a longer one is a pause, and the next tick starts
+//             afresh with TJ_WAIT.
+const TJ_WAIT = 0.0065, TJ_SINGLE = 0.010, TJ_MIN = 0.001, TJ_CONT = 0.05, TJ_CONT_MAX = 0.15;
+// TJ_AVG: a continuing segment is paced by the mean of the last 3 gaps. The ticks' timestamps sit
+// on a 1 ms USB clock, so a hand at ~1x shows gaps of 2, 3, 2, 3 ms and single-gap pacing flips the
+// pitch 0.8x/1.25x per tick: measured on the capture's real nudges, 390-730 cents RMS of tick-rate
+// flutter; 3 gaps 270-415 (4: 240-400 but later stops). Every tick position is still passed exactly.
+const TJ_AVG = 3;
 class Scratch extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -105,6 +126,12 @@ class Scratch extends AudioWorkletProcessor {
     this.ramping = false; this.rampTarget = 0; this.rampTau = 0.1; this.rampSince = 0;
     this.rampLoopStart = -1; this.rampLoopEnd = -1; // -1,-1 = no active loop (ramp runs to the track edge)
     this.rampServo = true; this.rampA = 0; this.rampZ = 0; // servoStep / brakeFriction state
+    // HAND TRAJECTORY state (see the move handler): a queue of { to, dur } segments in samples,
+    // dur -1 = a first tick still waiting to learn its pace (at = when it arrived, on this.clk).
+    this.clk = 0;          // output samples processed, the worklet's own clock
+    this.traj = false; this.tjQ = []; this.tjFrom = 0; this.tjEl = 0; this.tjLastT = -1; this.tjGap = 0; this.tjGuess = false;
+    this.tjWait = TJ_WAIT * sampleRate; this.tjSingle = TJ_SINGLE * sampleRate; this.tjMin = TJ_MIN * sampleRate;
+    this.tjCont = TJ_CONT * sampleRate; this.tjContMax = TJ_CONT_MAX * sampleRate;
     this.port.onmessage = (e) => {
       const d = e.data;
       if (d.type === 'start') {
@@ -123,7 +150,8 @@ class Scratch extends AudioWorkletProcessor {
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
         this.onset = 0; // samples of first-motion window left (see the move handler)
-        this.trkH = []; this.trkT = 0; this.trkTs0 = -1; this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the arrival stop
+        this.trkH = []; this.trkT = 0; this.trkTs0 = -1; this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the micro jog notes
+        this.traj = false; this.tjQ.length = 0; this.tjLastT = -1; this.tjGap = 0; this.tjGuess = false; this.tjEl = 0;
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -198,7 +226,11 @@ class Scratch extends AudioWorkletProcessor {
         // (> 20 ms: only SPARSE input. 60 Hz touch reaches "rest" between ordinary moves ~17 ms
         // apart, and pacing those as a slow turn cost touch scratching its alignment — measured.)
         const steady = fromRest && this.lastGap > 0 && this.quiet > 960 && this.quiet < 2.5 * this.lastGap && this.quiet < 7200;
-        if (fromRest && !steady && this.quiet > 1600) { this.micro = true; this.restPos = this.target; }
+        if (fromRest && !steady && this.quiet > 1600) {
+          this.micro = true; this.restPos = this.target;
+          this.traj = !!d.hw; this.tjQ.length = 0; this.tjFrom = this.pos; this.tjTo = this.target; this.tjEl = 0; this.tjLastT = -1; this.tjGap = 0; this.tjGuess = false;
+          this.granular = false; this.steadyRun = false;
+        }
         else if (this.micro && (rel > MICRO_SPAN || rel < -MICRO_SPAN)) this.micro = false;
         if (d.pos !== this.target) { this.lastGap = this.quiet < 1e8 ? this.quiet : 0; this.quiet = 0; }
         if (!this.granular && d.pos === this.target) {
@@ -212,9 +244,11 @@ class Scratch extends AudioWorkletProcessor {
           // roughness 0.044 → 0.090 and the real FLX4 capture 0.173 → 0.250, and the banking alone
           // still cost 60 Hz touch scratching (0.049 → 0.058, worse alignment). So the hold is for
           // a micro jog and the banking for a steady slow turn; anything else runs the old pacing.
+          // (A controller micro jog never runs past the hand at all: it plays the hand's trajectory
+          // and holds on its last tick, so a settle post has nothing to correct there.)
           const ahead = (this.pos - this.target) * this.curStep;
-          if (this.micro && ahead > 0) { this.target = this.pos; this.step = this.curStep = 0; this.since = 0; return; }
-          if (this.steadyRun && (this.target - this.pos) * this.curStep > 0) { this.accDt += dtIn; this.since = 0; return; }
+          if (this.micro && !this.traj && ahead > 0) { this.target = this.pos; this.step = this.curStep = 0; this.since = 0; return; }
+          if (!this.traj && this.steadyRun && (this.target - this.pos) * this.curStep > 0) { this.accDt += dtIn; this.since = 0; return; }
         }
         if (steady) {
           this.interval = Math.max(MIN_INTERVAL, Math.min(7200, this.lastGap)); // lastGap = this tick's gap (set above)
@@ -282,10 +316,37 @@ class Scratch extends AudioWorkletProcessor {
           const fit = d.pos + (sp - v * st) / n; // the fitted hand position NOW
           this.trk = v + (fit - this.pos) / (0.2 * sampleRate);
         }
+        // ★ HAND TRAJECTORY: A MICRO JOG PLAYS WHAT THE HAND DID (operator, 2026-11-10: micro jogs
+        // sounded like "little raygun pew pews... R2D2 bird whines... smeary and low pitch"; asked for
+        // "physical parity"). A record moved N ticks plays exactly those N x 2.5 ms of audio over
+        // exactly the time the finger took. The chase above paced every nudge from rest over a fixed
+        // ~13 ms, so a 2-4 tick flick the hand made at ~2.5x came out as a flat 0.37-0.72x plateau and
+        // a stop (scripts/joglab/scratchwav.mjs): low, smeared, the same for every nudge. Now a micro
+        // jog is played piecewise-linearly through the tick positions, each tick-to-tick segment
+        // over its REAL gap (tracker clock: the controller's own tick timestamps), one segment behind
+        // the hand: the head starts a segment once its end tick is known. The first tick after rest
+        // has no start time; it waits up to TJ_WAIT for the second and takes that gap, else it plays
+        // over TJ_SINGLE (and is re-timed if the second tick comes while it plays). It holds exactly
+        // on the last tick when no more come (settle posts add nothing), and hands over to the
+        // tracker once the motion leaves MICRO_SPAN, with the head's speed carried into the ease.
+        // Only for CONTROLLER ticks (d.hw: JogEngine got the tick's own timestamp). Pointer input
+        // coalesces several events into one post time, so its gaps are not the hand's; it keeps
+        // the chase pacing and the ARRIVAL STOP (measured: as a trajectory, mouse roughness doubled).
+        // Measured on the capture's real nudges (scratchwav.mjs 04-capture-micro): the head starts
+        // 4-8 ms after the first tick (the first gap, or TJ_WAIT), and stops 9-30 ms after the last.
+        if (this.traj) {
+          if (this.micro) {
+            if (d.pos !== this.tjTo) this.tjTick(d.pos, this.trkT);
+            return;
+          }
+          this.traj = false; this.tjQ.length = 0; this.tjGuess = false;
+          this.onset = 0; this.accDt = 0; this.interval = MIN_INTERVAL; this.repace = true;
+        }
         if (!this.repace) return; // keep the current step; the next re-pace will use the banked time
-        // The tracker drives CONTINUING motion. A move from rest (the onset) and a micro jog keep the
-        // chase pacing their own tests were tuned on: 24 ms of history is nothing to fit at the first
-        // tick, and the tracker's ~200 ms pull would overrun a nudge's stop.
+        // The tracker drives CONTINUING motion. A move from rest (the onset) and a pointer micro jog
+        // keep the chase pacing their own tests were tuned on: 24 ms of history is nothing to fit at
+        // the first tick, and the tracker's ~200 ms pull would overrun a nudge's stop. (A controller
+        // micro jog is the trajectory above.)
         this.stepRaw = this.micro || this.onset > 0 || fromRest
           ? (this.target - this.pos) / this.interval
           : this.trk; // uncapped (granular tracks the finger)
@@ -328,7 +389,7 @@ class Scratch extends AudioWorkletProcessor {
         this.rampTau = Math.max(0.001, d.tau);
         this.rampServo = d.servo; // true = motor servo (spinback/soft-start), false = friction brake
         this.rampA = 0; this.rampZ = 0; // fresh state per ramp — see servoStep/brakeFriction in JogEngine.ts
-        this.ramping = true; this.granular = false; this.rampSince = 0;
+        this.ramping = true; this.granular = false; this.rampSince = 0; this.traj = false;
         this.active = true; this.gainTarget = 1;
         // loopStart/loopEnd (worklet-local samples), or -1,-1 when the deck has no active
         // loop — a spinback/soft-start ramp that's headed back to play stays inside a live
@@ -341,6 +402,38 @@ class Scratch extends AudioWorkletProcessor {
         if (d.index >= 0 && d.index < 4) this.gain_[d.index] = d.value;
       }
     };
+  }
+  // A micro jog's new tick (position "to", at tracker time T in samples) joins the trajectory queue.
+  tjTick(to, T) {
+    const known = this.tjLastT >= 0;
+    const g0 = known ? T - this.tjLastT : 0;
+    this.tjLastT = T;
+    this.tjTo = to;
+    const g = g0 > this.tjMin ? g0 : this.tjMin;
+    const Q = this.tjQ;
+    const last = Q.length ? Q[Q.length - 1] : null;
+    if (known && last && last.dur < 0) {
+      // the second tick came inside the wait: its gap paces the first segment too
+      last.dur = g; Q.push({ to, dur: g }); this.tjGap = g0; this.tjH = [g]; return;
+    }
+    if (known && this.tjGuess && Q.length) {
+      // the lone first tick is already playing over its guess: finish it at the real pace, from
+      // where the head is now (so the position does not jump, only the speed changes)
+      const e = Q[0];
+      const left = 1 - this.tjEl / e.dur;
+      this.tjFrom = this.tjFrom + (e.to - this.tjFrom) * (this.tjEl / e.dur);
+      this.tjEl = 0; e.dur = left * g > 1 ? left * g : 1;
+      this.tjGuess = false; Q.push({ to, dur: g }); this.tjGap = g0; this.tjH = [g]; return;
+    }
+    const cont = known && (this.tjGap > 0 ? g0 < 2.5 * this.tjGap && g0 < this.tjContMax : g0 < this.tjCont);
+    if (cont) {
+      // paced by the mean of the last TJ_AVG gaps: every tick position is still passed exactly,
+      // only the 1 ms USB-frame quantisation of each single gap is averaged out of the pitch
+      const H = this.tjH || (this.tjH = []);
+      H.push(g); if (H.length > TJ_AVG) H.shift();
+      let m = 0; for (let i = 0; i < H.length; i++) m += H[i];
+      Q.push({ to, dur: m / H.length }); this.tjGap = g0;
+    } else { Q.push({ to, dur: -1, at: this.clk }); this.tjGap = 0; this.tjH = []; }
   }
   // One sample of one output channel (0=L, 1=R) from the shared PCM registry, weighted by
   // this.gain_ per group — the same live per-stem mute/level state stretchWorklet's own
@@ -417,7 +510,7 @@ class Scratch extends AudioWorkletProcessor {
     const a = this.lpA;
     const glen = this.glen, gh = this.gh, gwin = this.gwin;
     for (let i = 0; i < frames; i++) {
-      this.since++;
+      this.since++; this.clk++;
       this.gain += (this.gainTarget - this.gain) * this.kGain;
       if (this.ramping) {
         // Motor ramp: ease the read velocity toward the target every sample. Two DIFFERENT
@@ -499,15 +592,37 @@ class Scratch extends AudioWorkletProcessor {
       // stall is the stutter / DC-buzz that distorted the scrub. Pure feed-forward needs no
       // position correction: each 'move' recomputes step from the ACTUAL current pos, so
       // any drift self-nulls within one update with no built-in convergence stall.
-      this.curStep += (this.step - this.curStep) * this.kStep; // ease toward target velocity
-      if (this.curStep > 32) this.curStep = 32; else if (this.curStep < -32) this.curStep = -32;
       const p0 = this.pos;
-      this.pos += this.curStep; // feed-forward glide (fills the inter-update gap, no parking)
       this.quiet++;
-      if (this.micro && this.curStep !== 0) {
-        // A micro jog lands ON the hand's position and stops there (see ARRIVAL STOP above).
-        const r0 = this.target - p0, r1 = this.target - this.pos;
-        if (r0 * r1 < 0 || r1 === 0) { this.pos = this.target; this.curStep = 0; this.step = 0; }
+      if (this.traj) {
+        // A micro jog: walk the hand's trajectory (see HAND TRAJECTORY in the move handler). Each
+        // segment ends exactly on its tick; with the queue empty the head holds on the last one.
+        const Qe = this.tjQ;
+        let e = Qe.length ? Qe[0] : null;
+        if (e && e.dur < 0 && this.clk - e.at >= this.tjWait) { e.dur = this.tjSingle; this.tjGuess = true; this.tjEl = 0; }
+        if (e && e.dur > 0) {
+          this.tjEl += 1;
+          while (e && e.dur > 0 && this.tjEl >= e.dur) {
+            this.tjEl -= e.dur; this.tjFrom = e.to; Qe.shift(); this.tjGuess = false;
+            e = Qe.length ? Qe[0] : null;
+            if (e && e.dur < 0) {
+              if (this.clk - e.at >= this.tjWait) { e.dur = this.tjSingle; this.tjGuess = true; }
+              this.tjEl = 0;
+            }
+          }
+          if (!e || e.dur < 0) this.tjEl = 0;
+          this.pos = e && e.dur > 0 ? this.tjFrom + (e.to - this.tjFrom) * (this.tjEl / e.dur) : this.tjFrom;
+        }
+        this.curStep = this.step = this.pos - p0;
+      } else {
+        this.curStep += (this.step - this.curStep) * this.kStep; // ease toward target velocity
+        if (this.curStep > 32) this.curStep = 32; else if (this.curStep < -32) this.curStep = -32;
+        this.pos += this.curStep; // feed-forward glide (fills the inter-update gap, no parking)
+        if (this.micro && this.curStep !== 0) {
+          // A pointer micro jog lands ON the hand's position and stops there (see ARRIVAL STOP).
+          const r0 = this.target - p0, r1 = this.target - this.pos;
+          if (r0 * r1 < 0 || r1 === 0) { this.pos = this.target; this.curStep = 0; this.step = 0; }
+        }
       }
       if (this.pos < 0) { this.pos = 0; if (this.curStep < 0) this.curStep = 0; }
       else if (this.pos > last) { this.pos = last; if (this.curStep > 0) this.curStep = 0; }

@@ -85,7 +85,34 @@ function microjogs() {
     while (tp !== want) { tp += Math.sign(want - tp); pts.push({ t: w0 + ms, pos: tp * TICK }); }
   }
   const dur = (w0 + 1500) / 1000;
-  return { pts, segs: [[0, dur * 1000]], dur, marks, wiggle: [w0, w0 + 1200] };
+  for (const m of marks) m.lastT = m.t + Math.abs(m.n) - 1;
+  return { pts, segs: [[0, dur * 1000]], dur, marks, wiggle: [w0, w0 + 1200], base };
+}
+// REAL micro jogs: the small top-plate nudges in the operator's FLX4 capture, replayed with their
+// real tick gaps (whole ms, as the recorder stored them), 600 ms of stillness apart. Picked by
+// scripts that list every burst of 0x22 ticks after >= 25 ms of quiet (capture t in ms, ticks used):
+//   687 x3   the one genuinely slow nudge (gaps 23 15)
+//   4 x18, 448 x16, 542 x15, 13382 x24   short complete pushes inside the micro span (gaps 1-11)
+//   11233 x4, 11570 x4, 17332 x5, 17553 x3   onsets of longer moves, cut to nudge size
+const REAL_MICRO = [[687, 3], [4, 18], [448, 16], [542, 15], [13382, 24], [11233, 4], [11570, 4], [17332, 5], [17553, 3]];
+function captureMicro() {
+  const cap = JSON.parse(readFileSync(CAPTURE, "utf8"));
+  const ev = cap.events ?? cap;
+  const t0 = ev[0].t;
+  const ticks = ev.filter((e) => e.s === 0xb0 && e.d1 === 0x22).map((e) => ({ t: e.t - t0, d: e.d2 - 64 }));
+  const base = 52.0;
+  const pts = [], marks = [];
+  let cur = base, t = 300;
+  for (const [at, cnt] of REAL_MICRO) {
+    const i0 = ticks.findIndex((x) => x.t >= at);
+    const sel = ticks.slice(i0, i0 + cnt);
+    let net = 0;
+    for (const x of sel) { cur += x.d * TICK; net += x.d; pts.push({ t: t + (x.t - sel[0].t), pos: cur }); }
+    marks.push({ t, n: net, lastT: t + (sel.at(-1).t - sel[0].t), gaps: sel.slice(1).map((x, i) => x.t - sel[i].t) });
+    t += Math.max(600, sel.at(-1).t - sel[0].t + 400);
+  }
+  const dur = (t + 200) / 1000;
+  return { pts, segs: [[0, dur * 1000]], dur, marks, base };
 }
 function baby() {
   const base = 75.0, amp = 90 * TICK; // ±1/8 turn = 90 ticks = 0.225 s of audio
@@ -122,7 +149,7 @@ function capture() {
     }
   }
   if (down != null) segs.push([down, 15000]);
-  return { pts, segs, dur: 15 };
+  return { pts, segs, dur: 15, pos0: 30 };
 }
 // The same steady 1x turn, but with the messages DELIVERED the way a busy main thread delivers MIDI:
 // mostly within ~1.5 ms of the tick, with an occasional 4-8 ms stall that releases a batch at once
@@ -149,6 +176,7 @@ const GESTURES = {
   "01-microjogs": microjogs,
   "02-baby": baby,
   "03-capture": capture,
+  "04-capture-micro": captureMicro,
 };
 
 // ---- the real worklet --------------------------------------------------------------------------
@@ -209,13 +237,23 @@ PATCHES["p6-alphabeta"] = [
   ["this.curStep += (this.step - this.curStep) * this.kStep; // ease toward target velocity",
    "if (++this.abN >= 48) { this.abN = 0; const xp = this.abX + this.abV * 48, r = this.target - xp; this.abX = xp + r / 8; this.abV += r / 256 / 48; } this.curStep = this.micro ? this.curStep + (this.step - this.curStep) * this.kStep : this.abV;"],
 ];
+// Micro-jog HAND TRAJECTORY tuning: segment pacing averaged over the last k tick gaps, and the
+// first tick's wait / lone-tick duration.
+for (const k of [1, 2, 3, 4]) PATCHES[`tj-avg${k}`] = [["const TJ_AVG = 1;", `const TJ_AVG = ${k};`]];
+PATCHES["tj-wait3"] = [["const TJ_WAIT = 0.0065,", "const TJ_WAIT = 0.003,"]];
 // Per-sample read speed, logged by a probe patched into every variant (it only reads state).
 const PROBE = [
   ["const s = this.readScrub(c, p0, this.pos, sp);", "if (c === 0) globalThis.__spd.push(this.pos - p0); const s = this.readScrub(c, p0, this.pos, sp);"],
   ["this.pos += this.curRaw;", "this.pos += this.curRaw; globalThis.__spd.push(this.curRaw);"],
 ];
+// `before`: another copy of scratchWorklet.ts (e.g. git show <rev>:src/htl/audio/scratchWorklet.ts
+// saved to a file), passed with --before <path>, rendered unpatched for a before/after A/B.
+const BEFORE_PATH = opt("--before");
+const BEFORE_SRC = BEFORE_PATH ? (await import(BEFORE_PATH)).SCRATCH_WORKLET_SRC : null;
+PATCHES.before = [];
 function makeWorklet(variant) {
-  let src = SCRATCH_WORKLET_SRC;
+  let src = variant === "before" ? BEFORE_SRC : SCRATCH_WORKLET_SRC;
+  if (!src) throw new Error("variant 'before' needs --before <path to a scratchWorklet.ts>");
   for (const [from, to] of [...PATCHES[variant], ...PROBE]) {
     const n = src.split(from).length - 1;
     if (n !== 1) throw new Error(`${variant}: patch target found ${n}x: ${from}`);
@@ -241,15 +279,19 @@ function runWorklet(variant, g) {
   for (const [a, b] of g.segs) {
     const inSeg = g.pts.filter((p) => p.t >= a && p.t <= b);
     if (!inSeg.length) continue;
-    const startPos = inSeg[0].pos - (g.speed ? 0 : 0);
-    sched.push({ t: a, m: { type: "start", pos: (g.base ?? startPos) * SR } });
+    // The grab lands where the platter IS: the last tick before this touch (or the gesture's own
+    // start), NOT the first tick of the touch. Starting on the first tick swallowed it (that is
+    // why a 1-tick nudge from rest travelled 0 ticks in this harness).
+    const prev = g.pts.filter((p) => p.t < a).at(-1);
+    const startPos = prev ? prev.pos : (g.base ?? g.pos0 ?? inSeg[0].pos);
+    sched.push({ t: a, m: { type: "start", pos: startPos * SR } });
     const dv = (p) => (g.deliver ? g.deliver(p) : p.t);
-    let k = 0, lastIn = a, cur = g.base ?? inSeg[0].pos;
+    let k = 0, lastIn = a, cur = startPos;
     for (let f = a; f <= b; f += 1000 / 60) {
-      while (k < inSeg.length && inSeg[k].t <= f) { sched.push({ t: dv(inSeg[k]), m: { type: "move", pos: inSeg[k].pos * SR, ts: inSeg[k].t } }); cur = inSeg[k].pos; lastIn = inSeg[k].t; k++; }
+      while (k < inSeg.length && inSeg[k].t <= f) { sched.push({ t: dv(inSeg[k]), m: { type: "move", pos: inSeg[k].pos * SR, ts: inSeg[k].t, hw: true } }); cur = inSeg[k].pos; lastIn = inSeg[k].t; k++; }
       if (f - lastIn > 6) sched.push({ t: f, m: { type: "move", pos: cur * SR, ts: f } });
     }
-    for (; k < inSeg.length; k++) sched.push({ t: dv(inSeg[k]), m: { type: "move", pos: inSeg[k].pos * SR, ts: inSeg[k].t } });
+    for (; k < inSeg.length; k++) sched.push({ t: dv(inSeg[k]), m: { type: "move", pos: inSeg[k].pos * SR, ts: inSeg[k].t, hw: true } });
     sched.push({ t: b, m: { type: "stop" } });
   }
   sched.sort((x, y) => x.t - y.t);
@@ -402,17 +444,34 @@ function jitter(spd, target, dur) {
 }
 // Micro-jog nudges: the read-speed curve over each nudge — the "pew" would be a SWEEP.
 function nudges(spd, marks) {
-  return marks.map(({ t, n }) => {
-    const s0 = Math.round((t / 1000) * SR), s1 = s0 + Math.round(0.12 * SR);
+  return marks.map(({ t, n, lastT, gaps }, mi) => {
+    const s0 = Math.round((t / 1000) * SR), s1 = s0 + Math.round(Math.min(0.2, ((marks[mi + 1]?.t ?? 1e9) - t) / 1000) * SR);
     const seg = Array.from(spd.subarray(s0, s1));
     const peak = seg.reduce((m, x) => (Math.abs(x) > Math.abs(m) ? x : m), 0);
     const on = seg.map((x, i) => [i, Math.abs(x)]).filter(([, x]) => x > Math.abs(peak) * 0.1);
     const durMs = on.length ? +(((on.at(-1)[0] - on[0][0]) / SR) * 1000).toFixed(1) : 0;
     const tPeak = +((seg.findIndex((x) => x === peak) / SR) * 1000).toFixed(1);
-    // speed every 4 ms, 0..48 ms, × realtime
-    const curve = Array.from({ length: 13 }, (_, i) => { const j = Math.round((i * 4 * SR) / 1000); return (seg[j] ?? 0).toFixed(2); }).join(" ");
+    // the hand: ticks [t .. lastT]; when the head starts and stops relative to it
+    const moving = seg.map((x, i) => [i, Math.abs(x)]).filter(([, x]) => x > 1e-3);
+    const startMs = moving.length ? +((moving[0][0] / SR) * 1000).toFixed(1) : null;
+    const stopAfterLastMs = moving.length && lastT != null ? +(((moving.at(-1)[0] / SR) * 1000 - (lastT - t)).toFixed(1)) : null;
+    // max travel past the end (overrun), in ticks
+    let acc = 0, over = 0;
+    for (const x of seg) { acc += x; over = Math.max(over, (acc / SR / TICK - n) * Math.sign(n || 1)); }
+    // flutter: RMS cents of the moving speed against its own 10 ms moving average (tick-rate FM)
+    let fs = 0, fc = 0;
+    for (let i = 240; i < seg.length - 240; i++) {
+      const v = Math.abs(seg[i]);
+      if (v < 1e-3) continue;
+      let a = 0; for (let j = i - 240; j < i + 240; j += 8) a += Math.abs(seg[j]);
+      a /= 60;
+      if (a > 1e-3) { const c = 1200 * Math.log2(v / a); fs += c * c; fc++; }
+    }
+    const flutterCents = fc ? Math.round(Math.sqrt(fs / fc)) : 0;
+    // speed every 2 ms, 0..40 ms, x realtime
+    const curve = Array.from({ length: 21 }, (_, i) => { const j = Math.round((i * 2 * SR) / 1000); return (seg[j] ?? 0).toFixed(2); }).join(" ");
     const travel = seg.reduce((s, x) => s + x, 0) / SR / TICK; // ticks actually travelled
-    return { n, peak: +peak.toFixed(2), tPeakMs: tPeak, durMs, travelTicks: +travel.toFixed(2), curve };
+    return { n, gaps: gaps ? gaps.join(",") : undefined, peak: +peak.toFixed(2), tPeakMs: tPeak, durMs, startMs, stopAfterLastMs, overrunTicks: +over.toFixed(3), flutterCents, travelTicks: +travel.toFixed(2), curve };
   });
 }
 
@@ -462,6 +521,6 @@ for (const [name, vs] of Object.entries(report)) {
   for (const [v, m] of Object.entries(vs)) {
     const { nudges: nd, ...rest } = m;
     console.log(`  ${v.padEnd(11)} ${JSON.stringify(rest)}`);
-    if (nd) for (const x of nd) console.log(`      nudge ${String(x.n).padStart(2)}: peak ${x.peak}x at ${x.tPeakMs} ms, ${x.durMs} ms long, travel ${x.travelTicks} ticks | ${x.curve}`);
+    if (nd) for (const x of nd) console.log(`      nudge ${String(x.n).padStart(3)}${x.gaps != null ? ` gaps[${x.gaps}]` : ""}: peak ${x.peak}x at ${x.tPeakMs} ms, starts ${x.startMs} ms, stops ${x.stopAfterLastMs} ms after the last tick, overrun ${x.overrunTicks}, flutter ${x.flutterCents}c, travel ${x.travelTicks} ticks | ${x.curve}`);
   }
 }

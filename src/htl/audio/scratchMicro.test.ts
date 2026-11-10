@@ -30,13 +30,15 @@ function make(): Node {
   return new P!({ processorOptions: { deckId: "A" } });
 }
 
-type Msg = { t: number; pos: number; start?: boolean };
+type Msg = { t: number; pos: number; start?: boolean; hw?: boolean };
 
-/** Drive the worklet through a schedule; returns the read head per quantum. */
-function drive(sched: Msg[], untilMs: number): Array<{ t: number; pos: number }> {
+/** Drive the worklet through a schedule; returns the read head per `sub` samples (messages still
+ *  land only between 128-sample render quanta, as a MessagePort delivers them). A `hw` move is a
+ *  controller tick: it carries its own timestamp and hw: true, as JogEngine posts one. */
+function drive(sched: Msg[], untilMs: number, sub = Q): Array<{ t: number; pos: number }> {
   const w = make();
   const post = (m: Record<string, unknown>) => w.port.onmessage({ data: m });
-  const out = [new Float32Array(Q), new Float32Array(Q)];
+  const out = [new Float32Array(sub), new Float32Array(sub)];
   const msQ = (Q / SR) * 1000;
   sched.sort((a, b) => a.t - b.t);
   const trace: Array<{ t: number; pos: number }> = [];
@@ -47,23 +49,25 @@ function drive(sched: Msg[], untilMs: number): Array<{ t: number; pos: number }>
       const s = sched[mi++];
       if (s.start) post({ type: "start", pos: s.pos });
       else {
-        post({ type: "move", pos: s.pos, dtMs: last >= 0 ? s.t - last : 0 });
+        post({ type: "move", pos: s.pos, dtMs: last >= 0 ? s.t - last : 0, ...(s.hw ? { ts: s.t, hw: true } : {}) });
         last = s.t;
       }
     }
-    w.process([], [out]);
-    trace.push({ t, pos: w.pos });
+    for (let k = 0; k < Q / sub; k++) {
+      w.process([], [out]);
+      trace.push({ t: t + (k * sub * 1000) / SR, pos: w.pos }); // pos after the block that starts at t
+    }
   }
   return trace;
 }
 
 /** Grab, hold still (60 Hz settle posts), `n` ticks over `durMs`, hold again. */
-function nudge(n: number, durMs: number) {
+function nudge(n: number, durMs: number, hw = false) {
   const p0 = 5 * SR;
   const end = p0 + n * TICK;
   const sched: Msg[] = [{ t: 0, pos: p0, start: true }];
   for (let f = 16.7; f < 60; f += 16.7) sched.push({ t: f, pos: p0 });
-  for (let k = 1; k <= n; k++) sched.push({ t: 60 + Math.round((durMs * k) / n), pos: p0 + k * TICK });
+  for (let k = 1; k <= n; k++) sched.push({ t: 60 + Math.round((durMs * k) / n), pos: p0 + k * TICK, hw });
   const tLast = 60 + durMs;
   for (let f = tLast + 16.7; f < tLast + 250; f += 16.7) sched.push({ t: f, pos: end });
   const trace = drive(sched, tLast + 250);
@@ -117,4 +121,60 @@ describe("micro jog: the read head stops where the hand stops", () => {
     for (let i = 1; i < steady.length; i++) if (Math.abs(steady[i].pos - steady[i - 1].pos) < 1) parked++;
     expect(parked).toBe(0);
   });
+});
+
+// Operator, 2026-11-10: controller micro jogs sounded like "little raygun pew pews... R2D2 bird
+// whines... smeary and low pitch", and the ask was physical parity: N ticks of hand travel play
+// exactly those N x 2.5 ms of audio over the time the finger took. Before (HAND TRAJECTORY in the
+// worklet) every nudge from rest was paced over a fixed ~13 ms: a 2-4 tick flick at ~2.5x played as a
+// flat 0.37-0.72x plateau. These drive controller ticks (own timestamps, hw: true).
+describe("controller micro jog: the head plays the hand's own trajectory", () => {
+  const SUB = 16; // read the head every 16 samples (1/3 ms)
+  function flick(n: number, gapMs: number) {
+    const p0 = 5 * SR;
+    const t1 = 60;
+    const sched: Msg[] = [{ t: 0, pos: p0, start: true }];
+    for (let f = 16.7; f < t1; f += 16.7) sched.push({ t: f, pos: p0 });
+    for (let k = 1; k <= n; k++) sched.push({ t: t1 + (k - 1) * gapMs, pos: p0 + k * TICK, hw: true });
+    const tLast = t1 + (n - 1) * gapMs;
+    for (let f = tLast + 16.7; f < tLast + 200; f += 16.7) sched.push({ t: f, pos: p0 + n * TICK });
+    const tr = drive(sched, tLast + 200, SUB);
+    const end = p0 + n * TICK;
+    const speed = tr.slice(1).map((s, i) => ({ t: s.t, v: (s.pos - tr[i].pos) / SUB }));
+    const moving = speed.filter((s) => Math.abs(s.v) > 1e-4);
+    return {
+      peak: Math.max(...speed.map((s) => s.v)),
+      movingSpeeds: moving.map((s) => s.v),
+      stopAfterLastMs: moving.at(-1)!.t + (SUB / SR) * 1000 - tLast,
+      overrun: Math.max(0, ...tr.map((s) => s.pos - end)),
+      finalErr: Math.abs(tr.at(-1)!.pos - end),
+    };
+  }
+
+  it("a 3-tick flick 1 ms apart plays at hand speed (>= 1.5x) and is done within 6 ms of the last tick", () => {
+    const r = flick(3, 1);
+    expect(r.peak).toBeGreaterThanOrEqual(1.5);
+    expect(r.stopAfterLastMs).toBeLessThan(6);
+    expect(r.overrun).toBe(0);
+    expect(r.finalErr).toBeLessThan(1e-6);
+  });
+
+  it("a slow 3-tick nudge 10 ms apart plays at ~0.25x and ends exactly on the last tick", () => {
+    const r = flick(3, 10);
+    const sorted = [...r.movingSpeeds].sort((a, b) => a - b);
+    const median = sorted[sorted.length >> 1];
+    expect(median).toBeGreaterThan(0.2);
+    expect(median).toBeLessThan(0.3);
+    expect(r.peak).toBeLessThan(0.35);
+    expect(r.overrun).toBe(0);
+    expect(r.finalErr).toBeLessThan(1e-6);
+  });
+
+  for (const [n, ms] of [[1, 1], [4, 10], [8, 20], [8, 60], [16, 40]] as const) {
+    it(`${n} ticks over ${ms} ms: no overrun, settled within 25 ms`, () => {
+      const r = nudge(n, ms, true);
+      expect(r.overrunMs).toBe(0);
+      expect(r.settleMs).toBeLessThan(25);
+    });
+  }
 });

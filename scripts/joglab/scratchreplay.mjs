@@ -93,7 +93,7 @@ function synth(kind) {
       const want = Math.round(handPos(t) / SEC_PER_TICK);
       while (tickPos !== want) {
         tickPos += Math.sign(want - tickPos);
-        pts.push({ t: t * 1000, pos: tickPos * SEC_PER_TICK });
+        pts.push({ t: t * 1000, pos: tickPos * SEC_PER_TICK, hw: true });
       }
     }
   }
@@ -114,7 +114,7 @@ function fromCapture(file) {
       else if (down != null) segs.push([down, e.t]), (down = null);
     } else if (e.s === 0xb0 && e.d1 === 0x22) {
       pos += (e.d2 - 64) * SEC_PER_TICK;
-      pts.push({ t: e.t, pos });
+      pts.push({ t: e.t, pos, hw: true });
       ticks.push({ t: e.t, d: e.d2 - 64 });
     }
   }
@@ -136,6 +136,9 @@ function run({ pts, truth, segs }) {
   // Build the message schedule: one 'start' per gripped segment, a 'move' per input sample, and
   // grabTick's settle posts (~60 Hz, when no input for >6 ms), one 'stop' at the end.
   const ranges = segs ?? [[pts[0].t - 1, pts.at(-1).t + 1]];
+  // a controller tick carries its own timestamp and hw: true, as JogEngine posts it; pointer input
+  // (touch / mouse) and the settle posts carry neither
+  const mv = (p) => (p.hw ? { type: "move", pos: p.pos * SR, ts: p.t, hw: true } : { type: "move", pos: p.pos * SR });
   const sched = [];
   for (const [a, b] of ranges) {
     const inSeg = pts.filter((p) => p.t >= a && p.t <= b);
@@ -146,14 +149,14 @@ function run({ pts, truth, segs }) {
     let cur = inSeg[0].pos;
     for (let f = a; f <= b; f += 1000 / 60) {
       while (k < inSeg.length && inSeg[k].t <= f) {
-        sched.push({ t: inSeg[k].t, m: { type: "move", pos: inSeg[k].pos * SR } });
+        sched.push({ t: inSeg[k].t, m: mv(inSeg[k]) });
         cur = inSeg[k].pos;
         lastIn = inSeg[k].t;
         k++;
       }
       if (f - lastIn > 6) sched.push({ t: f, m: { type: "move", pos: cur * SR } });
     }
-    for (; k < inSeg.length; k++) sched.push({ t: inSeg[k].t, m: { type: "move", pos: inSeg[k].pos * SR } });
+    for (; k < inSeg.length; k++) sched.push({ t: inSeg[k].t, m: mv(inSeg[k]) });
     sched.push({ t: b, m: { type: "stop" } });
   }
   sched.sort((x, y) => x.t - y.t);

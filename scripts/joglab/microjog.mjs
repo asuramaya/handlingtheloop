@@ -59,7 +59,7 @@ function nudge(ticks, durMs, dir = 1) {
   const sched = [{ t: 0, m: { type: "start", pos: start } }];
   for (let f = 1000 / 60; f < 40; f += 1000 / 60) sched.push({ t: f, m: { type: "move", pos: start } });
   const t0 = 40;
-  for (let k = 1; k <= ticks; k++) sched.push({ t: Math.round(t0 + (durMs * k) / ticks), m: { type: "move", pos: start + dir * k * TICK } });
+  for (let k = 1; k <= ticks; k++) sched.push({ t: Math.round(t0 + (durMs * k) / ticks), m: { type: "move", pos: start + dir * k * TICK, ts: Math.round(t0 + (durMs * k) / ticks), hw: true } });
   const tLast = sched.at(-1).t;
   for (let f = tLast + 1000 / 60; f < tLast + 200; f += 1000 / 60) sched.push({ t: f, m: { type: "move", pos: end } });
   sched.sort((a, b) => a.t - b.t);

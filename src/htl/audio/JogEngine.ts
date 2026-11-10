@@ -266,7 +266,10 @@ export class JogEngine {
     const now = performance.now();
     const dtMs = this.lastMoveAt > 0 ? now - this.lastMoveAt : 0;
     this.lastMoveAt = now;
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate, dtMs, ts: ts ?? now });
+    // hw: a controller tick with its own timestamp. A micro jog from one is played as the hand's
+    // tick-by-tick trajectory (scratchWorklet HAND TRAJECTORY); pointer input, whose coalesced
+    // events share one post time, keeps the chase pacing.
+    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate, dtMs, ts: ts ?? now, hw: ts !== undefined });
   }
   private scratchStop() {
     this.scratchNode?.port.postMessage({ type: "stop" });

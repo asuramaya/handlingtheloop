@@ -8,7 +8,7 @@ import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "reac
 import { EQ_MIN_DB, EQ_MAX_DB, cueBankBase, type Deck, type DeckId, type SmartFader } from "@htl";
 import { useRoom } from "@htl/room";
 import type { MidiEvent } from "@htl/midi";
-import type { Settings } from "@htl/state";
+import { stepSkip, type Settings } from "@htl/state";
 import type { LibraryHandle } from "../components/LibraryPanel";
 import { pickupStep } from "./pickup";
 import { fxPadRelease, fxPadArg } from "../components/fxPads";
@@ -173,6 +173,9 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     [],
   );
   const loopAdjAcc = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  // SHIFT + ◀ / ▶ (jumpSizeDown / jumpSizeUp): which of the pair is down per deck, and whether this
+  // press became the both-together chord (grid lock) — then neither button steps the size.
+  const gridPair = useRef<Record<DeckId, { down: Set<number>; chord: boolean }>>({ A: { down: new Set(), chord: false }, B: { down: new Set(), chord: false } });
   const knobAcc = useRef<Record<string, number>>({});
 
   const onMidiEvent = useCallback(
@@ -248,6 +251,28 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           }
           const id = ev.deck ?? focused;
           const deck = engine.deck(id);
+          // ★ THE GRID PAIR (operator, 2026-11-10): SHIFT + ◀ or ▶ steps the jump size on RELEASE, so
+          // that pressing the other one while it is down can be the chord instead: both together
+          // toggle grid lock, at the moment the second goes down, and then neither steps.
+          const dir = ev.action === "jumpSizeUp" ? 1 : ev.action === "jumpSizeDown" ? -1 : 0;
+          if (dir) {
+            const g = gridPair.current[id];
+            if (ev.pressed) {
+              g.down.add(dir);
+              if (g.down.size === 2 && !g.chord) {
+                g.chord = true;
+                handlersRef.current.grid?.(deck, id, false); // grid lock (quantize) toggle, as G
+              }
+            } else if (g.down.delete(dir)) {
+              if (!g.chord) {
+                deck.skipBeats = stepSkip(deck.skipBeats, dir);
+                emitRef.current({ kind: "skip", deck: id, beats: deck.skipBeats });
+              }
+              if (!g.down.size) g.chord = false;
+            }
+            refresh();
+            break;
+          }
           // MOMENTARY shifted pad-modes: on key-up, ROLL snaps back on-beat (slip) and FX2 throws
           // its effect OFF — that on-while-held behaviour is exactly what distinguishes them from
           // LOOP / FX, which latch. Every other action ignores the release (it already acted on

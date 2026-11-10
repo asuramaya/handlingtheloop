@@ -123,8 +123,14 @@ export const DDJ_FLX4: DeviceProfile = {
     // fire with shift off (jump), the shifted notes fire while SHIFT is held (move loop).
     ...btn("jogBack", 0x51), // ◀ unshifted → jump back
     ...btn("jogFwd", 0x53), //  ▶ unshifted → jump forward
-    ...btn("jogFwd", 0x3d), //  shifted (fires while SHIFT held) → move loop forward
-    ...btn("jogBack", 0x3e), // shifted → move loop back
+    // ★ SHIFT + CUE/LOOP CALL ◀ / ▶ = the deck's GRID (operator, 2026-11-10, the keyboard's G):
+    // ◀ or ▶ alone steps the jump size (SHIFT+G) down / up, both together toggle grid lock (G).
+    // Was "move loop", which plain ◀ ▶ already does while a loop runs. Notes captured live: the
+    // shifted ◀ sends 0x3E, ▶ 0x3D. The chord is resolved in useMidiRouting (jumpSize*).
+    ...btn("jumpSizeUp", 0x3d),
+    ...btn("jumpSizeDown", 0x3e),
+    // SHIFT + headphone CUE (0x54's shifted note, 0x68) = key lock for the deck (the keyboard's Z).
+    ...btn("keylock", 0x68),
     // Shifted SYNC/MASTER button (note 0x60) → HTL KEY (key-match). KEY ignores shift,
     // so force shift:false or the held SHIFT would suppress it.
     { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x60, type: "note", shift: false },

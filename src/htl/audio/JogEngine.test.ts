@@ -440,6 +440,13 @@ describe("decideRelease — what a lifted finger should do (the scrubEnd() decis
     expect(decideRelease({ ...base, handVel: -50, jogReturnToPlay: false })).toEqual({ kind: "coast", vel: -3 });
   });
 
+  it("a hard spinback is bounded: thrown back at most spinbackMaxBack seconds, at most 14x; a gentle one is untouched", () => {
+    const hard = decideRelease({ ...base, maxCoast: 20, handVel: -20, spinbackMaxBack: 3.75 });
+    expect(hard).toEqual({ kind: "spinback", vel: -14, accel: (14 * 14) / (2 * 3.75) });
+    if (hard.kind === "spinback") expect((hard.vel * hard.vel) / (2 * hard.accel)).toBeCloseTo(3.75, 9);
+    expect(decideRelease({ ...base, maxCoast: 20, handVel: -6, spinbackMaxBack: 3.75 })).toEqual({ kind: "spinback", vel: -6, accel: 11 }); // 36/22 = 1.6 s: as before
+  });
+
   it("the spinback threshold is exclusive — exactly at the flick speed is still a plain coast", () => {
     const action = decideRelease({ ...base, handVel: -2.2, jogReturnToPlay: true, spinbackFlick: 2.2 });
     expect(action.kind).toBe("coast");
@@ -508,8 +515,12 @@ describe("JogEngine — a jog throw on a playing deck (timestamped ticks, consta
       expect(speeds[0]).toBeLessThanOrEqual(-8); // the throw's own speed, not the old 3x cap
       expect(h.je.jogging).toBe(false); // caught and handed back to play
       expect(h.calls.setPlaying.at(-1)).toBe(true);
-      // A hard backward throw is a spinback: caught at the Back spin knob's rate (default 0.5).
-      const accel = platterTaus.backSpinAccel(0.5);
+      // A hard backward throw is a spinback: caught at the Back spin knob's rate (default 0.5), or
+      // harder when that would throw it back further than the knob's backSpinMaxBack.
+      const accel = (speeds[2] - speeds[1]) * 60;
+      expect(accel).toBeGreaterThanOrEqual(platterTaus.backSpinAccel(0.5) - 1e-6);
+      // its backward travel stays within the limit (a frame of slack)
+      expect(-speeds.filter((v) => v < 0).reduce((a, v) => a + v / 60, 0)).toBeLessThan(platterTaus.backSpinMaxBack(0.5) + 0.2);
       expect(speeds.length / 60).toBeLessThan(11 / accel + 0.1); // -10x → 1x at that rate, + a frame
       // Linear: the speed changes by the same step every frame (first and lock frames aside).
       const mid = speeds.slice(1, -1);

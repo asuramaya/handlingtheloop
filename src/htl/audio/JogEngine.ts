@@ -150,7 +150,16 @@ export const platterTaus = {
    *  Short = a grippy mat, Long = a slippery one. With the strength above a triggered spinback runs
    *  0.3 s (Short, 4x) … 0.9 s (default, 9x) … 2.1 s (Long, 14x) back to play. */
   backSpinAccel: (b: number) => lerp(16, 7, b),
+  /** ★ How far a hard backward jog flick may throw the track back, in seconds of audio (operator,
+   *  2026-11-10: "the throwback length on the backspin is a little drastic, it spins a bit too
+   *  long"). The distance of a constant-friction catch grows with the SQUARE of the throw speed
+   *  (v^2 / 2a), so at the 20x cap and the default catch it went back ~17 s over ~2 s. A throw that
+   *  would go further gets a grippier catch instead: gentle and medium flicks are untouched, a hard
+   *  one is a snappier spin of bounded length. Short 1.5 s … default 3.75 s … Long 6 s. */
+  backSpinMaxBack: (b: number) => lerp(1.5, 6, b),
 };
+/** The fastest a jog spinback is thrown (x realtime): the top of a real 33 1/3 platter's backward fling. */
+export const SPINBACK_MAX_VEL = 14;
 /** Settings ▸ Platter has ONE "mass" knob (operator, 2026-11-02: weight and drag merged). A heavier
  *  platter both catches up slower AND glides longer, so drag falls as mass rises; 0.8 − mass keeps
  *  the long-standing default (0.4 / 0.4) exactly where it was. */
@@ -175,6 +184,7 @@ export interface ReleaseInput {
   backSpinAccel: number; // the spinback's catch (play-speeds per second, platterTaus.backSpinAccel)
   maxCoast: number; // release-speed cap (× realtime)
   spinbackFlick: number; // backward-flick speed past which a release counts as a spinback gesture
+  spinbackMaxBack?: number; // seconds of audio a spinback may travel backward (platterTaus.backSpinMaxBack)
 }
 
 export function decideRelease(p: ReleaseInput): ReleaseAction {
@@ -182,7 +192,12 @@ export function decideRelease(p: ReleaseInput): ReleaseAction {
   const vel = Math.max(-p.maxCoast, Math.min(p.maxCoast, p.handVel));
   // The FLX4 (and Pioneer gear in general) has no dedicated spinback button — the native
   // gesture is a hard BACKWARD flick of the jog while playing.
-  if (p.jogReturnToPlay && vel < -p.spinbackFlick) return { kind: "spinback", vel, accel: p.backSpinAccel };
+  if (p.jogReturnToPlay && vel < -p.spinbackFlick) {
+    const v = Math.max(vel, -SPINBACK_MAX_VEL);
+    // backward travel of the catch is v^2 / 2a: past the limit, catch harder rather than travel further
+    const accel = p.spinbackMaxBack != null && p.spinbackMaxBack > 0 ? Math.max(p.backSpinAccel, (v * v) / (2 * p.spinbackMaxBack)) : p.backSpinAccel;
+    return { kind: "spinback", vel: v, accel };
+  }
   return { kind: "coast", vel };
 }
 
@@ -520,6 +535,7 @@ export class JogEngine {
       backSpinAccel: this.backSpinAccel(),
       maxCoast: tracked != null ? JogEngine.MAX_COAST : JogEngine.POINTER_MAX_COAST,
       spinbackFlick: JogEngine.SPINBACK_FLICK,
+      spinbackMaxBack: platterTaus.backSpinMaxBack(this._backSpin),
     });
     if (action.kind === "slip") {
       // The track kept advancing underneath — snap straight to that shadow playhead and

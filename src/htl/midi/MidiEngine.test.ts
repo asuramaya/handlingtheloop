@@ -59,16 +59,18 @@ describe("MidiEngine — FLX4 jog layers decode through the real profile", () =>
     send(CC_A, 0x22, 0x3f); // 63 → −1
     send(CC_B, 0x22, 0x44); // 68 → +4 on deck B
     expect(events).toEqual([
-      { type: "jogTurn", deck: "A", delta: 1, scratch: true },
-      { type: "jogTurn", deck: "A", delta: -1, scratch: true },
-      { type: "jogTurn", deck: "B", delta: 4, scratch: true },
+      expect.objectContaining({ type: "jogTurn", deck: "A", delta: 1, scratch: true }),
+      expect.objectContaining({ type: "jogTurn", deck: "A", delta: -1, scratch: true }),
+      expect.objectContaining({ type: "jogTurn", deck: "B", delta: 4, scratch: true }),
     ]);
+    // every tick carries its arrival time, for the scratch worklet's speed tracker
+    for (const e of events) expect(typeof (e as { ts?: number }).ts).toBe("number");
   });
 
   it("BEND stream (CC 0x23, vinyl-off top turn) → jogTurn scratch:false — the OTHER jog layer", async () => {
     const { events, send } = await flx();
     send(CC_A, 0x23, 0x42); // +2
-    expect(events).toEqual([{ type: "jogTurn", deck: "A", delta: 2, scratch: false }]);
+    expect(events).toEqual([expect.objectContaining({ type: "jogTurn", deck: "A", delta: 2, scratch: false })]);
   });
 
   it("OUTER RING (CC 0x21) → jogBend: every tick at once, including a micro back-and-forth of single ±1s", async () => {
@@ -152,9 +154,9 @@ describe("MidiEngine — replay a captured fixture", () => {
     for (const e of cap.events) send(e.s, e.d1, e.d2);
     expect(events).toEqual([
       { type: "jogTouch", deck: "A", down: true },
-      { type: "jogTurn", deck: "A", delta: 2, scratch: true },
-      { type: "jogTurn", deck: "A", delta: 3, scratch: true },
-      { type: "jogTurn", deck: "A", delta: -2, scratch: true },
+      expect.objectContaining({ type: "jogTurn", deck: "A", delta: 2, scratch: true }),
+      expect.objectContaining({ type: "jogTurn", deck: "A", delta: 3, scratch: true }),
+      expect.objectContaining({ type: "jogTurn", deck: "A", delta: -2, scratch: true }),
       { type: "jogTouch", deck: "A", down: false },
       expect.objectContaining({ type: "button", action: "play", deck: "A", pressed: true }),
     ]);

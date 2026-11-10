@@ -140,7 +140,7 @@ export type MidiEvent =
   | { type: "fader"; target: FaderTarget; deck?: DeckId; value: number; pickup?: boolean; shift?: boolean } // value 0..1 (invert applied). pickup = apply soft-takeover in App. shift = that deck's SHIFT is held
   | { type: "knob"; target: FaderTarget; deck?: DeckId; delta: number } // relative encoder nudge (signed fraction of full range)
   | { type: "jogTouch"; deck: DeckId; down: boolean }
-  | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean } // delta = signed ticks
+  | { type: "jogTurn"; deck: DeckId; delta: number; scratch: boolean; ts?: number } // delta = signed ticks; ts = the tick's ARRIVAL time (MIDIMessageEvent.timeStamp, performance.now() clock)
   | { type: "jogBend"; deck: DeckId; delta: number } // outer-ring nudge → pitch-bend / paused search
   | { type: "jogSearch"; deck: DeckId; delta: number } // SHIFT + jog → fast seek through the track
   | { type: "browse"; delta: number }

@@ -619,7 +619,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
                 deck.scrubBegin();
                 onJogStart(ev.deck);
               }
-              deck.scrubMove(sec);
+              deck.scrubMove(sec, ev.ts);
               emitJog(ev.deck, sec);
             } else {
               deck.bend(sec); // no touch registered → fall back to a bend

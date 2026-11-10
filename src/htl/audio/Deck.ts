@@ -1798,8 +1798,8 @@ export class Deck {
   /** One (coalesced) pointer sample of finger motion, in track seconds — applied straight
    *  to the platter and voiced on the worklet immediately (tracks the mouse's true report
    *  rate, not the display refresh). */
-  scrubMove(deltaSec: number) {
-    this.jog.scrubMove(deltaSec);
+  scrubMove(deltaSec: number, ts?: number) {
+    this.jog.scrubMove(deltaSec, ts);
   }
 
   /** Release the platter — hands it its fling velocity to coast (or a back-spin). */

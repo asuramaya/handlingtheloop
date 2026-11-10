@@ -251,7 +251,9 @@ export class JogEngine {
     this.lastMoveAt = 0; // a fresh grab must not inherit a stale gap from a previous one
     this.scratchNode?.port.postMessage({ type: "start", pos: this.jogPos * this.ctx.sampleRate });
   }
-  private scratchMove() {
+  /** `ts` = when this motion happened, on the performance.now() clock: a controller tick's own
+   *  MIDIMessageEvent.timeStamp, else now. The worklet's speed tracker fits position against it. */
+  private scratchMove(ts?: number) {
     // Position, plus the REAL wall-clock gap since the last post (performance.now(), sub-ms —
     // not the worklet's own render-quantum-quantized sample counter). A hardware jog's MIDI
     // delivery is bursty: measured on a real DDJ-FLX4 capture, a third of consecutive jog ticks
@@ -264,7 +266,7 @@ export class JogEngine {
     const now = performance.now();
     const dtMs = this.lastMoveAt > 0 ? now - this.lastMoveAt : 0;
     this.lastMoveAt = now;
-    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate, dtMs });
+    this.scratchNode?.port.postMessage({ type: "move", pos: this.jogPos * this.ctx.sampleRate, dtMs, ts: ts ?? now });
   }
   private scratchStop() {
     this.scratchNode?.port.postMessage({ type: "stop" });
@@ -376,7 +378,7 @@ export class JogEngine {
    *  to the platter and voiced on the worklet immediately — so scratch resolution tracks
    *  the mouse's true report rate (125–1000 Hz), not the display refresh. Position only:
    *  the release-fling VELOCITY is derived at frame rate in grabTick(). */
-  scrubMove(deltaSec: number) {
+  scrubMove(deltaSec: number, ts?: number) {
     if (this.jogPhase !== "grab") return;
     this.jogInputAt = this.ctx.currentTime;
     let p = this.handPos + deltaSec;
@@ -389,7 +391,7 @@ export class JogEngine {
     if (this.jogReturnToPlay) p = this.wrapLoop(p);
     this.handPos = this.jogPos = p;
     this.host.setStartOffset(p);
-    this.scratchMove(); // per-input-sample worklet push
+    this.scratchMove(ts); // per-input-sample worklet push
   }
 
   scrubEnd() {

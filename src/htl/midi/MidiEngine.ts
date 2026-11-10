@@ -410,7 +410,8 @@ export class MidiEngine {
       return;
     }
 
-    if (isCC && this.echoFilter(status, d1, d2, stamp && stamp > 0 ? stamp : nowMs())) return;
+    this.curStamp = stamp && stamp > 0 ? stamp : nowMs(); // the jog's tick time (see jogTurn)
+    if (isCC && this.echoFilter(status, d1, d2, this.curStamp)) return;
     const lamp = this.profile?.echoLamp?.lamp;
     if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
       this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
@@ -529,7 +530,7 @@ export class MidiEngine {
           this.jogLog.push({ t: performance.now(), d: delta });
           if (this.jogLog.length > 600) this.jogLog.shift();
         }
-        this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: c.scratch ?? false });
+        this.opts.onEvent({ type: "jogTurn", deck: b.deck, delta, scratch: c.scratch ?? false, ts: this.curStamp });
       }
     } else if (c.kind === "jogBend" && b.deck) {
       // Outer-ring / un-gripped rotation → a momentary pitch-bend nudge (App routes it).
@@ -640,6 +641,9 @@ export class MidiEngine {
   private echoPending: { deck: DeckId; status: number; d1: number; d2: number; t: number }[] = [];
   // Held messages the flush let through, with the value each overwrote — so a COLOR message that
   // turns up late (after a stall) can still claim them as echoes and put trim back.
+  /** Arrival time of the message being dispatched — handed to the jog so the scratch worklet can
+   *  time ticks by when the controller SENT them, not when the main thread got to them. */
+  private curStamp = 0;
   private echoReleased: { deck: DeckId; status: number; d1: number; prev: number | undefined; t: number }[] = [];
   // How late a COLOR message may claim an already-released message. Wider than windowMs: it only
   // matters after a stall, and the cost of a false claim is one trim message re-sent a step back.
@@ -720,6 +724,7 @@ export class MidiEngine {
       this.echoPending = this.echoPending.filter((p) => p.t > cut);
       this.echoReleased = this.echoReleased.filter((p) => now - p.t <= MidiEngine.ECHO_RECLAIM_MS);
       for (const p of due) {
+        this.curStamp = p.t;
         this.echoReleased.push({ deck: p.deck, status: p.status, d1: p.d1, prev: this.ccValue(p.status, p.d1), t: p.t });
         this.dispatchCC(p.status, p.d1, p.d2);
       }

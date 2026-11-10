@@ -123,7 +123,7 @@ class Scratch extends AudioWorkletProcessor {
         this.accDt = 0; // a fresh grab must not inherit the previous gesture's cadence
         this.repace = false;
         this.onset = 0; // samples of first-motion window left (see the move handler)
-        this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the arrival stop
+        this.trkH = []; this.trkT = 0; this.trkTs0 = -1; this.micro = false; this.restPos = d.pos; this.quiet = 1e9; this.lastGap = 0; this.steadyRun = false; // see the arrival stop
         this.lp[0][0] = this.lp[0][1] = this.lp[1][0] = this.lp[1][1] = 0;
         this.lpA = 1;
         this.active = true;
@@ -248,8 +248,47 @@ class Scratch extends AudioWorkletProcessor {
         this.target = d.pos;
         // A sub-quantum update moves the TARGET (the chase always aims at the latest position)
         // but leaves the pacing alone — there is no new timing to pace with yet.
+        // ★ SPEED FROM A TRACKER, NOT FROM TICKS COUNTED PER WINDOW (operator, 2026-11-10: a steady
+        // jog spin gave "wobble, warp and weird ugly noises, not the playback"; picked this by ear
+        // from scripts/joglab/scratchwav.mjs, render p4-proposed). The step used to be "distance
+        // since the last re-pace ÷ that window". A steady 1x FLX4 turn sends a tick every 2.5 ms on
+        // a 1 ms USB clock, so a ~13 ms window held 5 or 6 ticks and the speed flipped ~0.9x/1.1x:
+        // 4.1% RMS flutter at ~25 Hz (18.7% with main-thread delivery jitter). Now every move — tick
+        // or settle post — is a (time, position) sample timed by d.ts (the controller's own
+        // MIDIMessageEvent.timeStamp, else the post time), the speed is the least-squares slope over
+        // the last 24 ms of them, and the gap between the fitted hand and the read head is pulled
+        // in over ~200 ms, so the head never drifts off the platter but no single tick jerks the
+        // pitch: 0.26% (0.36% under jitter). A stopped hand's settle posts read as speed 0.
+        {
+          if (!this.trkH) this.trkH = [];
+          if (typeof d.ts === 'number') {
+            if (this.trkTs0 < 0) this.trkTs0 = d.ts;
+            this.trkT = ((d.ts - this.trkTs0) * sampleRate) / 1000;
+          } else {
+            this.trkT = (this.trkT || 0) + dtIn;
+          }
+          const H = this.trkH;
+          H.push(this.trkT, d.pos);
+          const win = 0.024 * sampleRate;
+          while (H.length > 4 && this.trkT - H[0] > win) H.splice(0, 2);
+          const n = H.length / 2;
+          let st = 0, sp = 0, stt = 0, stp = 0;
+          for (let i = 0; i < H.length; i += 2) {
+            const t = H[i] - this.trkT, p = H[i + 1] - d.pos;
+            st += t; sp += p; stt += t * t; stp += t * p;
+          }
+          const den = n * stt - st * st;
+          const v = den > 1e-6 ? (n * stp - st * sp) / den : 0;
+          const fit = d.pos + (sp - v * st) / n; // the fitted hand position NOW
+          this.trk = v + (fit - this.pos) / (0.2 * sampleRate);
+        }
         if (!this.repace) return; // keep the current step; the next re-pace will use the banked time
-        this.stepRaw = (this.target - this.pos) / this.interval; // uncapped (granular tracks the finger)
+        // The tracker drives CONTINUING motion. A move from rest (the onset) and a micro jog keep the
+        // chase pacing their own tests were tuned on: 24 ms of history is nothing to fit at the first
+        // tick, and the tracker's ~200 ms pull would overrun a nudge's stop.
+        this.stepRaw = this.micro || this.onset > 0 || fromRest
+          ? (this.target - this.pos) / this.interval
+          : this.trk; // uncapped (granular tracks the finger)
         let s = this.stepRaw;
         if (s > 32) s = 32; else if (s < -32) s = -32; // continuous resampler clamp
         this.step = s;

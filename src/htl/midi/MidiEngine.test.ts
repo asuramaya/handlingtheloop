@@ -232,14 +232,12 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
   const inColor = (t: number) => t >= 52_800 && t <= 55_650;
   const inTrim = (t: number) => t >= 55_800;
 
-  it("lit: the COLOR sweep's trim echoes are dropped; the real TRIM sweep still drives trim end to end", async () => {
+  // ★ operator ruling, 2026-11-10: with Smart CFX on, the board's TRIM is recomputed from COLOR, so
+  // the trim knob is dead in stem mode (lamp lit) — neither echoes nor turns reach the deck.
+  it("lit: TRIM is ignored entirely while Smart CFX is on (echoes AND turns)", async () => {
     const { trim, sent } = await replay(true);
     expect(sent).toContainEqual([0x96, 0x00, 0x7f]);
-    expect(trim.filter((x) => inColor(x.t))).toEqual([]);
-    const real = trim.filter((x) => inTrim(x.t)).map((x) => x.v);
-    expect(real.length).toBeGreaterThan(100);
-    expect(Math.min(...real)).toBeLessThan(0.02);
-    expect(Math.max(...real)).toBeGreaterThan(0.98);
+    expect(trim).toEqual([]);
   });
 
   // ★ operator, 2026-11-10: trim still zeroed "on occasion". The board keeps its OWN Smart CFX state
@@ -261,7 +259,7 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
     async function rig() {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"] });
       const r = await flxOut();
-      r.engine.setEchoLamp(true);
+      r.engine.setEchoLamp(false); // dark: the COLOR-echo timing filter is what these exercise
       vi.advanceTimersByTime(2000);
       const input = (r.engine as unknown as { access: { inputs: Map<string, { onmidimessage: (e: { data: Uint8Array; timeStamp?: number }) => void }> } }).access.inputs.get("in")!;
       const at = (ts: number, ...b: number[]) => input.onmidimessage({ data: new Uint8Array(b), timeStamp: ts });
@@ -285,19 +283,25 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
 
     // ★ operator, 2026-11-10: "pressing the cfx button is what zeros out the trim, and when pressed
     // again it goes back to old state" — the board snaps TRIM on a Smart CFX toggle, with no COLOR.
-    it("a SMART CFX press: the board's trim snap right after it is dropped; a later real turn still works", async () => {
+    it("SMART CFX on: the snap and every trim turn are ignored; off: the board's real-knob snap is taken", async () => {
       const { at, trims } = await rig();
       at(performance.now(), 0xb0, 0x04, 100); // trim set by hand
       vi.advanceTimersByTime(30);
-      const t = performance.now();
-      at(t, 0x96, 0x00, 0x7f); // SMART CFX press
+      let t = performance.now();
+      at(t, 0x96, 0x00, 0x7f); // press: Smart CFX ON
       at(t + 2, 0xb0, 0x04, 0); // the firmware's snap: trim → 0
       vi.advanceTimersByTime(30);
+      at(performance.now(), 0xb0, 0x04, 3); // turning trim while on: COLOR-derived, ~0
+      vi.advanceTimersByTime(30);
       expect(trims().length).toBe(1); // nothing but the hand's setting
-      vi.advanceTimersByTime(400);
-      at(performance.now(), 0xb0, 0x04, 90); // a real turn, after the quiet window
+      t = performance.now();
+      at(t, 0x96, 0x00, 0x7f); // press: Smart CFX OFF
+      at(t + 2, 0xb0, 0x04, 90); // the board sends the real knob back
       vi.advanceTimersByTime(30);
       expect(trims().length).toBe(2);
+      at(performance.now(), 0xb0, 0x04, 80); // and trim works again
+      vi.advanceTimersByTime(30);
+      expect(trims().length).toBe(3);
     });
 
     it("a trim snap that slipped through just BEFORE the button is undone", async () => {
@@ -307,7 +311,7 @@ describe("MidiEngine — FLX4 SMART CFX lamp echo filter (real capture)", () => 
       const t = performance.now();
       at(t, 0xb0, 0x04, 0); // the snap lands first, held then released by a stalled flush
       vi.advanceTimersByTime(25);
-      at(t + 3, 0x96, 0x00, 0x00); // the button, handled late
+      at(t + 3, 0x96, 0x00, 0x7f); // the button (switching ON), handled late
       const v = trims();
       expect(v[v.length - 1]).toBeCloseTo(v[0], 5); // back to the hand's value
     });

@@ -415,7 +415,7 @@ export class MidiEngine {
     const lamp = this.profile?.echoLamp?.lamp;
     if (isNote && lamp && (status & 0x0f) === (lamp[0] & 0x0f) && d1 === lamp[1]) {
       this.lampReassertUntil = nowMs() + MidiEngine.LAMP_REASSERT_MS; // the firmware just touched it
-      this.cfxButton(this.curStamp);
+      if (hi === 0x90 && d2 > 0) this.cfxButton(this.curStamp); // a PRESS flips the board's Smart CFX
     }
 
     if (isNote) {
@@ -661,6 +661,7 @@ export class MidiEngine {
     if (!l || !this.outputs.length || this._lampsPaused) return;
     if (on === this.lampSent && nowMs() > this.lampReassertUntil) return;
     this.lampSent = on;
+    this.cfxEngaged = on; // our lamp send sets the board's Smart CFX
     this.send([l.lamp[0], l.lamp[1], on ? 0x7f : 0x00]);
   }
 
@@ -711,26 +712,34 @@ export class MidiEngine {
     }
     const deck = this.echoDeck("echoes", status, d1);
     if (!deck) return false;
-    if (t < this.cfxQuietUntil) return true; // the board's own snap on a SMART CFX toggle (cfxButton)
+    // Smart CFX engaged: the board's TRIM is not the trim knob (see cfxEngaged) — hold it so a
+    // switch-OFF arriving within windowMs can still let the board's real-position snap through,
+    // and the flush discards it while still engaged.
+    if (this.cfxEngaged) {
+      this.echoPending.push({ deck, status, d1, d2, t });
+      this.scheduleEchoFlush(l.windowMs);
+      return true;
+    }
     if (t - this.lastSourceAt[deck] <= l.windowMs) return true; // right after COLOR: an echo
     this.echoPending.push({ deck, status, d1, d2, t });
     this.scheduleEchoFlush(l.windowMs);
     return true;
   }
 
-  // ★ THE SMART CFX BUTTON ITSELF ZEROES TRIM (operator, 2026-11-10: "pressing the cfx button is
-  // what zeros out the trim, and when pressed again it goes back to old state"). Toggling the
-  // board's Smart CFX makes the firmware SNAP the TRIM CC: engaging sends the value Smart CFX derives
-  // from the COLOR knob (in stem mode that knob is the INST volume, often low → trim ~0), and
-  // disengaging sends the real trim knob back. No COLOR message comes with it — the knob did not
-  // move — so the timing filter took it for a real turn. The trim knob did not move either, so for a
-  // moment around every press/release trim-address messages are dropped, held ones are discarded,
-  // and one that already slipped through just before the button is undone.
-  private cfxQuietUntil = -Infinity;
-  static readonly CFX_QUIET_MS = 300;
+  // ★ WITH SMART CFX ON, THE BOARD'S TRIM IS NOT THE TRIM KNOB (operator, 2026-11-10: "pressing the
+  // cfx button is what zeros out the trim", then "when in cfx mode the trim knob stops working and
+  // zeros out every time I turn it"). Engaged, the FLX4 recomputes the TRIM CC from the COLOR knob
+  // (in stem mode COLOR is the INST volume, often low → trim ~0) — on the toggle AND on every turn of
+  // the trim knob — so the knob's real position is simply not in the message, and no timing filter
+  // can recover it. The operator's ruling: keep the lamp lit as the stem-mode light and let TRIM be
+  // dead while it is (EQ mode keeps a working trim). Disengaging sends the real knob position back,
+  // which is accepted at once — the knob may have moved while it was dead.
+  // cfxEngaged models the board: set by every lamp send, flipped by every SMART CFX press.
+  private cfxEngaged = false;
   private cfxButton(t: number): void {
-    this.cfxQuietUntil = t + MidiEngine.CFX_QUIET_MS;
-    this.echoPending = [];
+    this.cfxEngaged = !this.cfxEngaged;
+    if (!this.cfxEngaged) return; // switching OFF: the next trim (held or not) is the real knob — let it in
+    this.echoPending = []; // switching ON: anything held is the board's snap
     const claim = this.echoReleased.filter((p) => Math.abs(t - p.t) <= MidiEngine.ECHO_RECLAIM_MS);
     if (claim.length) {
       this.echoReleased = this.echoReleased.filter((p) => !claim.includes(p));
@@ -747,6 +756,7 @@ export class MidiEngine {
       const due = this.echoPending.filter((p) => p.t <= cut);
       this.echoPending = this.echoPending.filter((p) => p.t > cut);
       this.echoReleased = this.echoReleased.filter((p) => now - p.t <= MidiEngine.ECHO_RECLAIM_MS);
+      if (this.cfxEngaged) due.length = 0; // still engaged: the board's TRIM is not the knob — discard
       for (const p of due) {
         this.curStamp = p.t;
         this.echoReleased.push({ deck: p.deck, status: p.status, d1: p.d1, prev: this.ccValue(p.status, p.d1), t: p.t });

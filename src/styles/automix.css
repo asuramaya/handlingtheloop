@@ -583,3 +583,66 @@
   /* Phones: the rail is 40 px — too narrow for a word — so AUTO keeps the 128 px slot. */
   .chin-btn.chin-auto { flex-basis: 128px; width: 128px; }
 }
+
+/* ★ PHONE STAGE: STACKED (operator, 2026-11-10: the queue "breaks catastrophically" on mobile; the
+   two cards side by side at ~555 px left "Str8 …" / "The S…"). Below 600 px of list the cards take
+   the full width one above the other, the bridge becomes a short vertical link between them with
+   the pill on it, and each card gets its art and BPM/KEY back — so a title reads whole. Placed
+   after the 760/480 rules on purpose: it overrides them. */
+@container (max-width: 600px) {
+  .mixq-stage {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+  .mixq-bridge {
+    min-height: 30px;
+    padding: 2px 0;
+  }
+  .mixq-wire {
+    left: 50%;
+    right: auto;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    height: auto;
+    margin: 0 0 0 -1px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--now-col) 45%, transparent), color-mix(in srgb, var(--next-col) 45%, transparent));
+  }
+  .mixq-wire-fill {
+    display: none;
+  }
+  .mixq-pill {
+    position: relative;
+    z-index: 1;
+  }
+  .mixq-top .mixq-pill-name,
+  .mixq-top:not(.is-auto) .mixq-pill-name {
+    display: inline;
+    font-size: 11px;
+  }
+  .mixq-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 6px 10px 6px 6px;
+    gap: 10px;
+  }
+  .mixq-card-art {
+    display: block;
+    width: 38px;
+    height: 38px;
+  }
+  .mixq-card-art.is-blank {
+    display: grid;
+  }
+  .mixq-card-title {
+    font-size: 14px;
+  }
+  .mixq-card-stats {
+    grid-template-columns: 2.6em 2.6em;
+  }
+  .mixq-stat.stat-key {
+    display: flex;
+  }
+  .mixq-stat.stat-time {
+    display: none;
+  }
+}

@@ -987,7 +987,8 @@ th.col-thumb {
   .track-table col.col-time {
     width: 3.3em !important;
   }
-  .track-table col.col-artist {
+  /* a default only: once the Title|Artist divider has been dragged (.user-cols) the drag wins */
+  .track-table:not(.user-cols) col.col-artist {
     width: 22% !important;
   }
   .track-table col.col-extra {
@@ -1008,9 +1009,7 @@ th.col-thumb {
     font-size: 8.5px;
     letter-spacing: 0;
   }
-  .track-table .col-resize {
-    display: none; /* the widths here are the tier's, not the drag model's */
-  }
+  /* Handles stay: the Title|Artist divider overrides the tier's Artist default (.user-cols). */
 }
 
 /* Sidebar playlist as a drag drop-target */
@@ -1313,3 +1312,112 @@ td.col-num {
 .tt-rows-in .tt-step svg { width: 11px; height: 11px; display: block; }
 .tt-rows-in .tt-step path { stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; fill: none; }
 .lib-head-tools:not(:empty) + .lib-head-rows { display: none; }
+
+/* ★ THE # COLUMN (operator, 2026-11-10: "center the leftmost counter and scale the a/b and numbers
+   so they fit better"). Centred under a centred "#", the number a touch smaller than the row text,
+   and the A/B badge sized to the column: two badges sit side by side and wrap to a stack only when
+   the column is narrower than both. */
+.track-table :is(th, td).col-num {
+  text-align: center;
+  padding-left: 2px;
+  padding-right: 2px;
+  font-size: 0.92em;
+}
+.track-table th.col-num .tt-th-label {
+  justify-content: center;
+}
+.col-num .tt-decks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+}
+.col-num .tt-deck,
+.col-num .tt-decks .tt-deck + .tt-deck {
+  font-size: 0.72em;
+  min-width: 1.45em;
+  height: 1.45em;
+  padding: 0 0.2em;
+  margin: 0;
+  border-radius: 3px;
+}
+
+/* ★ NARROW LIBRARY: THE SECTIONS ARE A DRAWER (operator, 2026-11-10). Below 640 px of library the
+   sidebar floats OVER the list (~80% wide, a scrim behind it) instead of taking a column beside
+   it; LibraryPanel closes it on a pick, a scrim tap or Escape. A container query on .library, so a
+   narrow desktop dock behaves like a phone and a wide one is untouched. */
+.library {
+  container: lib-body / inline-size;
+}
+.lib-scrim {
+  display: none;
+}
+@container lib-body (max-width: 639px) {
+  .library .lib-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(80%, 320px);
+    box-shadow: 10px 0 28px rgba(0, 0, 0, 0.55);
+  }
+  .library .lib-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  /* the sidebar's splitter has nothing to split while it floats */
+  .library > .dock-resizer {
+    display: none;
+  }
+}
+/* Right-docked library mirrors its sidebar to the outer edge; the drawer follows it there. */
+@container lib-body (max-width: 639px) {
+  .modal-backdrop.dock-right .library .lib-sidebar {
+    left: auto;
+    right: 0;
+    box-shadow: -10px 0 28px rgba(0, 0, 0, 0.55);
+  }
+}
+/* The title-row toggle reads as a menu button when the sections are a drawer, and stops borrowing
+   the sidebar's width (it does not sit beside a column any more). */
+.lib-head-burger {
+  display: none;
+}
+@container (max-width: 639px) {
+  .lib-head-row .lib-head-burger {
+    display: inline;
+    font-size: 15px;
+    margin-right: 2px;
+    color: var(--muted);
+  }
+  .lib-head-row .lib-head-caret {
+    display: none;
+  }
+  .settings-head.lib-head-row.nav-open .lib-head-toggle {
+    flex: 0 1 auto;
+  }
+  .settings-head.lib-head-row.nav-open .lib-head-tools {
+    margin-left: 0;
+  }
+}
+
+/* ★ RESIZE BY TOUCH (operator, 2026-11-10: "resize the columns in mobile like in desktop"). The
+   handles were hidden in the cramped view and 9 px wide; on a touch screen they are a 24 px grab
+   strip (the hairline stays thin) and they stay in every view — the drag owns the gesture
+   (touch-action: none) and the handle swallows its own click, so it never sorts. */
+@media (pointer: coarse) {
+  .track-table .col-resize {
+    width: 24px;
+  }
+}
+@container (max-width: 440px) {
+  .track-table .col-title .col-resize {
+    display: block;
+  }
+}

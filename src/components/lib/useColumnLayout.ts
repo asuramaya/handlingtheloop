@@ -70,6 +70,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       document.body.style.cursor = "";
       setWidths((prev) => {
         try {
@@ -83,6 +84,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     document.body.style.cursor = "col-resize";
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp); // a touch the browser takes back still ends the drag
   }
 
   // Drag the # column's header border to set its width (px) — wide enough for 3-digit
@@ -100,6 +102,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       document.body.style.cursor = "";
       try {
         localStorage.setItem(NUM_W_KEY, String(w));
@@ -110,6 +113,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     document.body.style.cursor = "col-resize";
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp); // a touch the browser takes back still ends the drag
   }
 
   // Drag the artwork column's header border to set how wide the thumbnail shows (px).
@@ -126,6 +130,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       document.body.style.cursor = "";
       try {
         localStorage.setItem(THUMB_W_KEY, String(w));
@@ -136,6 +141,7 @@ export function useColumnLayout(tableRef: RefObject<HTMLTableElement | null>) {
     document.body.style.cursor = "col-resize";
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp); // a touch the browser takes back still ends the drag
   }
 
   function changeScale(delta: number) {

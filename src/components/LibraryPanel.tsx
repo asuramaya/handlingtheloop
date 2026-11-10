@@ -186,6 +186,16 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   const prevSourceNav = useRef(sourceNav);
   const libDivRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || (libDivRef.current?.clientWidth ?? 9999) >= 640) return;
+      e.preventDefault(); // claimed: App's Escape (escapeKey.ts) leaves the Library open
+      setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [navOpen]);
+  useEffect(() => {
     if (prevSourceNav.current === sourceNav) return;
     prevSourceNav.current = sourceNav;
     if (sourceNav) setNavOpen(true);
@@ -687,6 +697,9 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 aria-label={navOpen ? "Hide sections" : "Show sections"}
                 title={navOpen ? "Hide sections" : "Show sections"}
               >
+                {/* ☰ on a narrow library (CSS: the head row's container query), where the sections are
+                    a drawer over the list rather than a column beside it. */}
+                <span className="lib-head-burger" aria-hidden="true">☰</span>
                 <span className="lib-head-caret" aria-hidden="true">{navOpen ? "▾" : "▸"}</span>
                 <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
@@ -703,6 +716,13 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             <div ref={libDivRef} className={`library ${navOpen ? "" : "nav-collapsed"}`}>
             {navOpen && (
             <>
+            {/* ★ NARROW: THE SECTIONS ARE A DRAWER OVER THE LIST (operator, 2026-11-10: "the left
+                slide over can take over the screen or float over the playlist"). Beside the list on a
+                phone it held ~40% of the width for good and crushed the table to Title/Artist/Time.
+                Below 640 px (a container query on .library, so a narrow desktop dock behaves the same)
+                the sidebar floats over the list with this scrim behind it; a tap on the scrim, a pick
+                (the aside's onClick below) or Escape closes it. Hidden by CSS when wide. */}
+            <div className="lib-scrim" aria-hidden="true" onClick={() => setNavOpen(false)} />
             <aside
               className={`lib-sidebar ${sourceNav ? "source-nav" : ""}`}
               // ★ ON A NARROW LIBRARY, PICKING A SOURCE CLOSES THE SIDEBAR. Open beside the table on a

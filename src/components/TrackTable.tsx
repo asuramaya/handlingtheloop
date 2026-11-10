@@ -147,7 +147,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   const cacheVer = useCacheStatus(); // re-render rows (+ recompute the filter) when the manifest lands
   const tableRef = useRef<HTMLTableElement>(null);
   // Column sizing (persisted widths, row scale, # / thumb px widths + resize handlers).
-  const { scale, thumbW, numW, startResize, startNumResize, startThumbResize, colWidth } = useColumnLayout(tableRef);
+  const { widths, scale, thumbW, numW, startResize, startNumResize, startThumbResize, colWidth } = useColumnLayout(tableRef);
   // The pinned head's height (toolbar + topSlot) = the column headings' sticky offset.
   const headRef = useRef<HTMLDivElement>(null);
   const [headH, setHeadH] = useState(0);
@@ -630,7 +630,9 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       ) : (
         <table
           ref={tableRef}
-          className="track-table"
+          // `user-cols`: the Title|Artist divider has been dragged, so the narrow tiers' default
+          // Artist width yields to it (library.css, the 441–680 px tier).
+          className={`track-table ${widths.artist != null ? "user-cols" : ""}`}
           style={{ fontSize: `${13 * scale}px`, ["--tt-row-pad" as string]: `${Math.round(7 * scale)}px`, ["--tt-head-h" as string]: `${headH}px` }}
         >
           {/* Column widths live here (one place) so table-layout:fixed resizing is

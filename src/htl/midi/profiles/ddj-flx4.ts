@@ -129,8 +129,9 @@ export const DDJ_FLX4: DeviceProfile = {
     // shifted ◀ sends 0x3E, ▶ 0x3D. The chord is resolved in useMidiRouting (jumpSize*).
     ...btn("jumpSizeUp", 0x3d),
     ...btn("jumpSizeDown", 0x3e),
-    // SHIFT + headphone CUE (0x54's shifted note, 0x68) = key lock for the deck (the keyboard's Z).
-    ...btn("keylock", 0x68),
+    // Key lock (the keyboard's Z) is deliberately UNMAPPED on the FLX4 (operator, 2026-11-10). The
+    // single headphone/master CUE button (0x96 0x63, SHIFT: 0x96 0x78, captured live) is unbound and
+    // reserved by the operator for something else.
     // Shifted SYNC/MASTER button (note 0x60) → HTL KEY (key-match). KEY ignores shift,
     // so force shift:false or the held SHIFT would suppress it.
     { control: { kind: "action", action: "keyMatch" }, deck: "A", status: NOTE_A, data: 0x60, type: "note", shift: false },

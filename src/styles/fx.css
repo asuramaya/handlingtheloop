@@ -276,6 +276,14 @@
     transform: none;
   }
 }
+/* ★ ONLY WHILE FOLDING. Keyframes restart when an element is re-shown after display:none, so a
+   deck's FX bar replayed every open at once each time you switched decks (operator, 2026-11-10:
+   "spazzing"). FxStrip sets .folding on the bar for one fold after a chain change. */
+.fx-rack-bar:not(.folding) .fx-group-body,
+.fx-rack-bar:not(.folding) .fx-group.open .fx-tab-add,
+.fx-rack-bar:not(.folding) .fx-group-count {
+  animation: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .fx-chains {
     scroll-behavior: auto;

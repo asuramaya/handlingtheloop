@@ -250,6 +250,25 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // animation on its own. The closing copy is inert (no drag bindings, no ＋, pointer-events:none),
   // so it can never be a second live tab row claiming the same drag group.
   const [closingId, setClosingId] = useState<string | null>(null);
+  // ★ THE FOLD ANIMATES ONLY WHILE A CHAIN IS BEING OPENED (operator, 2026-11-10: the FX bar
+  // "spazzing when i switch between deck a and b"). The fold is CSS keyframe animations, and a
+  // browser RESTARTS keyframes whenever an element comes back from display:none — so every time a
+  // deck's controls were shown again, every pill replayed its open, its count and its ＋ at once.
+  // `.folding` on the bar gates them (fx.css): on for one fold after a chain change, off otherwise.
+  // Set DURING the render that changes the chain (derived state), so the group that opens mounts
+  // with its animation already allowed; an effect would turn it on a frame late, after the box had
+  // been drawn at full width once.
+  const [folding, setFolding] = useState(false);
+  const [foldSel, setFoldSel] = useState(selChainId);
+  if (foldSel !== selChainId) {
+    setFoldSel(selChainId);
+    setFolding(true);
+  }
+  useEffect(() => {
+    if (!folding) return;
+    const f = window.setTimeout(() => setFolding(false), 260);
+    return () => clearTimeout(f);
+  }, [folding, selChainId]);
   const prevChainId = useRef(selChainId);
   useEffect(() => {
     if (prevChainId.current === selChainId) return;
@@ -1531,7 +1550,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
           now literally that gesture, and dropping onto an OPEN group asks where among its tabs. */}
       {ready && (
       <div
-        className="fx-rack-bar"
+        className={`fx-rack-bar ${folding ? "folding" : ""}`}
         // ★ THE CLICK-AFTER-DRAG GUARD BELONGS TO THE WHOLE BAR. `draggedRef` is what stops the
         // click that ends a drag from also counting as a selection, and it was reset by a capture
         // handler on `.fx-chains`. The moment the master moved OUT of that scroller to be pinned,

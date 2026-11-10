@@ -306,9 +306,13 @@
 }
 
 /* -- row 1: the control bar -- */
+/* The side cells never shrink below their content (they used to be minmax(0, 1fr), so on a narrow
+   panel the left group spilled under the centred Mix now / Skip / Hold). Equal 1fr sides keep the
+   middle centred while there is room; below 680 px the middle takes its own row (see the
+   container query further down). */
 .mixq-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   gap: 8px;
 }
@@ -319,8 +323,10 @@
   gap: 6px;
   min-width: 0;
 }
-.mixq-bar-right { justify-content: flex-end; }
-.mixq-bar-mid { display: flex; justify-content: center; }
+.mixq-bar-left { grid-column: 1; }
+.mixq-bar-mid { grid-column: 2; display: flex; justify-content: center; }
+.mixq-bar-right { grid-column: 3; justify-content: flex-end; }
+.mixq-bar-mid:empty { display: none; }
 .mixq-group {
   display: inline-flex;
   padding: 2px;
@@ -368,8 +374,11 @@
 /* -- row 2: the stage -- */
 .mixq-stage {
   display: grid;
-  /* The middle grows with the room — a wire, not a gap — and the cards share the rest. */
-  grid-template-columns: minmax(0, 1fr) clamp(96px, 13cqi, 220px) minmax(0, 1fr);
+  /* The middle grows with the room — a wire, not a gap — and the cards share the rest. It is never
+     narrower than its pill (max-content), so the move's name and the clock always read whole
+     ("Blend 16  1:46", not "B…  1:46"); the cards give up the width instead, and their titles
+     already truncate. */
+  grid-template-columns: minmax(0, 1fr) minmax(max-content, clamp(96px, 13cqi, 220px)) minmax(0, 1fr);
   align-items: center;
 }
 
@@ -458,6 +467,8 @@
   justify-content: center;
   gap: 4px;
   min-width: 0;
+  /* a stub of wire shows on each side of the pill even when the column is only as wide as it */
+  padding: 0 8px;
   align-self: stretch;
 }
 .mixq-top.tone-run .mixq-bridge { --tone: var(--text); }
@@ -513,7 +524,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: calc(100% - 8px);
+  flex: 0 0 auto;
   padding: 4px 10px 4px 8px;
   border-radius: 999px;
   background:
@@ -532,7 +543,7 @@
 .mixq-pill-ico path { fill: none; stroke-width: 1.8; stroke-linecap: round; }
 .mixq-pill-ico .out { stroke: var(--now-col); }
 .mixq-pill-ico .in { stroke: var(--next-col); }
-.mixq-pill-name { min-width: 0; font-size: 11.5px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixq-pill-name { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: var(--text); white-space: nowrap; }
 .mixq-pill-clock {
   flex: 0 0 auto;
   padding-left: 2px;
@@ -554,7 +565,11 @@
 @container (max-width: 760px) {
   .mixq-energy .mixq-chip-label { display: none; }
   .mixq-energy .mixq-chip { padding: 0 6px; }
-  .mixq-stage { grid-template-columns: minmax(0, 1fr) minmax(96px, 130px) minmax(0, 1fr); }
+}
+/* The stage steps down a little earlier (880 px): the pill now always takes its full width, and at
+   800 px a third stat column and big art left each title ~90 px. */
+@container (max-width: 880px) {
+  .mixq-stage { grid-template-columns: minmax(0, 1fr) minmax(max-content, 130px) minmax(0, 1fr); }
   .mixq-card-art { width: 36px; height: 36px; }
   .mixq-card-stats { grid-template-columns: 2.6em 2.6em; }
   .mixq-stat.stat-time { display: none; }
@@ -564,8 +579,11 @@
 @container (max-width: 480px) {
   .mixq-top { padding: 6px 8px 8px; gap: 6px; }
   .mixq-bar { gap: 4px; }
-  .mixq-bar .mixq-chip-label { display: none; }
-  .mixq-bar .mixq-chip { padding: 0 7px; }
+  /* source and energy go to icons; Mix now / Skip / Hold keep their words on their own row */
+  .mixq-source .mixq-chip-label,
+  .mixq-energy .mixq-chip-label { display: none; }
+  .mixq-source .mixq-chip,
+  .mixq-energy .mixq-chip { padding: 0 7px; }
   .mixq-stage { grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr); }
   .mixq-card { grid-template-columns: minmax(0, 1fr) auto; padding: 6px 8px; gap: 6px; }
   .mixq-card-art { display: none; }
@@ -588,8 +606,34 @@
    two cards side by side at ~555 px left "Str8 …" / "The S…"). Below 600 px of list the cards take
    the full width one above the other, the bridge becomes a short vertical link between them with
    the pill on it, and each card gets its art and BPM/KEY back — so a title reads whole. Placed
-   after the 760/480 rules on purpose: it overrides them. */
-@container (max-width: 600px) {
+   after the 760/480 rules on purpose: it overrides them. Raised to 680 px (2026-11-10): side by
+   side at 640 the pill, art and stats left each title ~90 px.
+   The control bar goes to two rows here too: source and energy share the first, Mix now / Skip /
+   Hold take the whole second row, evenly spaced (at ~555 px the centred group sat on top of the
+   Suggestions / Playlist toggle). A container query on .mixq-top, so a narrow desktop dock
+   behaves like a phone. */
+@container (max-width: 680px) {
+  .mixq-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 6px;
+  }
+  .mixq-bar-left { grid-column: 1; grid-row: 1; }
+  .mixq-bar-right { grid-column: 2; grid-row: 1; }
+  .mixq-bar-mid { grid-column: 1 / -1; grid-row: 2; }
+  .mixq-auto-ctl { flex: 1 1 auto; }
+  .mixq-auto-ctl .mixq-chip { flex: 1 1 0; justify-content: center; min-width: 0; }
+  /* a long playlist name gives way before anything overflows */
+  .mixq-source { min-width: 0; max-width: 100%; }
+  .mixq-source .mixq-chip { min-width: 0; }
+  .mixq-source .mixq-chip-label { min-width: 0; }
+  .mixq-card-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+  }
   .mixq-stage {
     grid-template-columns: minmax(0, 1fr);
     row-gap: 0;

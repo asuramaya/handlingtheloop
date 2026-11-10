@@ -619,6 +619,35 @@ describe("AutoMixer machine — full transition path", () => {
     expect(Math.max(...counts)).toBeLessThanOrEqual(2.1);
   });
 
+  // ★ operator, 2026-11-10, still "3 2 1" forever: the loop sat FAR before the mix point, so the
+  // playhead never got within the armed phase's lead of it and the mix never even started cueing.
+  test("a loop FAR before the mix point (beyond the armed lead) still transitions, and the deck leaves the loop", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 120, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 60, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.mixer.enable();
+    let mixOut: number | null = null;
+    for (let i = 0; i < 40 && mixOut == null; i++) {
+      await r.tick();
+      mixOut = r.mixer.getStatus().mixOutTime;
+    }
+    expect(mixOut).not.toBeNull();
+    const end = (mixOut as number) - 40; // far outside any lead
+    r.engine.A.loop = { active: true, start: end - 2, end };
+    r.setPos("A", end - 1.5);
+    r.autoAdvance = true;
+    let mixed = false;
+    for (let i = 0; i < 400 && !mixed; i++) {
+      await r.tick(100);
+      if (r.phaseHist.includes("mixing")) mixed = true;
+    }
+    expect(mixed).toBe(true);
+    expect(r.engine.A.loop).toBeNull(); // it left the loop to mix out
+  });
+
   test("the glide holds commandedRamp through the fade, then clears it (no rubato-FF fight → no mid-fade tempo jumps)", async () => {
     // The glide ramps the master's tempo OFF its grid. SYNC's phase-lock has a grid-rubato
     // feed-forward that assumes grid-natural playback; left on during a commanded ramp it fights the

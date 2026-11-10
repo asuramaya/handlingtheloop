@@ -1083,7 +1083,9 @@ export class AutoMixer {
     }
     if (this.held) return; // Hold: keep the mix point on screen, never start toward it
     const lead = this.barsSeconds + 8;
-    if (live.position() >= (this.mixOutTime ?? Infinity) - lead) this.phase = "preload";
+    // From the REAL exit: a loop short of the planned one never lets the playhead get within `lead`
+    // of it (operator, 2026-11-10: still "3 2 1" forever — the earlier fix only covered cueing).
+    if (live.position() >= this.exitPoint(live) - lead) this.phase = "preload";
   }
 
   // THE DOUBLE DROP IS DECIDED WHILE WE WAIT. It moves the mix point EARLIER (eight bars before the
@@ -1346,9 +1348,24 @@ export class AutoMixer {
     // From the loop's second half to its first: a wrap, not a hand seek within the loop.
     const L = live.loop;
     const mid = L ? (L.start + L.end) / 2 : 0;
-    const wrappedAtExit = exitAt !== this.mixOutTime && !!L && prev != null && prev >= mid && pos < mid;
-    if (pos >= exitAt - 0.004 || wrappedAtExit) {
+    // "The exit is this loop's end" — NOT "the exit differs from mixOutTime": the plan can land its
+    // mix point exactly on the loop's end (a bar line), and then the loop still wraps before it.
+    const loopExit = !!L?.active && Math.abs(exitAt - L.end) < 0.005;
+    const wrappedAtExit = loopExit && prev != null && prev >= mid && pos < mid;
+    if (pos >= exitAt - (loopExit ? 0.03 : 0.004) || wrappedAtExit) {
       this.lastCuePos = null;
+      if (loopExit) {
+        // Leaving through the loop's end: the deck plays on out of it (a looping deck has no exit to
+        // mix out of), and the mix point becomes where it left, so every bar line the transition
+        // waits for (barPos counts from mixOutTime) lies ahead of the playhead instead of beyond a
+        // loop it would never leave.
+        try {
+          live.exitLoop();
+        } catch {
+          /* deck reloaded under us */
+        }
+        this.mixOutTime = wrappedAtExit ? live.position() : exitAt;
+      }
       // Reached mix-out: prefer a stem swap. If the incoming deck is still separating its
       // stems, hold a moment (bounded) rather than drop to an EQ blend.
       this.stemHold = this.shouldHoldForStems(live, idle);

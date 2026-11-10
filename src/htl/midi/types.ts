@@ -159,7 +159,8 @@ export interface DeckFeedback {
   loopIn: boolean; // manual loop in-point set / in-edge armed for adjust
   loopOut: boolean; // manual loop out-point set / out-edge armed for adjust
   cuePfl: boolean; // channel headphone PFL active (deck.cueLevel > 0)
-  hotcues: boolean[]; // length 8: the LIVE bank's pads that are filled (hot cues set / sampler slots loaded)
+  hotcues: boolean[]; // length 8: the LIVE bank's pads that can be pressed and do something (lit steady)
+  padBlink?: boolean[]; // length 8: the pads whose thing is sounding / engaged right now (blink)
   padMode: "cue" | "loop" | "sampler" | "fx"; // active pad bank → lights the matching mode button
   padModeAlt?: boolean; // the bank's SHIFTED peer is live (CUE2 / FX2 / ROLL / GLOBAL) → that button BLINKS
 }

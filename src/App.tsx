@@ -15,7 +15,7 @@ import type { FxStripCtl } from "./components/FxStrip";
 import { crossfadeGainsDb } from "./components/Crossfader";
 import { BoardBar } from "./components/BoardBar";
 import { useSampler, deckPadBase } from "./components/useSampler";
-import { fxPadArg, fxPadPress, fxPadRelease } from "./components/fxPads";
+import { fxPadArg, fxPadIsOn, fxPadPress, fxPadRelease, padsForDeck } from "./components/fxPads";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
@@ -2905,15 +2905,36 @@ function AppBody() {
           loopIn: !!d.loop?.active || d.adjusting === "in",
           loopOut: !!d.loop?.active || d.adjusting === "out",
           cuePfl: d.cueLevel > 0, // channel headphone PFL active
-          // The live bank's filled pads: hot cues in CUE / CUE2, loaded slots in SAMPLER (this deck's
-          // LOCAL bank) and GLOBAL, nothing in the banks with no per-pad state.
-          hotcues: Array.from({ length: 8 }, (_, i) => {
-            if (d.padMode === "cue" || d.padMode === "cue2") return d.hotCues[cueBankBase(d.padMode) + i] != null;
+          // ★ One pad-light rule for every bank (MidiEngine.drawPads): lit = pressable, blinking =
+          // sounding now, dark = nothing there. Pressable: a set hot cue (CUE / CUE2), a loaded slot
+          // (SAMPLER = this deck's LOCAL bank, GLOBAL), a slot with an effect (FX), every move while
+          // the deck plays (FX2: a move on a stopped deck does nothing), every loop size on a loaded
+          // deck (LOOP / ROLL).
+          ...(() => {
+            const lit: boolean[] = [];
+            const blink: boolean[] = [];
+            const loaded = d.duration > 0;
+            const fx = d.padMode === "fx" || d.padMode === "fx2" ? padsForDeck(d) : null;
             const pads = samplerRef.current?.pads;
-            if (d.padMode === "sampler") return (pads?.[deckPadBase(id) + i]?.kind ?? "empty") !== "empty";
-            if (d.padMode === "global") return (pads?.[i]?.kind ?? "empty") !== "empty";
-            return false;
-          }),
+            for (let i = 0; i < 8; i++) {
+              if (d.padMode === "cue" || d.padMode === "cue2") {
+                lit.push(d.hotCues[cueBankBase(d.padMode) + i] != null);
+                blink.push(false);
+              } else if (d.padMode === "sampler" || d.padMode === "global") {
+                const k = d.padMode === "sampler" ? deckPadBase(id) + i : i;
+                lit.push((pads?.[k]?.kind ?? "empty") !== "empty");
+                blink.push(engine.sampler.isPlaying(k));
+              } else if (fx) {
+                const pad = fx[i];
+                lit.push(!!pad && (d.padMode === "fx" || (loaded && d.playing)));
+                blink.push(!!pad && fxPadIsOn(d, pad));
+              } else {
+                lit.push(loaded);
+                blink.push(!!d.loop?.active && d.loop.beats === LOOP_BEATS[i]);
+              }
+            }
+            return { hotcues: lit, padBlink: blink };
+          })(),
           // The shifted peer modes light their BASE button's lamp (roll→loop, global→sampler, …).
           padMode:
             d.padMode === "roll" ? "loop"

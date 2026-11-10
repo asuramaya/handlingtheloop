@@ -430,6 +430,44 @@ describe("MidiEngine — pad lamps light on the live bank's own notes", () => {
     engine.setFeedback("A", { ...base, hotcues: [false, true, true, true, false, false, false, false], padMode: "sampler" });
     expect(pads()).toEqual([[0x97, 0x33, 0x7f]]); // same bank: only the change
   });
+
+  // ★ operator, 2026-11-10: pads lit when pressable, a press shows, the same in every bank.
+  it("lit = pressable, padBlink blinks on the wall clock, a held pad flips at once and blinks while held", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const sent: number[][] = [];
+      const input: { name: string; id: string; state: string; onmidimessage: ((e: { data: Uint8Array }) => void) | null } = { name: "DDJ-FLX4", id: "in", state: "connected", onmidimessage: null };
+      const output = { name: "DDJ-FLX4", id: "out", state: "connected", send: (b: number[]) => sent.push([...b]) };
+      const access = { inputs: new Map([["in", input]]), outputs: new Map([["out", output]]), onstatechange: null };
+      vi.stubGlobal("isSecureContext", true);
+      vi.stubGlobal("navigator", { requestMIDIAccess: async () => access });
+      const engine = new MidiEngine({ onEvent: () => {}, onStatus: () => {}, getLearn: () => ({}) });
+      live.push(engine);
+      await engine.start();
+      const base = { play: true, cue: false, sync: false, loop: false, loopIn: false, loopOut: false, cuePfl: false };
+      const fb = { ...base, hotcues: Array(8).fill(true), padBlink: [false, true, false, false, false, false, false, false], padMode: "fx" as const };
+      const pad = (n: number) => sent.filter((b) => b[0] === 0x97 && b[1] === 0x10 + n).map((b) => b[2]);
+      engine.setFeedback("A", fb); // t=0: wall phase on → everything lit
+      expect(pad(1)).toEqual([0x7f]);
+      vi.setSystemTime(310);
+      engine.setFeedback("A", fb); // phase off: only the blinking pad goes dark
+      expect(pad(1)).toEqual([0x7f, 0x00]);
+      expect(pad(0)).toEqual([0x7f]);
+      // pad 3 pressed on the board: it flips dark AT ONCE, no feedback poll needed
+      input.onmidimessage?.({ data: new Uint8Array([0x97, 0x12, 0x7f]) });
+      expect(pad(2)).toEqual([0x7f, 0x00]);
+      vi.setSystemTime(310 + 300);
+      engine.setFeedback("A", fb); // held 300 ms: back on
+      expect(pad(2)).toEqual([0x7f, 0x00, 0x7f]);
+      vi.setSystemTime(310 + 600);
+      engine.setFeedback("A", fb); // and off again
+      input.onmidimessage?.({ data: new Uint8Array([0x97, 0x12, 0x00]) }); // released: steady lit
+      expect(pad(2)).toEqual([0x7f, 0x00, 0x7f, 0x00, 0x7f]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("MidiEngine — Pause app lights (Debug lamp probing)", () => {

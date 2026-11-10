@@ -91,6 +91,10 @@ export class MidiEngine {
   private learnArmed = false;
   private lastFb: Partial<Record<DeckId, DeckFeedback>> = {};
   private padLampOn: Partial<Record<DeckId, boolean>> = {}; // the mode button's lamp as last sent (blink)
+  // The performance pads as last sent, per deck: the bank they were sent for and each pad's value.
+  private padSent: Partial<Record<DeckId, { bank: string; v: number[] }>> = {};
+  // Pads physically down on the board, per deck: pad index -> when it went down (Date.now()).
+  private padHeld: Record<DeckId, Map<number, number>> = { A: new Map(), B: new Map() };
   static readonly PAD_BLINK_MS = 300;
   private started = false;
   private starting = false; // a request is in flight (don't fire a second from the effect)
@@ -451,6 +455,13 @@ export class MidiEngine {
       // (every other button) just ignore the release downstream, so this is safe for all.
       // (deck omitted → App drives the focused deck, e.g. Starrypad pads.)
       this.opts.onEvent({ type: "button", action: c.action, deck: b.deck, pressed, shift, velocity, padBank: c.padBank, ...(entry.shiftOverride != null ? { shiftFixed: true } : {}) });
+      const pad = c.padBank && b.deck ? /^hotcue(\d)$/.exec(c.action) : null;
+      if (pad && b.deck) {
+        // The press shows on the pad at once (drawPads), not on the next feedback poll.
+        if (pressed) this.padHeld[b.deck].set(Number(pad[1]) - 1, Date.now());
+        else this.padHeld[b.deck].delete(Number(pad[1]) - 1);
+        this.drawPads(b.deck);
+      }
       return;
     }
     // ★ THE BROWSE ENCODER'S PRESS HAS A HOLD (operator, 2026-11-03: board-only library navigation
@@ -796,6 +807,7 @@ export class MidiEngine {
     if (!on) {
       this.lastFb = {};
       this.padLampOn = {};
+      this.padSent = {};
       this.lastMeter = { A: -1, B: -1 };
       this.lampSent = null;
     }
@@ -819,22 +831,8 @@ export class MidiEngine {
     lamp(f.loopIn, fb.loopIn, prev?.loopIn);
     lamp(f.loopOut, fb.loopOut, prev?.loopOut);
     lamp(f.cuePfl, fb.cuePfl, prev?.cuePfl);
-    const padStatus = p.padStatus?.[deck];
-    if (f.hotcues && padStatus != null) {
-      // The live bank's own notes; a bank change re-sends all eight (that bank's lamps were never
-      // told, or were told by a different state of the same bank).
-      // A shifted peer lights its OWN block when the profile has one, and the base block as well
-      // (cheap insurance while it is unconfirmed which of the two the firmware shows).
-      const base = f.padLampBase?.[fb.padMode] ?? 0;
-      const alt = fb.padModeAlt ? f.padLampBaseAlt?.[fb.padMode] : undefined;
-      const bankChanged = prev != null && (prev.padMode !== fb.padMode || !!prev.padModeAlt !== !!fb.padModeAlt);
-      for (let i = 0; i < f.hotcues.length; i++) {
-        const on = !!fb.hotcues[i];
-        if (!bankChanged && on === prev?.hotcues?.[i]) continue;
-        this.send([padStatus, base + f.hotcues[i], on ? 0x7f : 0x00]);
-        if (alt != null) this.send([padStatus, alt + f.hotcues[i], on ? 0x7f : 0x00]);
-      }
-    }
+    this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues], ...(fb.padBlink ? { padBlink: [...fb.padBlink] } : {}) };
+    this.drawPads(deck);
     // Pad-mode bank LEDs: when the active mode changed, light the new button and clear the
     // one we were on. (A no-op on a board whose firmware owns these LEDs — the send is
     // simply ignored — but lights the rest of the world for boards that accept it.)
@@ -859,7 +857,46 @@ export class MidiEngine {
       }
       this.padLampOn[deck] = want;
     }
-    this.lastFb[deck] = { ...fb, hotcues: [...fb.hotcues] };
+  }
+
+  // ★ ONE PAD-LIGHT RULE FOR EVERY BANK (operator, 2026-11-10: "getting the pads to light up when the
+  // pads are pressable … or light up at press, something like that, consistent across the modes").
+  // The FLX4's pads are on/off only (no dim level: probed live the same day), so the states are:
+  //   dark      nothing there (empty cue / slot / FX slot, FX2 on a stopped deck)
+  //   steady    pressable (DeckFeedback.hotcues)
+  //   blinking  sounding / engaged now (DeckFeedback.padBlink: a latched effect, a held move, the
+  //             live loop size, a playing sample) — the same blink as a shifted mode button
+  //   held      a pad under the finger flips at once and blinks from that instant while held,
+  //             so every press shows, even on a dark pad
+  private drawPads(deck: DeckId): void {
+    const p = this.profile;
+    const f = p?.feedback;
+    const fb = this.lastFb[deck];
+    const padStatus = p?.padStatus?.[deck];
+    if (!f?.hotcues || !fb || padStatus == null || !this.outputs.length || this._lampsPaused) return;
+    const now = Date.now();
+    const B = MidiEngine.PAD_BLINK_MS;
+    const wall = Math.floor(now / B) % 2 === 0;
+    const held = this.padHeld[deck];
+    // The live bank's own notes; a shifted peer lights its OWN block when the profile has one, and
+    // the base block as well (cheap insurance while it is unconfirmed which of the two the firmware
+    // shows). A bank change re-sends all eight.
+    const base = f.padLampBase?.[fb.padMode] ?? 0;
+    const alt = fb.padModeAlt ? f.padLampBaseAlt?.[fb.padMode] : undefined;
+    const bank = `${fb.padMode}${fb.padModeAlt ? "+" : ""}`;
+    const last = this.padSent[deck]?.bank === bank ? this.padSent[deck]!.v : undefined;
+    const v: number[] = [];
+    for (let i = 0; i < f.hotcues.length; i++) {
+      const on = !!fb.hotcues[i];
+      const down = held.get(i);
+      const lit = down != null ? (Math.floor((now - down) / B) % 2 === 0 ? !on : on) : fb.padBlink?.[i] ? wall : on;
+      v.push(lit ? 0x7f : 0x00);
+      if (v[i] === last?.[i]) continue;
+      const quiet = down != null || !!fb.padBlink?.[i]; // blink flips stay out of the Debug log
+      this.send([padStatus, base + f.hotcues[i], v[i]], !quiet);
+      if (alt != null) this.send([padStatus, alt + f.hotcues[i], v[i]], !quiet);
+    }
+    this.padSent[deck] = { bank, v };
   }
 
   private send(bytes: number[], log = true): void {

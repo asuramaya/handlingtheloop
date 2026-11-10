@@ -1044,6 +1044,45 @@ th.col-thumb {
   background: var(--line);
   margin: 3px 0;
 }
+/* "Other versions": one upload per row — its name (truncating, full text in the tooltip) and two
+   small A / B load buttons. Capped so a long YouTube title cannot widen the whole menu. */
+.ctx-version {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 340px;
+  padding-left: 10px;
+  font-size: 11px;
+}
+.ctx-version-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.ctx-version-meta {
+  color: var(--muted);
+}
+.fx-preset-menu .ctx-version-load {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  text-align: center;
+}
+/* The "+N" after a title that has other uploads folded into it (TrackTable collapseVersions). */
+.tt-versions {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  line-height: 1.4;
+  vertical-align: 1px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  cursor: help;
+}
 .ctx-new {
   color: var(--neon-lime) !important;
 }

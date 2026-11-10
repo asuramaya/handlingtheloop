@@ -21,6 +21,9 @@ export interface TrackMeta {
   isrc?: string | null; // universal recording id, used to match across services
   provider?: string; // "youtube" | "spotify" | "tidal" | "htl"
   providerId?: string | null; // the track's id within that provider
+  // YouTube Music's explicit badge, carried from search (server/innertube.ts). Only ever TRUE when
+  // present — no badge is not evidence of a clean cut. Ranks versions (library/songIdentity.ts).
+  explicit?: boolean | null;
 }
 
 // SOFT length backstop: keeps hour-long mixes/livestreams/loops off a deck. Mirrors

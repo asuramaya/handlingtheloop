@@ -29,6 +29,9 @@ export interface TrackTableState {
   /** The browse cursor's track (trackKey), so coming back to a list puts the cursor where it was —
    *  by identity, not index, so a re-sort or a moved queue row cannot strand it on another track. */
   cursorKey?: string | null;
+  /** Show every upload of a song as its own row instead of one row per recording (TrackTable's
+   *  `collapseVersions`). Off = collapsed, the default. */
+  allVersions?: boolean;
 }
 
 const PREFIX = "htl:tt:";

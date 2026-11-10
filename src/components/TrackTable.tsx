@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ToolbarHostContext } from "./lib/toolbarHost";
 import { RowsStepper } from "./lib/RowsStepper";
 import { trackKey, type TrackMeta } from "@htl/library";
+import { groupVersions } from "../htl/library/songIdentity";
 import { analysisState, cacheState } from "@htl/media";
 import { displayTrack, fmtTime } from "../util/format";
 import { CachePips, useCacheStatus } from "./CachePips";
@@ -65,6 +66,14 @@ interface TrackTableProps {
    *  under this key, and restore them on mount. Omit for a table whose state is owned elsewhere —
    *  the Explorer's search results, whose query belongs to whoever ran the search. */
   stateKey?: string; // show Cached / Stemmed toggle chips that narrow the view by pool state
+  /** ONE ROW PER RECORDING (operator, 2026-11-10: "Headlock — Imogen Heap" three times, a Topic,
+   *  an official and a lyric upload). Uploads of the same recording (library/songIdentity) show as
+   *  their best version — uncensored, then the album audio — with a "+N" mark; the others stay
+   *  reachable from either row menu ("Other versions") and from the "All uploads" chip. DISPLAY
+   *  ONLY: the list handed in is never changed, so nothing in a collection or playlist is lost. The
+   *  version on a deck is always the one shown, so its deck highlight still lands. Ignored on a
+   *  reorderable list (the Queue), whose drag indices must address every row. */
+  collapseVersions?: boolean;
 }
 
 // Imperative surface a hardware controller drives: a browse encoder moves a row cursor,
@@ -107,6 +116,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   deckColors,
   cacheFilter,
   stateKey,
+  collapseVersions,
 }: TrackTableProps, ref) {
   const searchMode = !!onSubmitSearch; // toolbar field submits a YouTube search instead of filtering
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -200,6 +210,35 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     });
   }, [tracks, analysisVer]);
 
+  // ── one row per recording ────────────────────────────────────────────────────────────────────
+  const [allVersions, setAllVersions] = useState(saved.allVersions ?? false);
+  const collapsing = !!collapseVersions && !onReorder;
+  const deckA = deckLoaded?.A ?? null;
+  const deckB = deckLoaded?.B ?? null;
+  const grouped = useMemo(() => {
+    if (!collapsing) return null;
+    // A version on a deck (or otherwise loaded) is PINNED: it is the row shown, whatever ranks
+    // higher, so the deck highlight finds it. Two pinned versions of one recording (the same song
+    // from two uploads on A and B) both stay rows.
+    const pinned = (t: TrackMeta) => !!t.videoId && (t.videoId === deckA || t.videoId === deckB || !!loadedIds?.has(t.videoId));
+    const groups = groupVersions(rows, { pin: pinned });
+    const shown: TrackMeta[] = [];
+    const others = new Map<string, TrackMeta[]>();
+    for (const g of groups) {
+      for (const row of [g.best, ...g.others.filter(pinned)]) {
+        shown.push(row);
+        const alts = [...(row === g.best ? [] : [g.best]), ...g.others.filter((t) => t !== row)];
+        if (alts.length) others.set(trackKey(row), alts);
+      }
+    }
+    return { shown, others, hidden: rows.length - shown.length };
+  }, [collapsing, rows, deckA, deckB, loadedIds]);
+  const shownRows = grouped && !allVersions ? grouped.shown : rows;
+  const versionsOf = useCallback(
+    (t: TrackMeta): TrackMeta[] => (grouped && !allVersions ? grouped.others.get(trackKey(t)) ?? [] : []),
+    [grouped, allVersions],
+  );
+
   // The rows as currently ordered + filtered. In SEARCH mode the field is a submit box,
   // not a live filter, so rows pass through as provided. Otherwise the filter (title /
   // artist substring) runs first; "index" keeps source order (reversed when descending),
@@ -210,8 +249,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // No live filter in search mode (the field submits a query) nor in reorder mode (the
     // Queue is a curated order — filtering would misalign the drag indices into it).
     let filtered = searchMode || onReorder || !q
-      ? rows
-      : rows.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q));
+      ? shownRows
+      : shownRows.filter((t) => `${t.title ?? ""} ${t.artist ?? ""}`.toLowerCase().includes(q));
     // Cache-state chips (Library / Community): narrow to pooled and/or stemmed tracks.
     // Both on ⇒ require both. Read live from the shared manifest; cacheVer forces the
     // recompute once it lands. Never applies to the reorderable queue (indices must hold).
@@ -231,7 +270,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       if (ua !== ub) return ua ? 1 : -1;
       return compareBy(a, b, sortKey) * sortDir;
     });
-  }, [rows, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
+  }, [shownRows, sortKey, sortDir, query, searchMode, onReorder, cacheFilter, cacheOnly, stemOnly, cacheVer]);
 
   // ----- Row windowing (only render the visible slice of a large list) -----
   // Reorder lists (the queue) are small and their drag math wants every index present, so
@@ -299,8 +338,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
     // to the tracked value, which is the only thing available once the node is gone.
     const sc = scrollerRef.current;
     if (sc?.isConnected) savedScroll.current = sc.scrollTop;
-    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current, cursorKey: cursorKeyRef.current });
-  }, [stateKey, sortKey, sortDir, query, cacheOnly, stemOnly]);
+    saveTableState(stateKey, { sortKey, sortDir, query, cacheOnly, stemOnly, scrollTop: savedScroll.current, cursorKey: cursorKeyRef.current, allVersions });
+  }, [stateKey, sortKey, sortDir, query, cacheOnly, stemOnly, allVersions]);
   // Save when a control moves, AND on unmount — the cleanup is the one that catches closing the
   // panel or loading a track, where nothing changed but the component is about to be destroyed.
   useEffect(() => {
@@ -576,7 +615,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             <span className="tt-filter-trail">
               {!searchMode && (query.trim() || cacheOnly || stemOnly) && (
                 <span className="tt-filter-count" aria-live="polite">
-                  {view.length} of {rows.length}
+                  {view.length} of {shownRows.length}
                 </span>
               )}
               {searchMode && (
@@ -605,6 +644,22 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                     <span className="tt-chip-label">Stemmed</span>
                   </button>
                 </span>
+              )}
+              {grouped && grouped.hidden > 0 && (
+                <button
+                  className={`tt-chip tt-chip-versions ${allVersions ? "on" : ""}`}
+                  aria-pressed={allVersions}
+                  aria-label="Show every upload"
+                  title={
+                    allVersions
+                      ? "Showing every upload. Click to show one row per song (the uncensored / album version)."
+                      : `${grouped.hidden} duplicate upload${grouped.hidden === 1 ? "" : "s"} folded into their best version. Click to show every upload.`
+                  }
+                  onClick={() => setAllVersions((v) => !v)}
+                >
+                  <span className="tt-chip-glyph" aria-hidden="true">+{grouped.hidden}</span>
+                  <span className="tt-chip-label">uploads</span>
+                </button>
               )}
               {toolbarHost && <RowsStepper inField />}
             </span>
@@ -819,6 +874,20 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                     <CachePips videoId={t.videoId} />
                   </span>
                   {displayTrack(t.title, t.artist).title}
+                  {(() => {
+                    const alts = versionsOf(t);
+                    if (!alts.length) return null;
+                    return (
+                      <span
+                        className="tt-versions"
+                        title={`${alts.length} other upload${alts.length === 1 ? "" : "s"} of this song (right-click → Other versions):\n${alts
+                          .map((v) => `• ${v.title} — ${v.artist} (${fmtTime(v.duration)})`)
+                          .join("\n")}`}
+                      >
+                        +{alts.length}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="col-artist" title={t.artist}>
                   {displayTrack(t.title, t.artist).artist}
@@ -868,6 +937,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
           onAddToCollection={onAddToCollection}
           inCollection={inCollection}
           canFile={canFile}
+          versionsOf={collapsing ? versionsOf : undefined}
           onClearSelection={() => setSelected(new Set())}
         />
       )}

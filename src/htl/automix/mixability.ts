@@ -139,42 +139,10 @@ export function planTier(p: TransitionPlan): MixabilityTier | "unknown" {
   return p.confident ? mixabilityTier(p.score) : "unknown";
 }
 
-/** A normalized "song identity" from a title — drops version/remix/feature/mashup
- *  markers so different uploads of the SAME song collapse to one key. Used to stop the
- *  queue from suggesting "Danza Kuduro → Danza Kuduro (Original Mix) → Danza Kuduro x …".
- *  This is song-level DEDUP (matching the song name in the title), not slop filtering. */
-// Cut a title at the first remix/version/feature/mashup marker and reduce it to bare words.
-function coreOf(s: string): string {
-  return s
-    .replace(/\b(feat\.?|ft\.?|featuring|vs\.?|remix|mix|cover|version|mashup|edit|bootleg|live|acoustic|remaster(?:ed)?|official|lyrics?|audio|video)\b.*$/i, " ")
-    .replace(/\s+x\s+.*$/i, " ") // "Song x Other" mashup → keep the first song
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function songCore(title: string): string {
-  let s = (title || "").toLowerCase();
-  s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " "); // drop (…) and […]
-
-  // ★ SEE THROUGH A LEADING "ARTIST - " PREFIX. Without this the dedup failed on the single most
-  // embarrassing case there is: the seed track coming straight back. YouTube is wildly
-  // inconsistent about the prefix — a "- Topic" channel uploads "Teardrop (Remastered 2019)" while
-  // every other upload of the same recording is "Massive Attack - Teardrop (Live in Berlin)".
-  // Different keys, so the radio followed Teardrop with Teardrop, then with a Teardrop cover.
-  //
-  // But "X - Y" is genuinely ambiguous: "Massive Attack - Teardrop" is artist-then-song, while
-  // "Danza Kuduro - Official Video" is song-then-junk. Guessing wrong either way loses the song
-  // name. So take the half that SURVIVES the marker cut: in the first case the tail is a real
-  // title ("teardrop"), in the second it is pure junk and reduces to nothing, which is the signal
-  // that the song name was on the left all along.
-  const dash = s.match(/^\s*[^-–—]{1,40}\s[-–—]\s(.+)$/);
-  if (dash) {
-    const tail = coreOf(dash[1]);
-    if (tail.length >= 3) return tail;
-  }
-  return coreOf(s);
-}
+// songCore moved to library/songIdentity (the one song-identity module, shared with the server's
+// search collapse, which must not pull this file's analysis imports into the worker). Re-exported
+// so existing importers keep `from "./mixability"`.
+export { songCore } from "../library/songIdentity";
 
 /** Average mixability of a candidate against several seed tracks (both loaded
  *  decks) — how well it fits the current two-track context. */

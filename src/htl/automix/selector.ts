@@ -1,5 +1,6 @@
 import type { TrackMeta } from "../library/types";
 import { camelotDistance, bpmRatioFolded, songCore } from "./mixability";
+import { artistKey, groupVersions, songKey } from "../library/songIdentity";
 import type { EnergyArc, RadioContext } from "./types";
 
 // THE SELECTOR — how the radio decides which candidate plays next.
@@ -75,33 +76,21 @@ const ARTIST_SOFT = 7; // fading penalty out to here
 const P_ARTIST = 1.0; // full penalty is larger than any achievable score → a hard block
 const P_REPEAT = 0.5; // a track played earlier in the session, resurfacing too soon
 
-/** Normalised artist identity. YouTube's "artist" is a channel name, so the same act arrives as
- *  "Burial", "Burial - Topic", "BurialVEVO" and "Burial Official" — all one artist for cooldown
- *  purposes, and treating them as four is how the same act got played four times in a row. */
-export function artistKey(artist: string | null | undefined): string {
-  let s = (artist || "").toLowerCase();
-  s = s.replace(/\s*-\s*topic\s*$/, " ");
-  s = s.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-  // Channel decorations, stripped from the END and NOT required to be their own word — YouTube
-  // writes both "Burial Official" and "BurialVEVO", and a \b-anchored match silently misses the
-  // second, which is exactly the case that lets one act through the cooldown twice. Looped,
-  // because they stack ("Artist Official Music").
-  for (let i = 0; i < 3; i++) {
-    const next = s.replace(/\s*(vevo|official|officiel|music|records|recordings|channel|tv|hd)\s*$/, "").trim();
-    if (next === s) break;
-    s = next;
-  }
-  return s;
-}
+// artistKey lives in library/songIdentity now (the one song-identity module); re-exported here.
+export { artistKey };
 
 /** THE SAME SONG, for "never mix a track into itself" (operator, 2026-11-04: "double mixing S&M
- *  into itself is not a valid transition"). The same upload, or another upload of the same
- *  recording by the same act: songCore sees through "(Official Video)" / "Artist - " decorations
- *  and artistKey through "- Topic" / "VEVO". Both halves must match, so two different songs that
- *  share a title ("Hold On" by two acts) are not merged. */
+ *  into itself is not a valid transition"). The same upload, or another upload of the same song by
+ *  the same act — version-blind on purpose, so a remix of what is playing is not "next" either.
+ *  songKey (library/songIdentity) sees through "(Official Video)" / "Artist - " decorations, "- Topic"
+ *  / "VEVO" channels, AND a label or lyrics page whose channel is not the act (the act is in the
+ *  title). Both halves must match, so two different songs that share a title ("Hold On" by two
+ *  acts) are not merged. The old channel-only comparison is kept as a second way to match. */
 export function sameSong(a: TrackMeta | null | undefined, b: TrackMeta | null | undefined): boolean {
   if (!a || !b) return false;
   if (a.videoId && a.videoId === b.videoId) return true;
+  const ka = songKey(a);
+  if (ka && ka === songKey(b)) return true;
   const ca = songCore(a.title);
   if (!ca || ca !== songCore(b.title)) return false;
   const aa = artistKey(a.artist);
@@ -225,6 +214,22 @@ export function scoreCandidate(c: Candidate, prev: TrackMeta | null, opts: Score
   };
 }
 
+/** ONE CANDIDATE PER RECORDING, the best version of it (operator, 2026-11-10: duplicate uploads
+ *  and "the plague of censored songs"). Radio feeds from several seeds return the same record as a
+ *  Topic upload, a video and a lyric page, and scoring picked whichever the provider ranked higher
+ *  — often the video, which is often the edited cut. The survivor is the best version by
+ *  compareVersions (uncensored, then album audio…) and carries the STRONGEST relatedness of the
+ *  group, so preferring the raw cut never costs the song its place. */
+export function preferVersions(cands: readonly Candidate[]): Candidate[] {
+  const of = new Map(cands.map((c) => [c.track, c]));
+  return groupVersions(cands.map((c) => c.track)).map((g) => {
+    const best = of.get(g.best)!;
+    if (!g.others.length) return best;
+    const rel = Math.max(best.rel, ...g.others.map((o) => of.get(o)!.rel));
+    return rel === best.rel ? best : { ...best, rel };
+  });
+}
+
 /** Rank a pool and return the best candidate with its decomposition. Ties break toward the
  *  stronger provider signal, then toward the older pool entry (so a candidate that has been
  *  waiting — and has therefore had the most time to be analysed by the prefetcher — goes first). */
@@ -304,11 +309,21 @@ export function plausibleLength(duration: number | null | undefined): boolean {
  *  `songCore`, so "Danza Kuduro" cannot come back as "Danza Kuduro (Original Mix)". */
 export function isEligible(
   t: TrackMeta,
-  bans: { played: ReadonlySet<string>; ids: ReadonlySet<string>; cores: ReadonlySet<string> },
+  bans: {
+    played: ReadonlySet<string>;
+    ids: ReadonlySet<string>;
+    cores: ReadonlySet<string>;
+    /** Tracks whose SONG may not come back under another upload: the queue, what is playing and
+     *  the recent play history. Matched with sameSong, which also sees a label / lyrics-page upload
+     *  whose channel is not the act — songCore alone (title only) misses none of those titles but
+     *  history was never in `cores`, so a song played three tracks ago could return as a re-upload. */
+    songs?: readonly TrackMeta[];
+  },
 ): boolean {
   if (!t.videoId) return false;
   if (!plausibleLength(t.duration)) return false;
   if (bans.played.has(t.videoId) || bans.ids.has(t.videoId)) return false;
+  if (bans.songs?.some((s) => sameSong(s, t))) return false;
   const core = songCore(t.title);
   if (core && bans.cores.has(core)) return false;
   // ★ AND THE SONG NAMED ANYWHERE IN THE TITLE, not just at its head. songCore normalises a title

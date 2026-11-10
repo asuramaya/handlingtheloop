@@ -145,6 +145,9 @@ export interface TrackMeta {
   // cast that hid their absence from this type.
   isrc?: string | null;
   provider?: string;
+  // YouTube Music's explicit badge (search's song shelf). Present only when TRUE: no badge is not
+  // evidence of a clean cut. Read by the version ranking (src/htl/library/songIdentity.ts).
+  explicit?: boolean;
 }
 
 // Strip the noise YouTube uploaders cram into titles (resolution/format/"official video" tags)

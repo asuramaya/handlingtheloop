@@ -1005,6 +1005,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             cacheFilter
             searchPlaceholder="Filter collection…"
             stateKey="collection"
+            collapseVersions
           />
         )}
         {view === "community" && (
@@ -1026,6 +1027,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             cacheFilter
             searchPlaceholder="Filter community…"
             stateKey="community"
+            // The shared pool is where one song piles up as a Topic, a video and three lyric uploads.
+            collapseVersions
           />
         )}
         {isPlaylist &&
@@ -1065,6 +1068,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 // somewhere arbitrary. A deleted playlist leaves a dead key, which costs a few
                 // bytes and can mislead nothing — its own view is the only reader.
                 stateKey={`pl:${pl.id}`}
+                collapseVersions
                 // Remount on a playlist switch, so the table reads ITS key rather than carrying the
                 // previous playlist's restored state into a list it does not describe.
                 key={pl.id}

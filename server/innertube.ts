@@ -1,5 +1,6 @@
 import type { TrackMeta } from "./youtube";
 import { fetchPlaylistData, getMyPlaylistsData } from "./ytdata";
+import { collapseVersions } from "../src/htl/library/songIdentity";
 
 // Search + playlist via youtubei.js. We never touch its player/extraction path
 // (that's broken against current YouTube and handled by our own ANDROID_VR
@@ -27,6 +28,16 @@ interface MusicItem {
   title?: string;
   duration?: { seconds?: number };
   artists?: { name?: string }[];
+  // MusicInlineBadge nodes. The one that matters is icon_type MUSIC_EXPLICIT_BADGE (label
+  // "Explicit"), YouTube Music's own explicit-content flag — verified live 2026-11-10: "Without
+  // Me" by Eminem carries it, and the two "WAP" song rows split as one badged, one not (the clean
+  // cut). The raw renderer's `badges[].musicInlineBadgeRenderer.icon.iconType` is the same field.
+  badges?: { icon_type?: string; label?: string }[];
+}
+
+/** YouTube Music's explicit badge on a song row. Absence is NOT "clean" — most songs carry none. */
+export function hasExplicitBadge(it: { badges?: { icon_type?: string }[] }): boolean {
+  return (it.badges ?? []).some((b) => b?.icon_type === "MUSIC_EXPLICIT_BADGE");
 }
 interface MusicSearchResult {
   songs?: { contents?: MusicItem[] };
@@ -111,6 +122,7 @@ export function fromMusicItem(it: MusicItem): TrackMeta | null {
     duration,
     thumbnail: `/api/art/${id}`,
     views: null,
+    ...(hasExplicitBadge(it) ? { explicit: true } : {}),
   };
 }
 
@@ -457,27 +469,33 @@ export function createInnertubeApi(Innertube: InnertubeLike): InnertubeApi {
         const m = await withRetry((yt) =>
           yt.music ? yt.music.search(query, { type: "song" }) : Promise.reject(new Error("no music client")),
         );
-        for (const it of m.songs?.contents ?? []) {
-          add(fromMusicItem(it));
-          if (out.length >= limit) return out;
-        }
+        // The WHOLE shelf, not the first `limit`: the shelf is one page (~20 rows) already fetched,
+        // and the collapse below needs every version on it — with limit 1 (a crowd request's top
+        // hit) the first row is as likely the clean cut as the explicit one.
+        for (const it of m.songs?.contents ?? []) add(fromMusicItem(it));
       } catch {
         /* music search flaky / unavailable → fall through to the video search */
       }
       // 2) Regular video + music-tag search for COVERAGE (bootlegs / edits / remixes that live only
       //    on plain YouTube, not in the Music catalog). De-duped against the songs above; only runs
       //    when the song shelf didn't already fill the page.
-      try {
-        const res = await withRetry((yt) => yt.search(query, { type: "video" }));
-        for (const r of res.results ?? []) {
-          if ((r as { type?: string }).type !== "Video") continue;
-          add(normalize(r as AnyNode));
-          if (out.length >= limit) break;
+      if (collapseVersions(out).length < limit) {
+        try {
+          const res = await withRetry((yt) => yt.search(query, { type: "video" }));
+          for (const r of res.results ?? []) {
+            if ((r as { type?: string }).type !== "Video") continue;
+            add(normalize(r as AnyNode));
+          }
+        } catch (e) {
+          if (out.length === 0) throw e; // both sources failed → surface it
         }
-      } catch (e) {
-        if (out.length === 0) throw e; // both sources failed → surface it
       }
-      return out;
+      // 3) ONE ROW PER RECORDING, the uncensored one (operator, 2026-11-10: duplicate uploads, and
+      //    "the plague of censored songs"). Each recording keeps the place of its first appearance
+      //    (relevance order) but is represented by its best version: explicit > unknown > censored,
+      //    then Topic > official audio > video > lyric/fan. A censored track survives only when no
+      //    other version of it came back. See src/htl/library/songIdentity.ts.
+      return collapseVersions(out).slice(0, limit);
     },
     async fetchPlaylist(listId, auth) {
       // OAuth token → the official Data API; otherwise public youtubei.js.

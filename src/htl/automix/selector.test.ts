@@ -8,6 +8,8 @@ import {
   isEligible,
   keyFit,
   pickBest,
+  preferVersions,
+  sameSong,
   radioSeeds,
   scoreCandidate,
   targetEnergy,
@@ -344,5 +346,31 @@ describe("covers, tributes and fan re-uploads", () => {
   test("the song key must be a whole phrase, not a fragment", () => {
     const b = { played: new Set<string>(), ids: new Set<string>(), cores: new Set(["teardrop"]) };
     expect(isEligible(t("any00000001", { title: "Teardrops On My Guitar" }), b)).toBe(true);
+  });
+});
+
+// Operator, 2026-11-10: the same song as several uploads, and the censored cut winning.
+describe("song identity in the radio", () => {
+  test("sameSong sees a lyrics page's upload as the act's song", () => {
+    const topic = t("topic000001", { title: "Headlock", artist: "Imogen Heap - Topic" });
+    const lyric = t("lyric000001", { title: "Imogen Heap - Headlock (Lyrics)", artist: "7clouds" });
+    expect(sameSong(topic, lyric)).toBe(true);
+    expect(sameSong(topic, t("other000001", { title: "Headlock", artist: "nowayback" }))).toBe(false);
+  });
+
+  test("a song in the play history cannot come back as another upload", () => {
+    const played = t("topic000001", { title: "Headlock", artist: "Imogen Heap - Topic" });
+    const bans = { played: new Set<string>(), ids: new Set<string>(), cores: new Set<string>(), songs: [played] };
+    expect(isEligible(t("vevo0000001", { title: "Imogen Heap - Headlock (Official Video)", artist: "ImogenHeapVEVO" }), bans)).toBe(false);
+    expect(isEligible(t("fresh000001", { title: "Hide and Seek", artist: "Imogen Heap - Topic" }), bans)).toBe(true);
+  });
+
+  test("preferVersions keeps the uncensored version, with the group's strongest relatedness", () => {
+    const video = cand(t("video000001", { title: "Cardi B - WAP (Clean) [Official Music Video]", artist: "Cardi B", duration: 188 }), 0.9);
+    const badge = cand(t("music000001", { title: "WAP (feat. Megan Thee Stallion)", artist: "Cardi B", duration: 188, explicit: true }), 0.4);
+    const other = cand(t("other000001", { title: "Bodak Yellow", artist: "Cardi B", duration: 224 }), 0.6);
+    const out = preferVersions([video, badge, other]);
+    expect(out.map((c) => c.track.videoId)).toEqual(["music000001", "other000001"]);
+    expect(out[0].rel).toBe(0.9);
   });
 });

@@ -5,7 +5,7 @@ import { fetchFeaturesByIsrcRows } from "../media/api";
 import { analysisState, lookupAnalysis } from "../media/analysisStatus";
 import { d1EnrichTargets, isrcEnrichTargets, patchPool } from "./poolEnrich";
 import { smartSortChain, songCore } from "./mixability";
-import { type Candidate, isEligible, sameSong, pickBest, radioSeeds, targetEnergy } from "./selector";
+import { type Candidate, isEligible, sameSong, pickBest, preferVersions, radioSeeds, targetEnergy } from "./selector";
 import type { EnergyArc, MixMode, QueueItem, QueueSource, RadioContext } from "./types";
 import { trace } from "../debug/trace";
 
@@ -428,8 +428,11 @@ export function useMixQueue(): MixQueue {
         cores: new Set<string>(
           [...items, currentRef.current, ctx.anchor].filter((t): t is TrackMeta => !!t).map((t) => songCore(t.title)),
         ),
+        // …and no song from the queue, the decks or the recent history under ANOTHER upload.
+        songs: [...items, ...(currentRef.current ? [currentRef.current] : []), ...history.current],
       };
-      const eligible = poolRef.current.filter((c) => isEligible(c.track, bans));
+      // One candidate per recording, the uncensored / album-audio version (selector.preferVersions).
+      const eligible = preferVersions(poolRef.current.filter((c) => isEligible(c.track, bans)));
       if (!eligible.length) break;
 
       // Everything that will play between now and the slot being filled, nearest first.

@@ -897,7 +897,12 @@ export function WaveformViewport(props: WaveformViewportProps) {
     const ctx = el.getContext("2d", { alpha: false });
     if (!ctx) return;
     const { w, h, dpr } = sizeRef.current;
-    if (w === 0) return;
+    // ★ A HIDDEN LANE DRAWS NOTHING (operator, 2026-11-10: a flash of smeared colour, no waveform,
+    // when the other deck collapses back). Folded away, the canvas measures 1×1, and a playing
+    // deck kept drawing: it rebuilt its layer AT 1×1, and on restore that 1-px layer was
+    // blit-stretched over the full lane until the debounced rebuild landed ~130 ms later. Skipping
+    // the frame keeps the full-size layer, which the restore then simply scales.
+    if (w <= 2 || h <= 2) return;
     const p = view.current;
 
     ctx.fillStyle = bgRef.current;

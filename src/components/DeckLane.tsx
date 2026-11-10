@@ -257,7 +257,11 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
         if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropActive(false);
       }}
     >
-      <div className="lane-info">
+      <div
+        className="lane-info"
+        // Folded (the other deck is expanded): the whole header is the swap target, not just DECK X.
+        onClick={collapsed ? (e) => { if (!(e.target as Element).closest(".lane-id")) onToggleExpand(); } : undefined}
+      >
         {/* DECK id + scrolling title — its own full-width row on mobile. Drag the
             header (or the grip) onto a playlist to file the loaded track. */}
         <div

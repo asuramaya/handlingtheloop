@@ -50,9 +50,19 @@
   border-bottom: none;
   border-top: 1px solid var(--line);
 }
-/* Single-deck view: the tapped lane fills the whole lanes area, the other hides. */
+/* Single-deck view: the tapped lane fills the whole lanes area; the other folds down to its
+   HEADER (operator, 2026-11-10: "leave the other deck header/footer visible for quick swap").
+   Its waveform and caption go; the header stays where it lives (on top for A, at the bottom for B
+   when the waveforms meet), and a tap anywhere on it swaps the expanded deck. */
 .lane.collapsed {
+  flex: 0 0 auto;
+}
+.lane.collapsed > :not(.lane-info) {
   display: none;
+}
+.lane.collapsed > .lane-info {
+  pointer-events: auto;
+  cursor: pointer;
 }
 /* Dragging a track row over a lane → "drop here to load" cue: an inset accent ring
    and a faint tint so it's obvious which deck the track will land on. The `.lanes`

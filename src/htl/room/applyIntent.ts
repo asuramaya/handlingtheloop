@@ -14,6 +14,8 @@
 
 import { type DeckId, type Intent, type StemName } from "./protocol";
 import type { FxChainSlot, FxSlot } from "./protocol";
+import { withRemote } from "./remoteApply";
+import { hotCueHasResult } from "./loopWire";
 
 /** The deck surface an intent can touch. The real Deck has all of it. */
 export interface IntentDeck {
@@ -69,6 +71,10 @@ export interface IntentDeck {
   clearHotCue(slot: number): void;
   skipBeats: number;
   applyLoopRegion(start: number, end: number, active: boolean): void;
+  /** Adopt a sender's absolute loop RESULT verbatim (no snap, no recompute, no broadcast). */
+  applyLoopState(loop: { start: number; end: number; active: boolean; beats?: number } | null, inPoint?: number | null, seek?: number): void;
+  /** Adopt a sender's hot-cue slot contents verbatim (no broadcast). */
+  applyHotCue(slot: number, cue: number | null, loop: { start: number; end: number; beats?: number } | null): void;
 }
 
 /** The engine surface. The real AudioEngine has all of it. */
@@ -115,7 +121,14 @@ function fxSlot(deck: IntentDeck, chain: string | undefined, fx: string | undefi
   return slot;
 }
 
+/** ★ Applied INSIDE withRemote (operator, 2026-11-11: session sync audit): a deck method this runs
+ *  (an older peer's loop re-run, say) must not broadcast its own result back as if the DJ here had
+ *  made it. See remoteApply.ts. */
 export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHost): void {
+  withRemote(() => applyIntentNow(intent, engine, host));
+}
+
+function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost): void {
   if (intent.kind === "automix") return host.automix(intent.action);
   // Board-agnostic gesture (pad mode, FX-pad throw, …) — the registry owns the semantics, so new
   // board controls sync + replay without touching this switch.
@@ -209,13 +222,18 @@ export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHo
       host.ensureGuestStems(intent.deck);
       break;
     case "transport":
+      // ★ PLAY/PAUSE CARRY WHERE (operator, 2026-11-11: session sync audit): a quantized start seeks
+      // to its landing beat and then plays, and a bare play here started from THIS needle instead.
+      // A deck already playing is left alone (a seek would only jump it back by the network delay).
       if (intent.action === "play") {
         if (!deck.playing) {
           engine.resume(); // a co-DJ's deck must advance (silently) to track the master
+          if (intent.position != null) deck.seek(intent.position);
           deck.play();
         }
       } else if (intent.action === "pause") {
         if (deck.playing) deck.pause();
+        if (intent.position != null) deck.seek(intent.position);
       } else if (intent.action === "seek") deck.seek(intent.position ?? 0);
       break;
     case "cue":
@@ -235,6 +253,13 @@ export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHo
       }
       break;
     case "loop":
+      // ★ A RESULT IS APPLIED VERBATIM (loopWire.ts): the sender's region / in-point exactly, and its
+      // head move if it made one. Only a message from an older bundle (no `state`) is re-run here,
+      // at this device's playhead, as before.
+      if (intent.state !== undefined) {
+        deck.applyLoopState(intent.state.loop, intent.state.inPoint, intent.position);
+        break;
+      }
       if (intent.action === "in") deck.loopIn();
       else if (intent.action === "out") deck.loopOut();
       else if (intent.action === "exit") deck.exitLoop();
@@ -242,6 +267,13 @@ export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHo
       else deck.setBeatLoop(intent.beats ?? 0.5);
       break;
     case "hotcue":
+      if (intent.action !== "clear" && hotCueHasResult(intent)) {
+        // The slot holds what the sender's slot holds; a press that moved the sender's head moves
+        // this one to the same LANDED place, whatever this device had stored on the pad.
+        deck.applyHotCue(intent.slot, intent.cue ?? null, intent.loop ?? null);
+        if (intent.position != null) deck.seek(intent.position);
+        break;
+      }
       if (intent.action === "press") deck.hotCue(intent.slot);
       else if (intent.action === "save") deck.saveLoop(intent.slot);
       else deck.clearHotCue(intent.slot);
@@ -250,7 +282,9 @@ export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHo
       deck.skipBeats = intent.beats; // jog / beat-jump resolution
       break;
     case "loopBounds":
-      deck.applyLoopRegion(intent.start, intent.end, intent.active); // fine-adjust / move
+      // fine-adjust / move. The newer sender's count and head move ride along when present.
+      if (intent.beats != null || intent.position != null) deck.applyLoopState({ start: intent.start, end: intent.end, active: intent.active, beats: intent.beats }, undefined, intent.position);
+      else deck.applyLoopRegion(intent.start, intent.end, intent.active);
       break;
     case "load":
       host.load(intent.deck, intent.videoId, intent.name, intent.artist);

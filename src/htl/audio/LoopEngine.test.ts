@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { LoopEngine, type LoopHost, HOT_CUE_COUNT } from "./LoopEngine";
+import { LoopEngine, type LoopEdit, type LoopHost, HOT_CUE_COUNT } from "./LoopEngine";
 import type { Beatgrid } from "../analysis/analyze";
 
 // LoopEngine owns all the loop/cue/hot-cue STATE + editing logic and reaches the deck only through
@@ -11,7 +11,7 @@ const GRID: Beatgrid = { bpm: 120, firstBeat: 0, interval: 0.5, beatsPerBar: 4 }
 
 function harness(over: Partial<{ pos: number; grid: Beatgrid | null; quant: boolean; play: boolean; load: boolean; dur: number; raw: number }> = {}) {
   const s = { pos: 0, grid: null as Beatgrid | null, quant: false, play: false, load: true, dur: 100, raw: 0, ...over };
-  const calls = { seek: [] as number[], postLoop: [] as { active: boolean; start: number; end: number }[], reanchor: 0, rebase: 0, loopEdit: 0 };
+  const calls = { seek: [] as number[], postLoop: [] as { active: boolean; start: number; end: number }[], reanchor: 0, rebase: 0, loopEdit: 0, edits: [] as LoopEdit[] };
   const host: LoopHost = {
     position: () => s.pos,
     seek: (t) => {
@@ -27,7 +27,10 @@ function harness(over: Partial<{ pos: number; grid: Beatgrid | null; quant: bool
     playing: () => s.play,
     loaded: () => s.load,
     quantize: () => s.quant,
-    onLoopEdit: () => void calls.loopEdit++,
+    onLoopEdit: (e) => {
+      calls.loopEdit++;
+      calls.edits.push(e);
+    },
   };
   return { le: new LoopEngine(host), s, calls };
 }
@@ -282,5 +285,76 @@ describe("setBeatLoop broadcasts the region it actually set", () => {
     const { le, calls } = harness({ grid: GRID, load: false });
     le.setBeatLoop(4);
     expect(calls.loopEdit).toBe(0);
+  });
+});
+
+// ★ EVERY LOCAL LOOP MUTATION ENDS IN ONE BROADCAST (operator, 2026-11-11: session sync audit).
+// in/out/exit/reloop/roll/clear/recall used to fire nothing, so their results never crossed in
+// absolute form. One edit per gesture, named, with the head move when there was one.
+describe("onLoopEdit fires once per local mutation, with the seek it made", () => {
+  it("names each gesture and carries the seek", () => {
+    const { le, s, calls } = harness({ pos: 10, play: true, raw: 31 });
+    le.loopIn();
+    s.pos = 12;
+    le.loopOut();
+    le.exitLoop();
+    le.reloop();
+    le.toggleLoop();
+    le.setBeatLoop(2);
+    le.moveLoop(2);
+    le.rollOut();
+    le.clearLoop();
+    expect(calls.edits.map((e) => e.action)).toEqual(["in", "out", "exit", "reloop", "exit", "beat", "bounds", "roll", "clear"]);
+    expect(calls.edits[3].seek).toBe(10); // reloop seeks to the loop start
+    expect(calls.edits[7].seek).toBe(31); // roll snaps to the un-wrapped clock
+    expect(calls.edits[0].seek).toBeUndefined();
+  });
+  it("a pad recall and an armed in-point broadcast too", () => {
+    const { le, calls } = harness({ pos: 10 });
+    le.setBeatLoop(4);
+    le.saveLoop(1);
+    le.clearLoop();
+    calls.edits.length = 0;
+    le.hotCue(1);
+    expect(calls.edits).toEqual([{ action: "reloop", seek: 10 }]);
+    le.clearLoop();
+    calls.edits.length = 0;
+    le.toggleAdjust("in");
+    expect(calls.edits).toEqual([{ action: "in" }]);
+  });
+});
+
+describe("applyLoopState / applyHotCue — a peer's result, verbatim and silent", () => {
+  it("sets exactly the region given (no snap, no recompute) and does not broadcast", () => {
+    const { le, calls } = harness({ pos: 10.2, grid: GRID, quant: true });
+    le.applyLoopState({ start: 10.13, end: 11.77, active: true, beats: 3 }, 9.9);
+    expect(le.loop).toEqual({ active: true, start: 10.13, end: 11.77, beats: 3 });
+    expect(le.loopInPoint).toBe(9.9);
+    expect(calls.loopEdit).toBe(0);
+  });
+  it("null clears the region; a seek is followed; a playing head outside a fresh loop is pulled in", () => {
+    const { le, s, calls } = harness({ pos: 40, play: true });
+    le.applyLoopState({ start: 10, end: 12, active: true });
+    expect(calls.seek.at(-1)).toBe(10);
+    le.applyLoopState(null, null, 33);
+    expect(le.loop).toBeNull();
+    expect(s.pos).toBe(33);
+    expect(calls.rebase).toBeGreaterThan(0); // the active loop was unwrapped
+  });
+  it("leaves the in-point alone when the message did not carry one; ignores an inverted region", () => {
+    const { le } = harness({ pos: 10 });
+    le.loopIn();
+    le.applyLoopState({ start: 20, end: 24, active: false });
+    expect(le.loopInPoint).toBe(10);
+    le.applyLoopState({ start: 30, end: 30, active: true });
+    expect(le.loop!.start).toBe(20);
+  });
+  it("applyHotCue stores a cue or a saved loop on the slot, exactly", () => {
+    const { le } = harness();
+    le.applyHotCue(2, 12.34, null);
+    expect(le.hotCues[2]).toBe(12.34);
+    le.applyHotCue(2, null, { start: 4, end: 6, beats: 4 });
+    expect(le.hotCues[2]).toBeNull();
+    expect(le.hotLoops[2]).toEqual({ active: false, start: 4, end: 6, beats: 4 });
   });
 });

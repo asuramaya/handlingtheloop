@@ -193,6 +193,19 @@ export interface QueuedTrack {
   providerId?: string | null;
 }
 
+/** A loop region on the wire (absolute seconds). */
+export interface WireLoop {
+  start: number;
+  end: number;
+  active: boolean;
+  beats?: number;
+}
+/** A deck's whole loop state on the wire: the region (null = none) and any pending manual in-point. */
+export interface WireLoopState {
+  loop: WireLoop | null;
+  inPoint: number | null;
+}
+
 export type Intent =
   | { kind: "crossfade"; value: number }
   | { kind: "tempoRange"; value: number } // global tempo-fader range (±%)
@@ -226,12 +239,27 @@ export type Intent =
   // merged into one, which is exactly what stemsAck exists to stop. Queue time is set by OTHER work, so
   // a queued host must HEARTBEAT (it has no progress of its own to gate on); see STEM_ACK_HEARTBEAT_MS.
   | { kind: "stemsAck"; deck: DeckId; model: string; state: "queued" | "loading" | "separating" | "refused"; reason?: string; pct?: number }
-  | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean } // absolute loop region (fine-adjust / move)
+  // Absolute loop region (fine-adjust / move). `beats` (the sender's own count, for the size
+  // highlight) and `position` (where the move put the sender's head) are optional: older peers omit them.
+  | { kind: "loopBounds"; deck: DeckId; start: number; end: number; active: boolean; beats?: number; position?: number }
+  // `position` on play/pause = where the SENDER's head was when it started/stopped (a quantized start
+  // lands on the beat first). A receiver that is not already playing seeks there before playing, so
+  // both devices start from the same place rather than from wherever each one's needle sat.
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
   | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
-  | { kind: "loop"; deck: DeckId; action: "in" | "out" | "exit" | "reloop" | "beat"; beats?: number }
-  | { kind: "hotcue"; deck: DeckId; slot: number; action: "press" | "save" | "clear" }
+  // ★ A LOOP INTENT CARRIES ITS RESULT (operator, 2026-11-11: session sync audit). `action` is the
+  // gesture's name, which older peers still re-run at their own playhead; `state` is what the
+  // sender's deck HOLDS after it (region or none, pending in-point), applied verbatim by a newer
+  // receiver (no snap, no recompute), and `position` is where the gesture moved the sender's head
+  // (reloop, roll, recall, a shrunk loop). A loop roll and a SHIFT clear go out as action "exit" plus
+  // their state, because an action an older bundle does not know falls through to a beat loop there.
+  | { kind: "loop"; deck: DeckId; action: "in" | "out" | "exit" | "reloop" | "beat"; beats?: number; state?: WireLoopState; position?: number }
+  // ★ A HOT-CUE INTENT CARRIES ITS RESULT too: `cue` is the slot's cue time after the press (null =
+  // empty, or a saved loop), `loop` the saved loop on it, `position` where the press moved the
+  // sender's head (a jump, quantized or not, or a loop recall). Without them a press on an empty slot
+  // set a cue at the RECEIVER's playhead, and a jump went to whatever the receiver had stored.
+  | { kind: "hotcue"; deck: DeckId; slot: number; action: "press" | "save" | "clear"; cue?: number | null; loop?: WireLoop | null; position?: number }
   // A sampler pad fired in a session. SELF-CONTAINED so a guest reconstructs WITHOUT the
   // host's local pad store: a REGION pad (route A/B) carries its slice — the guest plays it
   // off its OWN decoded copy of that deck's track, so no audio crosses the wire — and `rate`

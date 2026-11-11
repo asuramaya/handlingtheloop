@@ -14,6 +14,7 @@ import { ValueCell } from "./ValueCell";
 import { useLongPress } from "./useLongPress";
 import { FxStrip, type FxStripCtl } from "./FxStrip";
 import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./quantizedTransport";
+import { jogMode } from "./jogMode";
 import { LevelFader } from "./LevelFader";
 
 // Per-stem cells (under the PITCH foot). Each is a level knob AND the mute toggle:
@@ -98,8 +99,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   const endRoll = () => {
     if (rolling.current == null) return;
     rolling.current = null;
-    deck.rollOut();
-    emit({ kind: "loop", deck: id, action: "exit" });
+    deck.rollOut(); // broadcasts the roll's result (inactive loop + snap-back position) via onLoopEdit
     refresh();
   };
   // Hot-cue HOLD: pressing a set hot cue and holding (past TAP_MS) previews from it (plays
@@ -289,12 +289,16 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
   // Broadcast the deck's current playhead as a seek (after a jump/cue) so co-DJs follow.
   const emitSeek = () => emit({ kind: "transport", deck: id, action: "seek", position: deck.position() });
   // Loop-boundary adjust mode (Shift-IN / Shift-OUT armed) takes priority: the jog
-  // buttons step the armed edge — until the loop is exited. Otherwise Shift moves the
-  // whole loop, and a plain press jumps the playhead — both by the deck's skip.
+  // buttons step the armed edge — until the loop is exited. Otherwise Shift (or a live
+  // loop) moves the whole loop, and a plain press jumps the playhead — both by the deck's skip.
+  // ★ A LIVE LOOP TRAVELS, AS ON THE KEYBOARD AND MIDI (operator, 2026-11-11: session sync audit):
+  // the on-screen arrows beat-jumped the head inside an active loop while the keys moved the loop.
+  // Adjust and move broadcast their absolute result themselves (deck.onLoopEdit).
   const jog = (beats: number) =>
     act(() => {
-      if (deck.adjusting) deck.adjustStep(beats);
-      else if (shift) deck.moveLoop(beats);
+      const jogHow = jogMode({ adjusting: !!deck.adjusting, shift, loopActive: !!deck.loop?.active });
+      if (jogHow === "adjust") deck.adjustStep(beats);
+      else if (jogHow === "move") deck.moveLoop(beats);
       else {
         deck.beatJump(beats);
         emitSeek();
@@ -363,8 +367,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
         {/* Beat-jump / loop-move row (SHIFT remaps it to move the loop; the ⌗ in
             the middle is the grid magnet, or the skip selector under SHIFT). */}
         <div className="jog">
-          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back` : shift ? "Move loop back" : "Jump back"} onClick={jog(-deck.skipBeats)}>◀◀<span className="kbd">↓</span></button>
-          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back a beat` : shift ? "Move loop back a beat" : "Back a beat"} onClick={jog(-1)}>◀<span className="kbd">←</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back` : shift || deck.loop?.active ? "Move loop back" : "Jump back"} onClick={jog(-deck.skipBeats)}>◀◀<span className="kbd">↓</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker back a beat` : shift || deck.loop?.active ? "Move loop back a beat" : "Back a beat"} onClick={jog(-1)}>◀<span className="kbd">←</span></button>
           {shift ? (
             <button
               className="jog-btn mag skip"
@@ -388,8 +392,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               ⌗<span className="kbd">G</span>
             </button>
           )}
-          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward a beat` : shift ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
-          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward a beat` : shift || deck.loop?.active ? "Move loop forward a beat" : "Forward a beat"} onClick={jog(1)}>▶<span className="kbd">→</span></button>
+          <button className="jog-btn" title={deck.adjusting ? `Nudge ${deck.adjusting} marker forward` : shift || deck.loop?.active ? "Move loop forward" : "Jump forward"} onClick={jog(deck.skipBeats)}>▶▶<span className="kbd">↑</span></button>
         </div>
 
         {/* SLIP moved to a Controls setting (it's a scrub behaviour); BRAKE is the Vinyl
@@ -407,7 +411,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               // Already armed → a plain tap disarms (no need to re-hold Shift to release).
               if (locked) return; // watch-only: a loop is the host's to place
               if (shift || e.shiftKey || deck.adjusting === "in") deck.toggleAdjust("in");
-              else { deck.loopIn(); emit({ kind: "loop", deck: id, action: "in" }); }
+              else deck.loopIn(); // broadcasts its absolute result via deck.onLoopEdit
               refresh();
             }}
           >
@@ -420,7 +424,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               // Already armed → a plain tap disarms (no need to re-hold Shift to release).
               if (locked) return; // watch-only
               if (shift || e.shiftKey || deck.adjusting === "out") deck.toggleAdjust("out");
-              else { deck.loopOut(); emit({ kind: "loop", deck: id, action: "out" }); }
+              else deck.loopOut();
               refresh();
             }}
           >
@@ -432,16 +436,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
             title={shift ? "Clear the loop" : deck.loop && !deck.loop.active ? "Reloop" : "Exit loop"}
             onClick={(e) => {
               if (locked) return; // watch-only
-              if (shift || e.shiftKey) {
-                deck.clearLoop();
-                emit({ kind: "loop", deck: id, action: "exit" });
-              } else if (deck.loop?.active) {
-                deck.exitLoop();
-                emit({ kind: "loop", deck: id, action: "exit" });
-              } else {
-                deck.reloop();
-                emit({ kind: "loop", deck: id, action: "reloop" });
-              }
+              // Each broadcasts its own result (a clear wipes the region on receivers too).
+              if (shift || e.shiftKey) deck.clearLoop();
+              else if (deck.loop?.active) deck.exitLoop();
+              else deck.reloop();
               refresh();
             }}
           >
@@ -504,8 +502,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   e.preventDefault();
                   e.currentTarget.setPointerCapture(e.pointerId);
                   rolling.current = s.n;
-                  deck.setBeatLoop(s.n);
-                  emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
+                  deck.setBeatLoop(s.n); // broadcasts its region via deck.onLoopEdit
                   refresh();
                 }}
                 onPointerUp={endRoll}
@@ -515,13 +512,8 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   if (deck.padMode === "roll") return; // ROLL handled by the pointer events above
                   if (shift || e.shiftKey) return; // LOOP-mode pad+shift is freed (was roll) — no-op
                   // Re-clicking the ACTIVE size exits; a different size resizes; else set.
-                  if (active) {
-                    deck.exitLoop();
-                    emit({ kind: "loop", deck: id, action: "exit" });
-                  } else {
-                    deck.setBeatLoop(s.n);
-                    emit({ kind: "loop", deck: id, action: "beat", beats: s.n });
-                  }
+                  if (active) deck.exitLoop();
+                  else deck.setBeatLoop(s.n);
                   refresh();
                 }}
               >

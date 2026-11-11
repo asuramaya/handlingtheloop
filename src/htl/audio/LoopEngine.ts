@@ -19,6 +19,22 @@ export interface Loop {
   beats: number;
 }
 
+/** What a local loop mutation did, handed to the session broadcaster (LoopHost.onLoopEdit).
+ *  `action` is the gesture's NAME (the wire carries it for older peers and for logs); the RESULT is
+ *  read off the engine (loopState) by the broadcaster. `seek` is where the mutation moved the
+ *  playhead, when it did (reloop / recall / roll / a shrunk loop pulling the head back). */
+export type LoopEditAction = "in" | "out" | "beat" | "reloop" | "exit" | "roll" | "clear" | "bounds";
+export interface LoopEdit {
+  action: LoopEditAction;
+  beats?: number;
+  seek?: number;
+}
+/** The absolute loop state a session carries: the region (or none) and any pending manual in-point. */
+export interface LoopState {
+  loop: Loop | null;
+  inPoint: number | null;
+}
+
 /** The transport primitives LoopEngine needs from its deck — supplied as bound
  *  callbacks so the deck's private clock/worklet internals stay private. */
 export interface LoopHost {
@@ -35,8 +51,9 @@ export interface LoopHost {
   playing(): boolean;
   loaded(): boolean;
   quantize(): boolean;
-  /** Fired after a boundary edit so the App can broadcast the region to a session. */
-  onLoopEdit(): void;
+  /** Fired after EVERY local loop mutation so the App can broadcast the absolute result to a
+   *  session. Never fired by the apply* paths (a peer's result, a snapshot, a tick heal). */
+  onLoopEdit(edit: LoopEdit): void;
 }
 
 export class LoopEngine {
@@ -50,6 +67,52 @@ export class LoopEngine {
   adjusting: "in" | "out" | null = null;
 
   constructor(private host: LoopHost) {}
+
+  // ★ EVERY LOCAL LOOP MUTATION ENDS IN ONE ABSOLUTE BROADCAST (operator, 2026-11-11: session sync
+  // audit). in/out/exit/reloop/roll/clear/recall never fired onLoopEdit, so the session heard only
+  // the gesture's NAME and every receiver re-ran it at ITS playhead, ~100 ms later, on ITS grid and
+  // ITS quantize flag: different regions, a whole beat off about one press in five with quantize on,
+  // and a lost IN turned the next OUT into a no-op. The broadcaster now reads the RESULT
+  // (loopState) after the mutation, and `seek` says where the head was moved, if anywhere.
+  private seeked: number | null = null;
+  private seekTo(t: number) {
+    this.seeked = t;
+    this.host.seek(t);
+  }
+  private edited(action: LoopEditAction, beats?: number) {
+    const seek = this.seeked;
+    this.seeked = null;
+    this.host.onLoopEdit({ action, ...(beats != null ? { beats } : {}), ...(seek != null ? { seek } : {}) });
+  }
+  /** The absolute loop state — what a session broadcast carries. */
+  loopState(): LoopState {
+    return { loop: this.loop ? { ...this.loop } : null, inPoint: this.loopInPoint };
+  }
+  /** Adopt a peer's absolute loop state VERBATIM: no snap, no recompute, no broadcast. `inPoint`
+   *  undefined leaves the pending in-point alone (a loopBounds message does not carry it); `seek`
+   *  is where the sender's mutation put its playhead. Without a seek, a playing head left outside a
+   *  freshly active region is pulled to its start, as setBeatLoop does locally. */
+  applyLoopState(loop: { start: number; end: number; active: boolean; beats?: number } | null, inPoint?: number | null, seek?: number) {
+    if (loop && !(loop.end > loop.start)) return; // inverted / NaN region: ignore (as applyLoopRegion)
+    const wasActive = !!this.loop?.active;
+    if (wasActive && !loop?.active) this.host.rebaseClock(); // anchor before unwrapping
+    else if (loop?.active) this.host.reanchorClock(); // phase-lock across the reshape
+    this.loop = loop ? { active: loop.active, start: loop.start, end: loop.end, beats: loop.beats ?? this.loopBeats({ ...loop, beats: 0 }) } : null;
+    if (inPoint !== undefined) this.loopInPoint = inPoint;
+    if (!this.loop) this.adjusting = null;
+    this.applyLoop();
+    if (seek != null) this.host.seek(seek);
+    else if (this.loop?.active && this.host.playing()) {
+      const pos = this.host.position();
+      if (pos < this.loop.start || pos > this.loop.end) this.host.seek(this.loop.start);
+    }
+  }
+  /** Adopt a peer's hot-cue slot VERBATIM (the cue time, or the saved loop on it). No broadcast. */
+  applyHotCue(i: number, cue: number | null, loop: { start: number; end: number; beats?: number } | null) {
+    if (i < 0 || i >= HOT_CUE_COUNT) return;
+    this.hotCues[i] = loop ? null : cue;
+    this.hotLoops[i] = loop && loop.end > loop.start ? { active: false, start: loop.start, end: loop.end, beats: loop.beats ?? this.loopBeats({ active: false, start: loop.start, end: loop.end, beats: 0 }) } : null;
+  }
 
   /** Clear all loop/cue state (a fresh track load). */
   reset() {
@@ -109,7 +172,8 @@ export class LoopEngine {
     if (!l) return;
     this.loop = { ...l, active: true };
     this.applyLoop();
-    this.host.seek(l.start);
+    this.seekTo(l.start);
+    this.edited("reloop");
   }
 
   // --- loops ---
@@ -139,7 +203,7 @@ export class LoopEngine {
     // doesn't run past the new loopEnd before wrapping.
     if (this.host.playing()) {
       const pos = this.host.position();
-      if (pos < start || pos > end) this.host.seek(start);
+      if (pos < start || pos > end) this.seekTo(start);
     }
     // ★ BROADCAST THE ABSOLUTE REGION TOO, because `beats` is not a portable quantity. The
     // {kind:"loop", action:"beat"} intent carries a COUNT, and the receiver resolves it against ITS
@@ -152,7 +216,7 @@ export class LoopEngine {
     // This fires the same callback loop fine-adjust already uses, so the session hears the region
     // the DJ actually set rather than its own re-derivation of the count. Absolute wins because
     // absolute is the only thing both devices agree about.
-    this.host.onLoopEdit();
+    this.edited("beat", beats);
   }
 
   // FLX4-style manual loop. With no active loop: tap IN to drop the entry point,
@@ -165,10 +229,11 @@ export class LoopEngine {
       this.loop.start = Math.min(t, this.loop.end - 1e-3);
       this.loop.beats = this.loopBeats(this.loop);
       this.applyLoop();
-      if (this.host.playing() && this.host.position() < this.loop.start) this.host.seek(this.loop.start);
+      if (this.host.playing() && this.host.position() < this.loop.start) this.seekTo(this.loop.start);
     } else {
       this.loopInPoint = t;
     }
+    this.edited("in");
   }
   loopOut() {
     const t = this.maybeSnap(this.host.position());
@@ -178,6 +243,7 @@ export class LoopEngine {
         this.loop.end = t;
         this.loop.beats = this.loopBeats(this.loop);
         this.applyLoop();
+        this.edited("out");
       }
       return;
     }
@@ -185,10 +251,11 @@ export class LoopEngine {
     const start = this.loopInPoint;
     const end = t;
     this.loopInPoint = null;
-    if (end <= start) return;
+    if (end <= start) return void this.edited("out"); // the in-point is spent either way: say so
     this.loop = { active: true, start, end, beats: 0 };
     this.loop.beats = this.loopBeats(this.loop);
     this.applyLoop();
+    this.edited("out");
   }
 
   private loopBeats(loop: Loop): number {
@@ -222,15 +289,16 @@ export class LoopEngine {
     this.applyLoop();
     if (this.host.playing() && this.loop.active) {
       const pos = this.host.position();
-      if (pos < start || pos > start + len) this.host.seek(start);
+      if (pos < start || pos > start + len) this.seekTo(start);
     }
-    this.host.onLoopEdit();
+    this.edited("bounds");
   }
   reloop() {
     if (!this.loop) return;
     this.loop.active = true;
     this.applyLoop();
-    this.host.seek(this.loop.start);
+    this.seekTo(this.loop.start);
+    this.edited("reloop");
   }
 
   toggleLoop() {
@@ -238,6 +306,7 @@ export class LoopEngine {
     if (this.loop.active) this.host.rebaseClock(); // turning OFF: anchor before unwrapping
     this.loop.active = !this.loop.active;
     this.applyLoop();
+    this.edited(this.loop.active ? "reloop" : "exit");
   }
   exitLoop() {
     if (!this.loop) return;
@@ -245,6 +314,7 @@ export class LoopEngine {
     this.loop.active = false;
     this.adjusting = null; // leaving the loop ends any boundary edit (no stuck highlight)
     this.applyLoop();
+    this.edited("exit");
   }
 
   /** Exit an active loop as a "loop roll": instead of staying put (exitLoop), jump
@@ -258,10 +328,11 @@ export class LoopEngine {
       // Raw (un-wrapped) offset = where playback would have reached with no loop.
       const raw = this.host.rawOffset();
       this.applyLoop();
-      this.host.seek(Math.max(0, Math.min(this.host.duration(), raw)));
+      this.seekTo(Math.max(0, Math.min(this.host.duration(), raw)));
     } else {
       this.applyLoop();
     }
+    this.edited("roll");
   }
 
   /** Wipe the loop entirely (region + any pending in-point), so the deck plays
@@ -272,6 +343,7 @@ export class LoopEngine {
     this.loopInPoint = null;
     this.adjusting = null;
     this.applyLoop();
+    this.edited("clear");
   }
 
   // --- loop-boundary fine-adjust (Shift-IN / Shift-OUT) ---
@@ -288,7 +360,10 @@ export class LoopEngine {
       return null;
     }
     if (which === "in") {
-      if (!this.loop && this.loopInPoint == null) this.loopInPoint = this.maybeSnap(this.host.position());
+      if (!this.loop && this.loopInPoint == null) {
+        this.loopInPoint = this.maybeSnap(this.host.position());
+        this.edited("in");
+      }
       this.adjusting = "in";
     } else {
       if (!this.loop && this.loopInPoint != null) this.loopOut(); // close in→here, then adjust the end
@@ -315,7 +390,7 @@ export class LoopEngine {
         this.loop.start = Math.min(pos, this.loop.end - 1e-3);
         this.loop.beats = this.loopBeats(this.loop);
         this.applyLoop();
-        if (this.host.playing() && this.host.position() < this.loop.start) this.host.seek(this.loop.start);
+        if (this.host.playing() && this.host.position() < this.loop.start) this.seekTo(this.loop.start);
       } else {
         this.loopInPoint = pos;
       }
@@ -324,7 +399,7 @@ export class LoopEngine {
       this.loop.beats = this.loopBeats(this.loop);
       this.applyLoop();
     }
-    if (this.loop) this.host.onLoopEdit(); // broadcast the new region to a session
+    this.edited(this.loop ? "bounds" : "in"); // broadcast the new region (or in-point) to a session
   }
   /** Continuous nudge of the adjusted boundary by `deltaSec` (waveform drag). The
    *  lock follows the grid magnet: quantize on → the boundary snaps to the nearest

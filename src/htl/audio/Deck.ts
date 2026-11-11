@@ -11,7 +11,7 @@ import { stemViewGeometryAgrees, type StemPick } from "./stemViewGeometry";
 import { stemLaneGeometryAgrees, type StemLane } from "./stemLaneGeometry";
 import { stemsLostOnLoad } from "./stemsLost";
 import { BAND_BUCKETS, MAX_BUCKETS } from "./stemViewBudget";
-import { LoopEngine } from "./LoopEngine";
+import { LoopEngine, type LoopEdit } from "./LoopEngine";
 export { HOT_CUE_COUNT, HOT_CUE_BANK, type Loop } from "./LoopEngine";
 import { HOT_CUE_BANK } from "./LoopEngine";
 import { JogEngine } from "./JogEngine";
@@ -444,10 +444,10 @@ export class Deck {
   get loopInPoint() { return this.loops.loopInPoint; }
   set loopInPoint(v) { this.loops.loopInPoint = v; }
   get adjusting() { return this.loops.adjusting; }
-  /** Fired after a loop BOUNDARY edit (fine-adjust / move) so the App can broadcast the
-   *  absolute region to a session (in/out/exit emit their own intents; this covers the
-   *  nudge/drag/move paths those don't). Not fired for plain in/out/exit/beat loops. */
-  onLoopEdit?: () => void;
+  /** Fired after EVERY local loop mutation (in/out/beat/exit/reloop/roll/clear/move/adjust/recall)
+   *  so the App can broadcast the absolute result to a session (★ operator, 2026-11-11: session sync
+   *  audit). Never fired by applyLoopState/applyLoopRegion (a peer's or a tick's region). */
+  onLoopEdit?: (edit: LoopEdit) => void;
 
   // --- follower visual clock (shared session) ---
   // A co-DJ mirrors the anchor's ~12 Hz playhead tick. Reading the LOCAL audio clock
@@ -489,7 +489,7 @@ export class Deck {
       playing: () => this._playing,
       loaded: () => this._loaded,
       quantize: () => this.quantizeOn,
-      onLoopEdit: () => this.onLoopEdit?.(),
+      onLoopEdit: (edit) => this.onLoopEdit?.(edit),
     });
     // The FX rack is the deck's channel-strip device chain. The EQ is the first
     // (pinned, but reorderable) device; new effects (delay/reverb/chorus) slot in
@@ -2327,6 +2327,9 @@ export class Deck {
   loopOut() { this.loops.loopOut(); }
   loopRegion() { return this.loops.loopRegion(); }
   applyLoopRegion(start: number, end: number, active: boolean) { this.loops.applyLoopRegion(start, end, active); }
+  loopState() { return this.loops.loopState(); }
+  applyLoopState(loop: { start: number; end: number; active: boolean; beats?: number } | null, inPoint?: number | null, seek?: number) { this.loops.applyLoopState(loop, inPoint, seek); }
+  applyHotCue(i: number, cue: number | null, loop: { start: number; end: number; beats?: number } | null) { this.loops.applyHotCue(i, cue, loop); }
   moveLoop(beats: number) { this.loops.moveLoop(beats); }
   reloop() { this.loops.reloop(); }
   toggleLoop() { this.loops.toggleLoop(); }

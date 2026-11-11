@@ -18,6 +18,10 @@ import { applyBoardAction } from "../board/boardActions";
 import { rackDelta } from "../audio/fxSnapshotReconcile";
 import type { Deck } from "../audio/Deck";
 import { applyIntent, type IntentDeck, type IntentEngine, type IntentHost } from "./applyIntent";
+import { LoopEngine, type LoopEdit } from "../audio/LoopEngine";
+import { nearestBeat, type Beatgrid } from "../analysis/analyze";
+import { loopEditIntent } from "./loopWire";
+import { isApplyingRemote } from "./remoteApply";
 
 type BoardDeck = Deck;
 import type { DeckId, FxChainSlot, FxSlot, Intent, StemName } from "./protocol";
@@ -52,12 +56,43 @@ export class FakeDeck implements IntentDeck {
   filter = 0;
   pitch = 0;
   playing = false;
-  position = 0;
-  cuePoint = 0;
+  /** The playhead (seconds). A FIELD here so a test can put two devices at different places; the
+   *  Deck-shaped reader is position(). */
+  pos = 0;
+  position(): number {
+    return this.pos;
+  }
   skipBeats = 4;
-  loop: { start: number; end: number; active: boolean } | null = null;
-  beatLoop = 0;
-  hotCues: (number | null)[] = Array(16).fill(null); // two banks (HOT_CUE_COUNT)
+  // ★ THE LOOP / CUE STATE IS THE REAL LoopEngine (operator, 2026-11-11: session sync audit). A fake
+  // that stored whatever arrived could not show that a re-run at the receiver's playhead, on the
+  // receiver's grid and quantize flag, lands somewhere else, which was the whole bug. The engine runs
+  // against this deck's own playhead, grid (`grid`) and quantize toggle, exactly as on a device.
+  grid: Beatgrid | null = null;
+  duration = 300;
+  /** Where the un-wrapped clock would be (rollOut's snap-back target); a test sets it. */
+  raw = 0;
+  /** Set by SimDevice: the deck reports a LOCAL loop mutation, as Deck.onLoopEdit does in the app. */
+  onLoopEdit?: (edit: LoopEdit) => void;
+  readonly loops = new LoopEngine({
+    position: () => this.pos,
+    seek: (t) => this.seek(t),
+    reanchorClock: () => {},
+    rebaseClock: () => {},
+    rawOffset: () => this.raw,
+    postLoop: () => {},
+    beatgrid: () => this.grid,
+    duration: () => this.duration,
+    playing: () => this.playing,
+    loaded: () => true,
+    quantize: () => !!this.toggles.quantize,
+    onLoopEdit: (edit) => this.onLoopEdit?.(edit),
+  });
+  get cuePoint() { return this.loops.cuePoint; }
+  set cuePoint(v: number) { this.loops.cuePoint = v; }
+  get loop() { return this.loops.loop; }
+  get loopInPoint() { return this.loops.loopInPoint; }
+  get hotCues() { return this.loops.hotCues; }
+  get hotLoops() { return this.loops.hotLoops; }
   /** Every gesture that reached this deck, in order — the receipt a failure is read off. */
   log: string[] = [];
   // Enough of the transport/analysis surface for the REAL SmartFader to run against this deck.
@@ -229,19 +264,38 @@ export class FakeDeck implements IntentDeck {
   setStemMute(stem: StemName, muted: boolean) { this.stemMutes[stem] = muted; }
   play() { this.playing = true; this.log.push("play"); }
   pause() { this.playing = false; this.log.push("pause"); }
-  seek(p: number) { this.position = p; this.log.push(`seek ${p}`); }
+  togglePlay() { if (this.playing) this.pause(); else this.play(); }
+  seek(p: number) { this.pos = p; this.log.push(`seek ${p}`); }
   scrubBegin() { this.log.push("scrubBegin"); }
   scrubMove(d: number) { this.log.push(`scrubMove ${d}`); }
   scrubEnd() { this.log.push("scrubEnd"); }
-  loopIn() { this.log.push("loopIn"); }
-  loopOut() { this.log.push("loopOut"); }
-  exitLoop() { this.loop = null; this.log.push("exitLoop"); }
-  reloop() { this.log.push("reloop"); }
-  setBeatLoop(b: number) { this.beatLoop = b; this.log.push(`beatLoop ${b}`); }
-  hotCue(slot: number) { this.log.push(`hotCue ${slot}`); }
-  saveLoop(slot: number) { this.hotCues[slot] = this.position; }
-  clearHotCue(slot: number) { this.hotCues[slot] = null; }
-  applyLoopRegion(start: number, end: number, active: boolean) { this.loop = { start, end, active }; }
+  // The loop surface — the real engine, with a receipt.
+  loopIn() { this.log.push("loopIn"); this.loops.loopIn(); }
+  loopOut() { this.log.push("loopOut"); this.loops.loopOut(); }
+  exitLoop() { this.log.push("exitLoop"); this.loops.exitLoop(); }
+  reloop() { this.log.push("reloop"); this.loops.reloop(); }
+  setBeatLoop(b: number) { this.log.push(`beatLoop ${b}`); this.loops.setBeatLoop(b); }
+  rollOut() { this.log.push("rollOut"); this.loops.rollOut(); }
+  clearLoop() { this.log.push("clearLoop"); this.loops.clearLoop(); }
+  moveLoop(beats: number) { this.log.push(`moveLoop ${beats}`); this.loops.moveLoop(beats); }
+  toggleAdjust(which: "in" | "out") { return this.loops.toggleAdjust(which); }
+  adjustStep(units: number) { this.loops.adjustStep(units); }
+  setCue() { this.loops.setCue(); }
+  hotCue(slot: number) { this.log.push(`hotCue ${slot}`); this.loops.hotCue(slot); }
+  saveLoop(slot: number) { this.loops.saveLoop(slot); }
+  clearHotCue(slot: number) { this.loops.clearHotCue(slot); }
+  slotIsSet(slot: number) { return this.loops.slotIsSet(slot); }
+  applyLoopRegion(start: number, end: number, active: boolean) { this.loops.applyLoopRegion(start, end, active); }
+  applyLoopState(loop: { start: number; end: number; active: boolean; beats?: number } | null, inPoint?: number | null, seek?: number) { this.loops.applyLoopState(loop, inPoint, seek); }
+  applyHotCue(slot: number, cue: number | null, loop: { start: number; end: number; beats?: number } | null) { this.loops.applyHotCue(slot, cue, loop); }
+  loopState() { return this.loops.loopState(); }
+  // The quantize surface quantizedTransport.ts drives. Deterministic stand-in for Deck.quantized:
+  // grid lock on → land on the nearest beat of THIS deck's grid at once (no timer); off → as asked.
+  quantizePending = false;
+  cancelQuantized() {}
+  quantized(target: number, run: (pos: number) => void) {
+    run(this.toggles.quantize && this.grid ? nearestBeat(this.grid, target) : target);
+  }
 
   /** The comparable state — what "both devices agree" means, concretely. Chain IDS ARE EXCLUDED
    *  on purpose: they are per-deck sequence numbers and are never expected to match. Names are. */
@@ -266,8 +320,9 @@ export class FakeDeck implements IntentDeck {
       cuePoint: this.cuePoint,
       skipBeats: this.skipBeats,
       loop: this.loop,
-      beatLoop: this.beatLoop,
+      loopInPoint: this.loopInPoint,
       hotCues: this.hotCues,
+      hotLoops: this.hotLoops,
       keylockPinnedOff: this.keylockPinnedOff,
     };
   }
@@ -309,7 +364,22 @@ export class SimDevice {
   readonly hostCalls: string[] = [];
   /** Set by Session so a gesture can go out on the wire. */
   wire: ((intent: Intent, from: SimDevice) => void) | null = null;
-  constructor(readonly name: string) {}
+  constructor(readonly name: string) {
+    // The App's loopEdit wiring, reproduced: every LOCAL loop mutation broadcasts its absolute
+    // result once, and nothing is broadcast while a peer's intent is being applied.
+    for (const id of ["A", "B"] as DeckId[]) {
+      const deck = this.engine.deck(id);
+      deck.onLoopEdit = (edit) => {
+        if (isApplyingRemote()) return;
+        this.send(loopEditIntent(id, edit, deck.loopState()));
+      };
+    }
+  }
+  /** Put an intent on the wire WITHOUT applying it here: the local half already happened (the
+   *  gesture ran on this device's deck), which is how a result-carrying emit works in the app. */
+  send(intent: Intent): void {
+    this.emit(intent, { local: false });
+  }
 
   readonly host: IntentHost = {
     automix: (a) => this.hostCalls.push(`automix:${a}`),

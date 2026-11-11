@@ -283,8 +283,10 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             if (rel) {
               const i = Number(rel[1]) - 1;
               if (deck.padMode === "roll") {
+                // ★ The roll's RESULT (inactive loop + the snap-back position) goes out through
+                // deck.onLoopEdit; the bare "exit" sent here left receivers at the wrapped position
+                // (operator, 2026-11-11: session sync audit).
                 deck.rollOut();
-                emitRef.current({ kind: "loop", deck: id, action: "exit" });
                 refresh();
               } else if (deck.padMode === "fx" || deck.padMode === "fx2") {
                 // ★ PARITY. A controller pad releases through the SAME gesture the finger and the

@@ -17,6 +17,7 @@ import { BoardBar } from "./components/BoardBar";
 import { useSampler, deckPadBase } from "./components/useSampler";
 import { fxPadArg, fxPadIsOn, fxPadPress, fxPadRelease, padsForDeck } from "./components/fxPads";
 import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./components/quantizedTransport";
+import { jogMode } from "./components/jogMode";
 import { markerStyleOf } from "./components/markerStyle";
 import { searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
@@ -157,6 +158,9 @@ import { SpineContext, useSpine, type Spine } from "./App/spine";
 import { fxBypassIntent } from "@htl/room/fxWire";
 import { scrubBegin, scrubEnd, scrubIdle, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
 import { isRemoteLoopApply, noteLocalIntent } from "@htl/room/localGestures";
+import { hotCueResultIntent, loopEditIntent } from "@htl/room/loopWire";
+import { isApplyingRemote } from "@htl/room/remoteApply";
+import type { LoopEdit } from "@htl/audio/LoopEngine";
 import { registerBoardAction } from "@htl/board/boardActions";
 
 type DeckId = "A" | "B";
@@ -1015,15 +1019,12 @@ function AppBody() {
     // Beat-loop trigger (index = key order U I O P H J K L). Re-triggering the ACTIVE
     // size exits the loop; a different size resizes it (setBeatLoop keeps the start);
     // otherwise set. One toggle shared by keyboard, MIDI pads, and on-screen buttons.
-    const beatLoop = (deck: DeckRef, id: DeckId, i: number) => {
+    // The session hears the RESULT through deck.onLoopEdit (one absolute broadcast per mutation,
+    // see the loopEdit wiring below), so no loop site here emits its own intent.
+    const beatLoop = (deck: DeckRef, _id: DeckId, i: number) => {
       const beats = LOOP_BEATS[i];
-      if (deck.loop?.active && deck.loop.beats === beats) {
-        deck.exitLoop();
-        emitRef.current({ kind: "loop", deck: id, action: "exit" });
-      } else {
-        deck.setBeatLoop(beats);
-        emitRef.current({ kind: "loop", deck: id, action: "beat", beats });
-      }
+      if (deck.loop?.active && deck.loop.beats === beats) deck.exitLoop();
+      else deck.setBeatLoop(beats);
     };
     // Keyboard/MIDI FX pad (1-8 in fx mode): no key-up, so a hold-FX toggles. Emit the
     // resulting phase over the board bus so it syncs + records like the on-screen pad.
@@ -1046,7 +1047,8 @@ function AppBody() {
       emitRef.current({ kind: "board", deck: id, id: "padMode", arg: m });
     };
     const jogBy = (deck: DeckRef, id: DeckId, s: boolean, beats: number) => {
-      if (deck.adjusting) {
+      const mode = jogMode({ adjusting: !!deck.adjusting, shift: s, loopActive: !!deck.loop?.active }); // shared with the on-screen arrows
+      if (mode === "adjust") {
         // Boundary-adjust mode: arrows step the loop edge; lock follows the grid
         // magnet (snap to beats when on, fine sub-beat nudge when off).
         deck.adjustStep(beats);
@@ -1055,7 +1057,7 @@ function AppBody() {
       // With a live loop, a jog TRAVELS the whole loop (rekordbox beat-jump-with-loop)
       // rather than skipping the playhead — shift forces it too. Otherwise it's a plain
       // beat-jump by the deck's skip (beatJump moves relative, so sub-beat skips advance).
-      if (s || deck.loop?.active) deck.moveLoop(beats);
+      if (mode === "move") deck.moveLoop(beats);
       else {
         deck.beatJump(beats);
         emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
@@ -1076,7 +1078,7 @@ function AppBody() {
       if (s) {
         if (deck.loop && !deck.slotIsSet(slot)) {
           deck.saveLoop(slot);
-          emitRef.current({ kind: "hotcue", deck: id, slot, action: "save" });
+          emitRef.current(hotCueResultIntent(id, slot, "save", deck)); // carries the saved region
         } else {
           deck.clearHotCue(slot);
           emitRef.current({ kind: "hotcue", deck: id, slot, action: "clear" });
@@ -1215,29 +1217,21 @@ function AppBody() {
         else deck.setPitch(deck.pitch + 1);
         emitRef.current({ kind: "control", deck: id, param: s ? "tempo" : "pitch", value: s ? deck.tempo : deck.pitch });
       },
-      loopIn: (deck, id, s) => {
+      loopIn: (deck, _id, s) => {
         // Shift arms fine-adjust; a plain tap while already armed disarms it (so you
         // don't have to re-hold Shift to release the lock).
+        // (Each loop call below broadcasts its own absolute result via deck.onLoopEdit.)
         if (s || deck.adjusting === "in") return void deck.toggleAdjust("in");
         deck.loopIn();
-        emitRef.current({ kind: "loop", deck: id, action: "in" });
       },
-      loopOut: (deck, id, s) => {
+      loopOut: (deck, _id, s) => {
         if (s || deck.adjusting === "out") return void deck.toggleAdjust("out");
         deck.loopOut();
-        emitRef.current({ kind: "loop", deck: id, action: "out" });
       },
-      loopExit: (deck, id, s) => {
-        if (s) {
-          deck.clearLoop(); // Shift: wipe the loop outright
-          emitRef.current({ kind: "loop", deck: id, action: "exit" });
-        } else if (deck.loop?.active) {
-          deck.exitLoop();
-          emitRef.current({ kind: "loop", deck: id, action: "exit" });
-        } else {
-          deck.reloop();
-          emitRef.current({ kind: "loop", deck: id, action: "reloop" });
-        }
+      loopExit: (deck, _id, s) => {
+        if (s) deck.clearLoop(); // Shift: wipe the loop outright (receivers wipe it too, not just exit)
+        else if (deck.loop?.active) deck.exitLoop();
+        else deck.reloop();
       },
       beatLoop0: (deck, id) => beatLoop(deck, id, 0),
       beatLoop1: (deck, id) => beatLoop(deck, id, 1),
@@ -2693,12 +2687,15 @@ function AppBody() {
     };
     engine.deckA.onStemsLost = stemsLost("A");
     engine.deckB.onStemsLost = stemsLost("B");
-    // Loop fine-adjust / move → broadcast the absolute region (emitRef no-ops unless
-    // controlling). in/out/exit/beat already emit their own loop intents.
-    const loopEdit = (id: DeckId) => () => {
-      if (isRemoteLoopApply()) return; // the tick follower's loop self-heal is not a gesture
-      const r = engine.deck(id).loopRegion();
-      if (r) emitRef.current({ kind: "loopBounds", deck: id, start: r.start, end: r.end, active: r.active });
+    // ★ EVERY LOCAL LOOP MUTATION → ONE ABSOLUTE BROADCAST (operator, 2026-11-11: session sync audit).
+    // The deck fires this after in/out/beat/exit/reloop/roll/clear/move/adjust/recall, from any surface
+    // (keyboard, MIDI, on-screen, automix), and the intent carries the RESULT (loopWire.loopEditIntent),
+    // so no call site emits its own loop intent any more. Silent while applying a peer's intent or a
+    // tick's loop heal (isApplyingRemote): re-broadcasting those is the echo that made a sender adopt
+    // its receiver's recomputed region. emitRef no-ops unless controlling.
+    const loopEdit = (id: DeckId) => (edit: LoopEdit) => {
+      if (isApplyingRemote() || isRemoteLoopApply()) return; // a peer's intent or the tick's loop heal
+      emitRef.current(loopEditIntent(id, edit, engine.deck(id).loopState()));
     };
     engine.deckA.onLoopEdit = loopEdit("A");
     engine.deckB.onLoopEdit = loopEdit("B");

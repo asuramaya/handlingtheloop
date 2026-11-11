@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Ticker } from "./lib/Ticker";
 import { createPortal } from "react-dom";
 import { ToolbarHostContext } from "./lib/toolbarHost";
 import { RowsStepper } from "./lib/RowsStepper";
@@ -876,6 +877,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                 <td className="col-num">{onDecks.length ? <span className="tt-decks">{badges}</span> : i + 1}</td>
                 <td className="col-thumb">{t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}</td>
                 <td className="col-title" title={t.title /* the upload's own title, in full */}>
+                  <div className="tt-cell">
                   {/* Fixed-width slot, so a title starts in the same place with or without dots. */}
                   {/* The # column (and the deck badge in it) is dropped in the narrow view, so the
                       badge is repeated here, shown only there (library.css, the 440px container). */}
@@ -887,7 +889,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   <span className="tt-marks">
                     <CachePips videoId={t.videoId} />
                   </span>
-                  {displayTrack(t.title, t.artist).title}
+                  <Ticker>{displayTrack(t.title, t.artist).title}</Ticker>
                   {(() => {
                     const alts = versionsOf(t);
                     if (!alts.length) return null;
@@ -902,9 +904,12 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                       </span>
                     );
                   })()}
+                  </div>
                 </td>
                 <td className="col-artist" title={t.artist}>
-                  {displayTrack(t.title, t.artist).artist}
+                  <div className="tt-cell">
+                    <Ticker>{displayTrack(t.title, t.artist).artist}</Ticker>
+                  </div>
                 </td>
                 <td className="col-bpm"><MetaChip kind="bpm">{t.bpm != null ? t.bpm.toFixed(1) : null}</MetaChip></td>
                 <td className="col-key"><MetaChip kind="key">{t.key || null}</MetaChip></td>

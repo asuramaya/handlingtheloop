@@ -1510,6 +1510,110 @@ td.col-num {
     bottom: 10px;
   }
 }
+/* ★ ONE LINE ON A PHONE (operator, 2026-11-10: "make this be on the same line"): the menu and
+   where you are, then the count, Cached / Stemmed and −/＋ on the SAME row; the search field is
+   the row under it. The name gives way first and scrolls (Ticker) when it does not fit; the filter
+   strip never wraps, it shrinks and swipes sideways. The field's own box dissolves (display:
+   contents) so its pieces can sit on two rows of the title bar; the icon and ✕ ride over the
+   input with negative margins rather than absolute positions, which have no box to anchor to. */
+@container (max-width: 639px) {
+  .settings-head.lib-head-row .lib-head-toggle,
+  .settings-head.lib-head-row.nav-open .lib-head-toggle {
+    flex: 0 1 auto;
+    max-width: 48%;
+  }
+  .settings-head.lib-head-row .lib-head-tools,
+  .lib-head-tools .tt-filter {
+    display: contents;
+  }
+  .lib-head-tools .tt-filter-trail {
+    order: 0;
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: 6px;
+    flex-wrap: nowrap;
+    justify-content: flex-start; /* overflow runs off the END, where the glide (useStripGlide) can reach it */
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .lib-head-tools .tt-filter-trail::-webkit-scrollbar {
+    display: none;
+  }
+  .lib-head-tools .tt-filter-trail > * {
+    flex: none;
+  }
+  .lib-head-tools .tt-filter-trail .tt-filter-count {
+    margin-right: auto;
+    margin-left: 0;
+  }
+  .lib-head-tools .tt-filter-ico {
+    order: 3;
+    position: relative;
+    left: auto;
+    bottom: auto;
+    z-index: 1;
+    margin: 0 -25px 0 12px; /* 13 px wide: takes no room on the line, sits inside the field */
+  }
+  .lib-head-tools .tt-filter-input {
+    order: 3;
+    flex: 1 0 100%;
+  }
+  .lib-head-tools .tt-filter-clear {
+    order: 3;
+    position: relative;
+    right: auto;
+    bottom: auto;
+    z-index: 1;
+    margin: 0 0 0 -30px;
+  }
+}
+/* ★ MENU OPEN: ONE LAYER (operator, 2026-11-10: "when the hamburger expands it should not show the
+   search bar because that's a second layer element"). With the sections covering the library, the
+   title bar is just ☰ and the name; the filters and field belong to the list underneath. */
+@container (max-width: 639px) {
+  .settings-head.lib-head-row.nav-open .lib-head-tools,
+  .settings-head.lib-head-row.nav-open .lib-head-rows {
+    display: none;
+  }
+  .settings-head.lib-head-row.nav-open .lib-head-toggle {
+    max-width: none;
+  }
+}
+/* The ticker box (lib/Ticker.tsx): clips, ellipsis while it fits, glides when it does not. */
+.ticker-box {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.ticker-inner {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.ticker-box.ticker .ticker-inner {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  animation: lane-ticker var(--ticker-dur, 8s) linear infinite alternate;
+}
+/* A table cell's content is one row: badges, pips, the ticking text taking what is left, +N. */
+.track-table td .tt-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.track-table td .tt-cell > .ticker-box {
+  flex: 1 1 auto;
+}
+.track-table td .tt-cell > :not(.ticker-box) {
+  flex: none;
+}
 /* An empty list's way forward ("Search for tracks", "Search everywhere for …"). */
 .lib-empty-action {
   display: block;

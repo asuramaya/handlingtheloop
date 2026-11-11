@@ -1052,14 +1052,14 @@
    ON it). Same 38px width so the grab zone + the pill's `left` math still line up. */
 .lfader-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 64px;
+  width: 38px;
   height: 20px;
   background: transparent;
   border: none;
   cursor: ew-resize;
 }
 .lfader-input::-moz-range-thumb {
-  width: 64px;
+  width: 38px;
   height: 20px;
   background: transparent;
   border: none;
@@ -1071,8 +1071,7 @@
 .lfader-val {
   position: absolute;
   top: 50%;
-  width: 64px;
-  gap: 5px;
+  width: 38px;
   height: 20px;
   transform: translate(-50%, -50%);
   display: flex;
@@ -1094,17 +1093,6 @@
   text-shadow: 0 1px 3px color-mix(in srgb, var(--bg) 92%, transparent), 0 0 2px var(--bg);
   white-space: nowrap;
 }
-/* The play glyphs either side of the level: lit while the deck plays, dim while paused. */
-.lfader-val .lfader-play {
-  font-size: 8px;
-  letter-spacing: -1px;
-  opacity: 0.32;
-  transition: opacity 0.15s, text-shadow 0.15s;
-}
-.lfader-val.is-playing .lfader-play {
-  opacity: 1;
-  text-shadow: 0 0 6px color-mix(in srgb, #fff 70%, transparent), 0 0 2px var(--bg);
-}
 .lfader.mirror .lfader-val span {
   display: inline-block;
   transform: scaleX(-1); /* counter deck A's mirrored track so the text reads normally */
@@ -1112,7 +1100,6 @@
 /* The crossfader handle is a touch taller (24px); its pill carries the A↔B blend colour of the side
    it landed on (--xpct snaps 0%→A, 100%→B), set inline on the value div. */
 .xbar-val {
-  width: 38px; /* the deck level handle grew to 64px for its play glyphs; the crossfader keeps its own thumb */
   height: 24px;
   background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);
@@ -2528,3 +2515,32 @@ body.no-glow .hw-btn.shift.on {
    .xtail in base.css), so the row reads as one continuous bar rather than three tiles. */
 .xrow > .xfader-bar .xbar-track { border-radius: 0; }
 .xfader-bar.xfader-off .xbar-val { filter: grayscale(0.7); }
+
+/* ★ PLAY STATE ON THE PLAY/TRIM CELL (operator, 2026-11-10: "a play/pause glyph that darkens and
+   lights up to the left and right sides of the number" — on the TRIM cell, which IS the play button
+   (tap = play/pause, drag = trim), not on the volume handle). A pause glyph left of the number lit
+   while paused, a play glyph right of it lit while playing: a first-time user can see at once which
+   state the deck is in and that this is the button that changes it. */
+.vcell.play .vcell-value::before,
+.vcell.play .vcell-value::after {
+  display: inline-block;
+  font-size: 0.55em;
+  vertical-align: middle;
+  opacity: 0.22;
+  transition: opacity 0.15s, text-shadow 0.15s, color 0.15s;
+}
+.vcell.play .vcell-value::before {
+  content: "❚❚";
+  letter-spacing: -1px;
+  margin-right: 0.45em;
+}
+.vcell.play .vcell-value::after {
+  content: "▶";
+  margin-left: 0.45em;
+}
+.vcell.play:not(.playing) .vcell-value::before,
+.vcell.play.playing .vcell-value::after {
+  opacity: 1;
+  color: var(--accent);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}

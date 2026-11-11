@@ -14,7 +14,29 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
-import { TIMED_ERR_ALPHA, decideFollowTick, decideTimedFollow, decideSnapshotDeck, decideStemConverge, decideTickResync, holdsForeignTrack, isAudibleDeckIntent, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import {
+  decideFollowTick,
+  decideLoopHeal,
+  decideTimedFollow,
+  decideSnapshotDeck,
+  decideStemConverge,
+  decideTickResync,
+  followTrimFor,
+  foldIntoLoop,
+  holdsForeignTrack,
+  inFlightAgeMs,
+  inLocalTransportGrace,
+  isAudibleDeckIntent,
+  loopDelta,
+  sameActiveLoop,
+  shouldStartOnDecode,
+  smoothFollowErr,
+  timedFollowError,
+  timedTickAge,
+  type FollowErrState,
+} from "@htl/room/sessionFollow";
+import { checkScrub, scrubBegin, scrubEnd, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
+import { sinceLocalLoopMs, sinceLocalTransportMs, withRemoteLoopApply } from "@htl/room/localGestures";
 import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
 import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
@@ -50,7 +72,7 @@ export interface SessionSyncDeps {
   resyncAt: MutableRefObject<Record<DeckId, number | null>>; // last divergence-reload attempt per deck; null = never
   resyncTries: MutableRefObject<Record<DeckId, number>>; //    consecutive attempts since this deck last landed
   loadingSince: MutableRefObject<Record<DeckId, number>>; //   the in-flight load's last sign of life (claim, chunk, decode, analysis)
-  scrubbing: MutableRefObject<Record<DeckId, boolean>>;
+  scrubbing: MutableRefObject<Record<DeckId, ScrubFlag>>; // see htl/room/scrubGuard (watchdog + cancel-safe tail)
   stemTouch: MutableRefObject<Record<DeckId, Record<string, number>>>;
   snapFollowRef: MutableRefObject<boolean>;
   followRef: MutableRefObject<boolean>;
@@ -230,6 +252,10 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         return;
       }
       pendingRoomLoad.current[id] = null;
+      // ★ A sign of life for THIS load from the moment it is targeted (operator, 2026-11-11: session
+      // sync audit): until loadTrackToDeck claims, the clock otherwise still held an older load's
+      // stamp and the tick resync could read a brand-new load as stuck. See inFlightAgeMs.
+      loadingSince.current[id] = performance.now();
       void loadTrackToDeck(id, track, restore)
         .catch(() => {})
         .finally(() => {
@@ -335,8 +361,8 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         if (shouldStartOnDecode({ snapPlaying: d.playing, deckPlaying: deck.playing, sinceLastTickMs: performance.now() - (lastTickAt.current[id] ?? 0) })) {
           event("room.follow", { deck: id, kind: "decode-start", pos: +d.position.toFixed(2) });
           engine.resume();
-          deck.seek(d.position);
-          deck.play();
+          deck.seek(d.position, { exact: true }); // follow-driven: no SYNC phase snap (Deck.play)
+          deck.play({ exact: true });
           followSeekAt.current[id] = performance.now();
         }
         any = true;
@@ -374,9 +400,15 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         },
         // The 250 ms tail lives here, with the ref it guards: tick-follow must stay suppressed
         // just past the end of a remote scrub or the next tick yanks the platter back.
+        // ★ Cancel-safe + watchdogged (operator, 2026-11-11: session sync audit): a tail only clears
+        // the scrub it ended, and a scrub whose end is lost expires in onRoomTick. See scrubGuard.
         scrub: (deckId, active) => {
-          if (active) scrubbing.current[deckId] = true;
-          else setTimeout(() => (scrubbing.current[deckId] = false), 250);
+          const f = scrubbing.current[deckId];
+          if (active) scrubBegin(f, performance.now(), false);
+          else {
+            const token = scrubEnd(f);
+            setTimeout(() => scrubTailDone(f, token), SCRUB_TAIL_MS);
+          }
         },
         ensureGuestStems: (deckId) => ensureGuestStemsRef.current(deckId),
         refresh,
@@ -412,6 +444,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // the tick follower starts the session's track at the live position once it lands.
         if (foreign) return;
       }
+      // A peer's jog move is proof its scrub is alive (the watchdog's clock), and starts one whose
+      // start was lost.
+      if (intent.kind === "jog" && intent.phase === "move") scrubMove(scrubbing.current[intent.deck], performance.now(), false);
       applyIntent(intent);
       refresh();
     },
@@ -425,12 +460,16 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   // tight threshold would seek every tick (the "skipping / drops" bug). So only correct a
   // LARGE desync while playing; align tightly only when paused (silent → no skip) and do a
   // clean catch-up seek on a play/pause flip.
-  const followErr = useRef<Record<DeckId, number | null>>({ A: null, B: null }); // smoothed timed-follow error (s)
+  const followErr = useRef<Record<DeckId, FollowErrState | null>>({ A: null, B: null }); // smoothed timed-follow error
   const onRoomTick = useCallback(
     (decks: TickDecks) => {
       if (!followRef.current) return; // not following → our playhead is our own
       let flipped = false;
       const now = performance.now();
+      // ★ THE TRIM IS A PER-TICK OUTPUT (operator, 2026-11-11: session sync audit): only the timed
+      // trim path sets one; every other path through this tick (untimed, hold, diverged, scrub, a
+      // deck missing from the tick) leaves 0, applied after the loop. See sessionFollow.followTrimFor.
+      const trimOut: Partial<Record<DeckId, number>> = {};
       (["A", "B"] as DeckId[]).forEach((id) => {
         const t = decks[id];
         const deck = engine.deck(id);
@@ -449,12 +488,24 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           tickVid: vid,
           loadedId: latest.current.loaded[id],
           // The age of the load itself, not of the last resync — "is THIS load stuck?" is a question
-          // only the load can answer (ruling ab419a94).
-          inFlightForMs: loadingThis ? now - (loadingSince.current[id] || now) : null,
+          // only the load can answer (ruling ab419a94). A load PARKED for a muted passenger is not in
+          // flight at all (inFlightAgeMs: the 4 Hz resync storm).
+          inFlightForMs: inFlightAgeMs({ loadingThis, deferred: vid != null && pendingRoomLoad.current[id]?.videoId === vid, now, since: loadingSince.current[id] }),
           sinceResyncMs: lastResync == null ? null : now - lastResync,
           attempts: resyncTries.current[id],
+          roomLoadTarget: roomLoadTarget.current[id],
         });
         if (resync === "drive") resyncTries.current[id] = 0; // landed on the anchor's track → backoff resets
+        else followErr.current[id] = null; // not driving → the next drive starts its smoothing over
+        if (resync === "empty") {
+          // The anchor's deck is EMPTY: nothing of ours should sound on it, and nothing drives it.
+          if (deck.playing) {
+            event("room.follow", { deck: id, kind: "silence-empty", loadedVid: latest.current.loaded[id] || null });
+            deck.pause();
+            flipped = true;
+          }
+          return;
+        }
         if (resync !== "drive") {
           if (resync === "load" || resync === "force-load") {
             resyncAt.current[id] = now;
@@ -501,7 +552,32 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // once its stems are in the worklet (releaseMixBuffer), and `!deck.buffer` then switched off
         // every follow tick for the rest of the track: a stemmed guest stopped starting, stopping and
         // catching up with the host the moment its stems landed.
-        if (!deck.hasLocalPcm || scrubbing.current[id]) return; // still loading, or don't fight a local scrub
+        // The scrub flag expires when its end never came (scrubGuard watchdog); a peer's scrub that
+        // expired also leaves our platter gripped, so let it go.
+        const scrub = checkScrub(scrubbing.current[id], now, deck.grabbing);
+        if (scrub === "expired") {
+          event("room.follow", { deck: id, kind: "scrub-expired" });
+          if (deck.grabbing) deck.scrubEnd();
+        }
+        if (!deck.hasLocalPcm || scrub === "active") {
+          followErr.current[id] = null;
+          return; // still loading, or don't fight a scrub
+        }
+        // ★ LOOP SELF-HEAL from the tick (decideLoopHeal): adopt the host's active loop region when
+        // ours differs, leave a loop the host has left — never within a moment of our own loop gesture.
+        // A REMOTE application: withRemoteLoopApply keeps any loop-edit broadcast hook silent.
+        const heal = decideLoopHeal({ tickLoop: t.loop, local: deck.loopRegion(), sinceLocalLoopMs: sinceLocalLoopMs(id, now) });
+        if (heal.kind !== "none") {
+          event("room.follow", { deck: id, kind: "loop-heal", action: heal.kind });
+          withRemoteLoopApply(() => (heal.kind === "apply" ? deck.applyLoopRegion(heal.s, heal.e, true) : deck.exitLoop()));
+          followErr.current[id] = null;
+          flipped = true;
+        }
+        const tickLoop = t.loop ?? null;
+        const deckInLoop = sameActiveLoop(tickLoop, deck.loopRegion());
+        // Our own play / pause / seek a moment ago: the anchor's tick may predate it, so no
+        // start / stop / seek this tick (sessionFollow.inLocalTransportGrace).
+        const graceHeld = inLocalTransportGrace(sinceLocalTransportMs(id, now), roomRef.current?.clockRtt() ?? null);
         // The drift-correction decision (see sessionFollow) → perform the named side effect.
         // A tick is a STALE snapshot of a moving clock and REAL rewinds arrive as seek INTENTS,
         // so a steady-playing follower is only ever pulled FORWARD (a lead is just latency, or a
@@ -512,88 +588,100 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // out with a speed trim or seeked when large. Otherwise (older host, clock not synced yet)
         // the untimed rules below.
         const sNow = roomRef.current?.serverNow() ?? null;
-        if (t.at != null && sNow != null) {
+        // An age outside the sane window means OUR clock estimate is wrong (a sleep, a new route):
+        // this tick is untimed rather than clamped and trusted (sessionFollow.timedTickAge).
+        const age = timedTickAge(sNow, t.at);
+        if (age != null) {
           const rate = t.rate && t.rate > 0 ? t.rate : deck.effectiveRate;
-          const age = Math.max(0, Math.min(5, (sNow - t.at) / 1000));
           const masterNow = t.playing ? t.pos + age * rate : t.pos;
           const lat = engine.audibleLatency() * rate;
-          // The trim acts on the error smoothed over ~1 s (TIMED_ERR_ALPHA): one tick's reading of
-          // the audio clock jitters by a render quantum, and a trim chasing that wobbles the pitch.
-          const rawErr = deck.position() - (t.playing ? masterNow + lat : masterNow);
-          const prevErr = followErr.current[id];
-          followErr.current[id] = prevErr == null || !deck.playing ? rawErr : prevErr * (1 - TIMED_ERR_ALPHA) + rawErr * TIMED_ERR_ALPHA;
-          const timed = decideTimedFollow({
+          const timedIn = {
             masterPlaying: t.playing,
             deckPlaying: deck.playing,
             masterNow,
             deckPos: deck.position(),
             deckLatency: lat,
             sinceFollowSeekMs: now - followSeekAt.current[id],
-            smoothErr: followErr.current[id] ?? undefined,
-          });
+            loop: tickLoop,
+            deckInLoop,
+          };
+          // The trim acts on the error smoothed over ~1 s (TIMED_ERR_ALPHA): one tick's reading of
+          // the audio clock jitters by a render quantum, and a trim chasing that wobbles the pitch.
+          // A jump-sized error (a wrap, a seek) is never averaged in (smoothFollowErr).
+          const { err: rawErr, target: heardTarget } = timedFollowError(timedIn);
+          followErr.current[id] = smoothFollowErr(followErr.current[id], rawErr, { vid: latest.current.loaded[id], now, deckPlaying: deck.playing });
+          let timed = decideTimedFollow({ ...timedIn, smoothErr: followErr.current[id]?.err });
+          if (graceHeld && timed.kind !== "trim") timed = { kind: "hold" };
           if (timed.kind !== "trim" && timed.kind !== "hold") {
             followErr.current[id] = null; // a jump: start over
             if (timed.kind !== "seek") event("room.follow", { deck: id, kind: timed.kind, errMs: Math.round((deck.position() - timed.target) * 1000) });
           }
+          // Every follow seek / start is EXACT: the anchor's tick says where this deck is, and a SYNC
+          // phase snap against our other deck (Deck.play) would land it off target, forever.
           if (timed.kind === "start") {
             engine.resume(); // iOS starts suspended
             deck.setFollowTrim(0);
-            deck.seek(timed.target);
-            deck.play();
+            deck.seek(timed.target, { exact: true });
+            deck.play({ exact: true });
             followSeekAt.current[id] = now;
             flipped = true;
           } else if (timed.kind === "stop") {
             deck.pause();
             deck.setFollowTrim(0);
-            if (Math.abs(deck.position() - timed.target) > 0.05) deck.seek(timed.target);
+            if (Math.abs(loopDelta(deck.position(), timed.target, deckInLoop ? tickLoop : null)) > 0.05) deck.seek(timed.target, { exact: true });
             followSeekAt.current[id] = now;
             flipped = true;
           } else if (timed.kind === "seek") {
             // The error is read BEFORE the seek: read after it, it was always ~0.
-            event("room.follow.seek", { deck: id, errMs: Math.round((deck.position() - timed.target) * 1000), rttMs: roomRef.current?.clockRtt() ?? null });
+            event("room.follow.seek", { deck: id, errMs: Math.round(rawErr * 1000), rttMs: roomRef.current?.clockRtt() ?? null });
             deck.setFollowTrim(0);
-            deck.seek(timed.target);
+            deck.seek(timed.target, { exact: true });
             followSeekAt.current[id] = now;
-          } else if (timed.kind === "trim") {
-            deck.setFollowTrim(timed.trim);
           } else if (timed.kind === "align") {
-            deck.seek(timed.target);
+            deck.seek(timed.target, { exact: true });
           }
-          deck.followTick(t.playing ? masterNow + lat : t.pos, t.playing, t.rate);
+          trimOut[id] = followTrimFor(timed); // the trim itself lands after the loop (trimOut)
+          deck.followTick(t.playing ? heardTarget : t.pos, t.playing, t.rate);
           convergeStems();
           return;
         }
+        followErr.current[id] = null; // untimed: no smoothed error survives into the next timed tick
+        // Untimed, but still loop-aware: the host's position folded into its loop, and ours compared
+        // the short way round when we loop the same region.
+        const masterPos = foldIntoLoop(t.pos, tickLoop);
         const action = decideFollowTick({
           masterPlaying: t.playing,
           deckPlaying: deck.playing,
-          deckPos: deck.position(),
-          masterPos: t.pos,
+          deckPos: deckInLoop ? masterPos + loopDelta(deck.position(), masterPos, tickLoop) : deck.position(),
+          masterPos,
           sinceFollowSeekMs: now - followSeekAt.current[id],
         });
-        if (action.kind !== "hold") event("room.follow", { deck: id, kind: action.kind, untimed: true, errMs: Math.round((deck.position() - t.pos) * 1000) });
-        if (action.kind === "start") {
+        if (action.kind !== "hold" && !graceHeld) event("room.follow", { deck: id, kind: action.kind, untimed: true, errMs: Math.round((deck.position() - masterPos) * 1000) });
+        if (graceHeld) {
+          // our own transport gesture is in flight: the tick may predate it (inLocalTransportGrace)
+        } else if (action.kind === "start") {
           engine.resume(); // iOS starts suspended
-          if (action.seek) deck.seek(t.pos); // catch up cleanly BEFORE the source starts
-          deck.play();
+          if (action.seek) deck.seek(masterPos, { exact: true }); // catch up cleanly BEFORE the source starts
+          deck.play({ exact: true });
           followSeekAt.current[id] = now;
           flipped = true;
         } else if (action.kind === "stop") {
           deck.pause();
-          if (action.seek) deck.seek(t.pos); // land on the master's paused position
+          if (action.seek) deck.seek(masterPos, { exact: true }); // land on the master's paused position
           followSeekAt.current[id] = now;
           flipped = true;
         } else if (action.kind === "catchup") {
-          deck.seek(t.pos); // genuinely behind past the grace window → pull forward, reset grace
+          deck.seek(masterPos, { exact: true }); // genuinely behind past the grace window → pull forward, reset grace
           followSeekAt.current[id] = now;
         } else if (action.kind === "align") {
-          deck.seek(t.pos); // both paused → tight align is silent, no skip
+          deck.seek(masterPos, { exact: true }); // both paused → tight align is silent, no skip
         }
         convergeStems();
         // Feed the follower visual clock + the anchor's effective RATE: the waveform glides at
         // the display rate off a wall-clock extrapolation of this tick, and a listener's own
         // audio re-speeds to the host's rate so it stops drifting (the host's jog-bend /
         // sync-trim never cross as intents). See Deck.visualPosition / followTick.
-        deck.followTick(t.pos, t.playing, t.rate);
+        deck.followTick(masterPos, t.playing, t.rate);
         // Reliable stem-state convergence: apply the anchor's authoritative per-stem mute/
         // gain when present, but SKIP a stem we ourselves touched in the last 400 ms so our
         // own in-flight change isn't briefly stomped by a slightly-stale echo. Idempotent —
@@ -628,6 +716,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         }
         }
       });
+      (["A", "B"] as DeckId[]).forEach((id) => engine.deck(id).setFollowTrim(trimOut[id] ?? 0));
       if (flipped) refresh();
     },
     [engine, refresh, runRoomLoad],

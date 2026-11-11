@@ -130,6 +130,7 @@ export function resyncBackoffMs(attempts: number): number {
 // throttled, with a force path that defeats a stuck load-guard.
 export type TickResync =
   | "drive" //       identity matches (or can't tell) → run the normal tick logic
+  | "empty" //       the anchor's deck is EMPTY (vid null) → pause ours, don't drive it
   | "wait" //        diverged, but a load is in flight / within the retry throttle → hold, don't drive
   | "load" //        diverged, nothing loading this vid, throttle elapsed → start a reload
   | "force-load"; // diverged, a load has been "in flight" too long (stuck guard) → reset + reload
@@ -140,6 +141,7 @@ export interface TickResyncInput {
   inFlightForMs: number | null; //      age of an in-flight load of tickVid on this deck; null = none
   sinceResyncMs: number | null; //      now − the last resync attempt; null = never attempted
   attempts: number; //                  consecutive resync attempts on this deck since it last landed
+  roomLoadTarget?: string | null; //    a room-driven (or our own shared) load in flight / landed for this deck
 }
 
 // ★ THE GUARD IS THE INVARIANT, NOT THE CLOCK. A live in-flight load of the anchor's track means
@@ -154,11 +156,30 @@ export interface TickResyncInput {
 // `performance.now() − (resyncAt ?? 0)`, so a deck that had never resynced reported the tab's whole
 // uptime — an absence rendered as a very large number, which crossed every threshold it was
 // compared against (thread 1d40b603). null says the one thing the sentinel could not.
+//
+// ★ NULL IS "EMPTY", UNDEFINED IS "CAN'T TELL" (operator, 2026-11-11: session sync audit). Both used
+// to drive, so a host who ejected a deck left every follower driving its old buffer with the empty
+// deck's tick. An empty anchor deck pauses ours and drives nothing — unless the track on our deck is
+// our OWN shared load the anchor has not landed yet (roomLoadTarget === loadedId): that waits.
 export function decideTickResync(p: TickResyncInput): TickResync {
-  if (p.tickVid == null || p.tickVid === p.loadedId) return "drive"; // identity matches / can't tell
+  if (p.tickVid === undefined) return "drive"; // an older anchor that doesn't stamp: can't tell
+  if (p.tickVid === null) return p.loadedId != null && p.roomLoadTarget === p.loadedId ? "wait" : "empty";
+  if (p.tickVid === p.loadedId) return "drive"; // identity matches
   if (p.inFlightForMs != null) return p.inFlightForMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
   if (p.sinceResyncMs == null) return "load"; // never tried on this deck → first attempt is immediate
   return p.sinceResyncMs >= resyncBackoffMs(p.attempts) ? "load" : "wait";
+}
+
+/** The age to report as `inFlightForMs` for a deck whose anchor track is targeted / loading.
+ *  ★ A DEFERRED LOAD IS PARKED, NOT STUCK (operator, 2026-11-11: session sync audit). A muted
+ *  passenger's runRoomLoad sets the target and stashes the decode for later, so the load's sign-of-
+ *  life clock still held an EARLIER load's timestamp; once that was 15 s old every tick (4/s, per
+ *  deck) force-loaded, requested state, and re-deferred — a resync storm that never loads anything.
+ *  A parked load reports 0: it waits until the device renders audio and the flush effect decodes it. */
+export function inFlightAgeMs(p: { loadingThis: boolean; deferred: boolean; now: number; since: number }): number | null {
+  if (!p.loadingThis) return null;
+  if (p.deferred) return 0;
+  return p.since > 0 ? Math.max(0, p.now - p.since) : 0;
 }
 
 // ── A deck that holds the wrong track (join window, lost load) ───────────────────────────────────
@@ -276,18 +297,171 @@ export interface TimedFollowInput {
   sinceFollowSeekMs: number;
   /** The error smoothed over recent ticks (s, + = ahead), for the trim; absent = this tick's own. */
   smoothErr?: number;
+  /** The host's ACTIVE loop region (DeckTick.loop); absent = no loop known. */
+  loop?: LoopSpan | null;
+  /** Our deck holds that same loop, active (so our playhead wraps in it too). */
+  deckInLoop?: boolean;
+}
+
+// ── Loops in the timed follow ─────────────────────────────────────────────────────────────────────
+// ★ Operator, 2026-11-11: session sync audit — "loop commands get lost". masterNow = pos + age·rate
+// ran straight past the loop end the host wraps at, and the error was a plain difference, so near
+// every wrap the follower read an error of about one loop length: it seeked every grace window, and
+// the smoothed trim error swallowed that jump and pinned the trim at ±1.5 % for a second after each
+// wrap (an audible wobble). A looping host is a point on a CIRCLE: fold its position into the loop,
+// and when both sides loop the same region, the error is the shortest way round that circle.
+export interface LoopSpan {
+  s: number; // loop start (track s)
+  e: number; // loop end (track s)
+}
+/** How far before the loop start a host position is still read as the loop's tail. The host's tick
+ *  pos is its wrapped playhead MINUS its output latency, so just after a wrap it names a point before
+ *  loop.start the host never plays (it is hearing the loop end). Seconds. */
+export const PRELOOP_FOLD_S = 0.3;
+
+/** A host position folded into its active loop: past the start it wraps; a hair before the start
+ *  (latency-shifted read of the loop's tail) it maps to the tail; well before, it is pre-loop play. */
+export function foldIntoLoop(pos: number, loop?: LoopSpan | null): number {
+  if (!loop) return pos;
+  const len = loop.e - loop.s;
+  if (!(len > 0)) return pos;
+  if (pos >= loop.s) return loop.s + ((pos - loop.s) % len);
+  if (loop.s - pos <= Math.min(PRELOOP_FOLD_S, len)) return pos + len;
+  return pos;
+}
+
+/** a − b, the shortest signed way round a loop (both inside it), else the plain difference. */
+export function loopDelta(a: number, b: number, loop?: LoopSpan | null): number {
+  const d = a - b;
+  if (!loop) return d;
+  const len = loop.e - loop.s;
+  if (!(len > 0)) return d;
+  const m = (((d + len / 2) % len) + len) % len;
+  return m - len / 2;
+}
+
+/** The follow target (the engine position at which we would HEAR what the host is heard playing now)
+ *  and our error against it (+ = we are AHEAD). The one formula the caller's smoothing and
+ *  decideTimedFollow both read. */
+export function timedFollowError(p: Pick<TimedFollowInput, "masterPlaying" | "masterNow" | "deckPos" | "deckLatency" | "loop" | "deckInLoop">): { target: number; err: number } {
+  const target = foldIntoLoop(p.masterPlaying ? p.masterNow + p.deckLatency : p.masterNow, p.loop);
+  const err = loopDelta(p.deckPos, target, p.deckInLoop ? p.loop : null);
+  return { target, err };
 }
 
 export function decideTimedFollow(p: TimedFollowInput): TimedFollowAction {
-  // The engine position at which we would HEAR exactly what the host is heard playing now.
-  const target = p.masterPlaying ? p.masterNow + p.deckLatency : p.masterNow;
+  const { target, err } = timedFollowError(p); // err > 0: we are AHEAD of the host
   if (p.masterPlaying && !p.deckPlaying) return { kind: "start", target };
   if (!p.masterPlaying && p.deckPlaying) return { kind: "stop", target };
-  if (!p.deckPlaying) return Math.abs(p.deckPos - target) > PAUSED_ALIGN_DRIFT ? { kind: "align", target } : { kind: "hold" };
-  const err = p.deckPos - target; // > 0: we are AHEAD of the host
+  if (!p.deckPlaying) return Math.abs(err) > PAUSED_ALIGN_DRIFT ? { kind: "align", target } : { kind: "hold" };
   if (Math.abs(err) > TIMED_SEEK_ERR) return p.sinceFollowSeekMs > SEEK_GRACE_MS ? { kind: "seek", target } : { kind: "hold" };
   const e = p.smoothErr ?? err; // the trim acts on the smoothed error; the seek on the raw one
   if (Math.abs(e) <= TIMED_DEADBAND) return { kind: "trim", trim: 0 };
   const trim = Math.max(-TIMED_TRIM_MAX, Math.min(TIMED_TRIM_MAX, -e * TIMED_TRIM_GAIN));
   return { kind: "trim", trim };
+}
+
+// ── The follow trim's lifetime ────────────────────────────────────────────────────────────────────
+// ★ Operator, 2026-11-11: session sync audit. Only the timed TRIM path ever wrote the trim, so every
+// other path (the untimed fallback, a hold, a diverged deck, a scrub, a missing deck tick) left up
+// to 1.5 % in place. The client resets its clock on every reconnect, so ticks fell to the untimed
+// path (which only pulls forward) and a follower kept running 1.5 % fast, forever. The trim is now
+// a per-tick OUTPUT: whatever this tick did not decide to trim is zero.
+/** The trim this tick leaves on the deck: the timed trim's own value, else 0 (null = no timed action). */
+export function followTrimFor(action: TimedFollowAction | null): number {
+  return action?.kind === "trim" ? action.trim : 0;
+}
+
+/** The smoothed error, with when and for which track it was measured. */
+export interface FollowErrState {
+  err: number; // s, + = ahead
+  vid: string | null; // the track it was measured on
+  at: number; // ms (performance clock) of the last sample
+}
+/** A gap between ticks longer than this restarts the smoothing (role change, reconnect, a stall). Ms. */
+export const FOLLOW_ERR_GAP_MS = 1000;
+
+/** Fold this tick's raw error into the smoothed one. Starts over on a new track, after a gap, while
+ *  paused; and a raw error beyond the seek threshold (a loop wrap, a seek, a jump) is a JUMP, not
+ *  drift: it is never averaged into the trim (it returns null, and the next small error starts
+ *  fresh), so a wrap cannot pin the trim at its ceiling. */
+export function smoothFollowErr(prev: FollowErrState | null, raw: number, ctx: { vid: string | null; now: number; deckPlaying: boolean }): FollowErrState | null {
+  if (Math.abs(raw) > TIMED_SEEK_ERR) return null;
+  const fresh = !prev || !ctx.deckPlaying || prev.vid !== ctx.vid || ctx.now - prev.at > FOLLOW_ERR_GAP_MS;
+  const err = fresh ? raw : prev.err * (1 - TIMED_ERR_ALPHA) + raw * TIMED_ERR_ALPHA;
+  return { err, vid: ctx.vid, at: ctx.now };
+}
+
+// ── Tick age from the room clock ──────────────────────────────────────────────────────────────────
+/** A tick older than this (s) is not trusted as timed: a clock estimate that wrong (sleep, a route
+ *  change) would compute masterNow seconds off and seek there. */
+export const TICK_AGE_MAX_S = 3;
+/** A tick from the future by more than this (s) is likewise a clock error, not jitter. */
+export const TICK_AGE_MIN_S = -0.25;
+
+/** The tick's age in seconds when it can be trusted as TIMED, else null (→ the untimed rules for this
+ *  tick). ★ Operator, 2026-11-11: session sync audit — it used to be clamped to [0, 5], so a clock
+ *  seconds off after a sleep still drove timed seeks, to the wrong place, every grace window. */
+export function timedTickAge(serverNow: number | null, at: number | undefined): number | null {
+  if (at == null || serverNow == null) return null;
+  const age = (serverNow - at) / 1000;
+  if (!(age >= TICK_AGE_MIN_S) || age > TICK_AGE_MAX_S) return null;
+  return Math.max(0, age);
+}
+
+// ── A local transport gesture vs the anchor's next tick ───────────────────────────────────────────
+// ★ Operator, 2026-11-11: session sync audit. A controlling guest who presses play applies it locally
+// and sends the intent; the anchor's NEXT tick may have been sent before the anchor applied it, so it
+// still says "paused" and the follower stopped the deck again for one round trip (a stutter). For a
+// round trip plus a margin after OUR OWN transport gesture, start / stop / seek follow actions are
+// held (only the trim may act).
+export const TRANSPORT_GRACE_PAD_MS = 150;
+export const TRANSPORT_GRACE_MAX_MS = 600;
+/** Rtt unknown → assume this. Ms. */
+export const TRANSPORT_GRACE_DEFAULT_RTT_MS = 150;
+
+export function transportGraceMs(rttMs: number | null): number {
+  return Math.min(TRANSPORT_GRACE_MAX_MS, (rttMs ?? TRANSPORT_GRACE_DEFAULT_RTT_MS) + TRANSPORT_GRACE_PAD_MS);
+}
+/** `sinceLocalMs`: ms since this device's own last transport gesture on the deck (null = never). */
+export function inLocalTransportGrace(sinceLocalMs: number | null, rttMs: number | null): boolean {
+  return sinceLocalMs != null && sinceLocalMs >= 0 && sinceLocalMs < transportGraceMs(rttMs);
+}
+
+// ── Loop self-heal from the tick ──────────────────────────────────────────────────────────────────
+// ★ Operator, 2026-11-11: session sync audit — "loop commands get lost". A loop intent dropped on a
+// flaky link left a follower playing straight through a loop the host was in (or looping one the host
+// had left) until the next snapshot reconcile, which never comes for an already-loaded track. The tick
+// now names the host's active loop region; a follower whose loop differs adopts it. Never within
+// LOOP_LOCAL_GRACE_MS of this device's OWN loop gesture on that deck: the anchor's tick predates it.
+export const LOOP_HEAL_EPS = 0.01; // s: region edges closer than this are the same loop
+export const LOOP_LOCAL_GRACE_MS = 600;
+
+export type LoopHeal = { kind: "none" } | { kind: "apply"; s: number; e: number } | { kind: "exit" };
+
+export interface LoopHealInput {
+  /** DeckTick.loop: a region = the host loops it; null = the host has no active loop; undefined = an
+   *  older anchor that does not say (→ never heal). */
+  tickLoop: LoopSpan | null | undefined;
+  /** Our deck's loop (Deck.loopRegion()). */
+  local: { start: number; end: number; active: boolean } | null;
+  /** Ms since this device itself changed this deck's loop; null = never. */
+  sinceLocalLoopMs: number | null;
+}
+
+export function decideLoopHeal(p: LoopHealInput): LoopHeal {
+  if (p.tickLoop === undefined) return { kind: "none" };
+  if (p.sinceLocalLoopMs != null && p.sinceLocalLoopMs < LOOP_LOCAL_GRACE_MS) return { kind: "none" };
+  if (p.tickLoop) {
+    const l = p.local;
+    const same = !!l && l.active && Math.abs(l.start - p.tickLoop.s) <= LOOP_HEAL_EPS && Math.abs(l.end - p.tickLoop.e) <= LOOP_HEAL_EPS;
+    return same || !(p.tickLoop.e > p.tickLoop.s) ? { kind: "none" } : { kind: "apply", s: p.tickLoop.s, e: p.tickLoop.e };
+  }
+  return p.local?.active ? { kind: "exit" } : { kind: "none" };
+}
+
+/** Our deck runs the host's loop (same region, active) — the error may then be taken modulo it. */
+export function sameActiveLoop(tickLoop: LoopSpan | null | undefined, local: { start: number; end: number; active: boolean } | null): boolean {
+  if (!tickLoop || !local?.active) return false;
+  return Math.abs(local.start - tickLoop.s) <= LOOP_HEAL_EPS && Math.abs(local.end - tickLoop.e) <= LOOP_HEAL_EPS;
 }

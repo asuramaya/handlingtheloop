@@ -155,6 +155,8 @@ import { useReplay } from "./App/useReplay";
 import { useMidiRouting } from "./App/useMidiRouting";
 import { SpineContext, useSpine, type Spine } from "./App/spine";
 import { fxBypassIntent } from "@htl/room/fxWire";
+import { scrubBegin, scrubEnd, scrubIdle, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
+import { isRemoteLoopApply, noteLocalIntent } from "@htl/room/localGestures";
 import { registerBoardAction } from "@htl/board/boardActions";
 
 type DeckId = "A" | "B";
@@ -839,7 +841,7 @@ function AppBody() {
   // Jog/scrub streaming: while we're locally scrubbing a deck, ignore the master's
   // inbound ticks for it (so they don't fight the scrub) and coalesce our streamed
   // seeks to one per animation frame.
-  const scrubbing = useRef<Record<DeckId, boolean>>({ A: false, B: false });
+  const scrubbing = useRef<Record<DeckId, ScrubFlag>>({ A: scrubIdle(), B: scrubIdle() }); // watchdogged (htl/room/scrubGuard)
   const jogDelta = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   const jogRaf = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
   // FLX4 jog mode, latched from the controller's own CC stream: the hardware VINYL
@@ -2694,6 +2696,7 @@ function AppBody() {
     // Loop fine-adjust / move → broadcast the absolute region (emitRef no-ops unless
     // controlling). in/out/exit/beat already emit their own loop intents.
     const loopEdit = (id: DeckId) => () => {
+      if (isRemoteLoopApply()) return; // the tick follower's loop self-heal is not a gesture
       const r = engine.deck(id).loopRegion();
       if (r) emitRef.current({ kind: "loopBounds", deck: id, start: r.start, end: r.end, active: r.active });
     };
@@ -2721,6 +2724,9 @@ function AppBody() {
       if (intent.kind === "stem" || intent.kind === "stemGain") {
         stemTouch.current[intent.deck][intent.stem] = performance.now();
       }
+      // …and when WE last moved a deck's transport or loop, so the tick follower holds off for a
+      // moment instead of undoing it with a tick that predates it (htl/room/localGestures).
+      noteLocalIntent(intent);
       if (room.controlling) room.sendIntent(intent);
     },
     [room.controlling, room.sendIntent],
@@ -2803,13 +2809,14 @@ function AppBody() {
   // animation frame. Tick-follow for the deck is suppressed until just after release.
   const onJogStart = useCallback(
     (id: DeckId) => {
-      scrubbing.current[id] = true;
+      scrubBegin(scrubbing.current[id], performance.now(), true);
       emit({ kind: "jog", deck: id, phase: "start" });
     },
     [emit],
   );
   const emitJog = useCallback(
     (id: DeckId, delta: number) => {
+      scrubMove(scrubbing.current[id], performance.now(), true);
       jogDelta.current[id] += delta;
       if (jogRaf.current[id]) return;
       jogRaf.current[id] = requestAnimationFrame(() => {
@@ -2824,7 +2831,9 @@ function AppBody() {
   const onJogEnd = useCallback(
     (id: DeckId) => {
       emit({ kind: "jog", deck: id, phase: "end" });
-      setTimeout(() => (scrubbing.current[id] = false), 250);
+      const f = scrubbing.current[id];
+      const token = scrubEnd(f); // cancel-safe: a newer scrub's start/move voids this tail
+      setTimeout(() => scrubTailDone(f, token), SCRUB_TAIL_MS);
     },
     [emit],
   );
@@ -3582,6 +3591,10 @@ function AppBody() {
       const pos = deck.playing ? deck.position() - engine.audibleLatency() * rate : deck.position();
       const tick: DeckTick = { pos, playing: deck.playing, rate, vid: latest.current.loaded[id] };
       if (at != null) tick.at = Math.round(at);
+      // ★ The active loop region (null = none), so a follower folds our position into it and heals a
+      // lost loop intent (operator, 2026-11-11: session sync audit; sessionFollow.decideLoopHeal).
+      const lr = deck.loopRegion();
+      tick.loop = lr && lr.active ? { s: lr.start, e: lr.end } : null;
       if (include) tick.stems = { g, m };
       return tick;
     };

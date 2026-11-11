@@ -110,6 +110,12 @@ export interface DeckTick {
   // correct in both directions (sessionFollow.decideTimedFollow). Absent = an older anchor, or one
   // whose clock has not synced yet → the follower uses the untimed rules.
   at?: number;
+  // ★ The anchor's ACTIVE loop region on this deck (operator, 2026-11-11: session sync audit). A
+  // follower folds the host's position into it (so a wrap is not read as a loop-length error) and
+  // adopts it when its own loop differs — the self-heal for a lost loop intent. null = no active
+  // loop; ABSENT = an older anchor that does not say (→ no folding, no heal). See sessionFollow
+  // decideLoopHeal / foldIntoLoop.
+  loop?: { s: number; e: number } | null;
 }
 export type TickDecks = Record<DeckId, DeckTick>;
 

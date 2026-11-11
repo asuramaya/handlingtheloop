@@ -201,8 +201,17 @@ describe("decideTickResync", () => {
     expect(decideTickResync({ ...match, tickVid: undefined, loadedId: "anything" })).toBe("drive");
   });
 
-  it("drives when the anchor's deck is empty (tickVid null) — only a positive mismatch acts", () => {
-    expect(decideTickResync({ ...match, tickVid: null, loadedId: "trackA00001" })).toBe("drive");
+  // ★ This test used to say "drives when the anchor's deck is empty" — that encoded the bug (operator,
+  // 2026-11-11: session sync audit): an emptied host deck left followers driving their old buffer.
+  it("null (the anchor's deck is EMPTY) is not undefined (an older anchor): pause, don't drive", () => {
+    expect(decideTickResync({ ...match, tickVid: null, loadedId: "trackA00001" })).toBe("empty");
+    expect(decideTickResync({ ...match, tickVid: null, loadedId: null })).toBe("empty");
+    expect(decideTickResync({ ...match, tickVid: undefined, loadedId: "trackA00001" })).toBe("drive");
+  });
+
+  it("an empty anchor deck while OUR OWN shared load is on ours waits (the anchor hasn't landed it yet)", () => {
+    expect(decideTickResync({ ...match, tickVid: null, loadedId: "ourPick0001", roomLoadTarget: "ourPick0001" })).toBe("wait");
+    expect(decideTickResync({ ...match, tickVid: null, loadedId: "ourPick0001", roomLoadTarget: "another0001" })).toBe("empty");
   });
 
   describe("diverged (anchor on a different track than us)", () => {

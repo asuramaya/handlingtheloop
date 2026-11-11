@@ -1899,11 +1899,14 @@ body.no-glow .hw-btn.shift.on {
   color: var(--text);
   white-space: nowrap;
 }
+/* ★ ON LIVES INSIDE, THE EDGE BELONGS TO THE VALUE (operator, 2026-11-10: "during the enabled/on
+   state the tail blends in with the position indicator making it look full"). On used to be an
+   accent ring on the border, the same colour on the same line as the value's tail, so a lit cell
+   read as a full one. Now on = a tinted fill and a soft inner glow, the border's empty track goes
+   DARK so the tail stands out against it, and the tail thickens a touch (rules below .vcell-knob). */
 .bank-load .vcell.play.playing {
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 12px color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg));
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 38%, transparent);
 }
 .bank-load .vcell.play.playing .vcell-value {
   color: var(--accent);
@@ -1918,10 +1921,8 @@ body.no-glow .hw-btn.shift.on {
   white-space: nowrap;
 }
 .bank-load .vcell.cue-fader.cue-on {
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 10px color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+  box-shadow: inset 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 .bank-load .vcell.cue-fader.cue-on .vcell-value {
   color: var(--accent);
@@ -2123,6 +2124,16 @@ body.no-glow .hw-btn.shift.on {
   stroke-width: 2;
   stroke-linecap: round;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+/* An ON cell (see .vcell.play.playing): dark track, heavier tail, so the value still reads. */
+.vcell.play.playing .vcell-knob-track,
+.vcell.cue-fader.cue-on .vcell-knob-track {
+  stroke: color-mix(in srgb, var(--bg) 75%, transparent);
+  stroke-width: 3;
+}
+.vcell.play.playing .vcell-knob-fill,
+.vcell.cue-fader.cue-on .vcell-knob-fill {
+  stroke-width: 3;
 }
 .vcell-knob-dot {
   fill: var(--accent);

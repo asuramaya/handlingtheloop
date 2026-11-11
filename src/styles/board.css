@@ -1899,14 +1899,18 @@ body.no-glow .hw-btn.shift.on {
   color: var(--text);
   white-space: nowrap;
 }
-/* ★ ON LIVES INSIDE, THE EDGE BELONGS TO THE VALUE (operator, 2026-11-10: "during the enabled/on
-   state the tail blends in with the position indicator making it look full"). On used to be an
-   accent ring on the border, the same colour on the same line as the value's tail, so a lit cell
-   read as a full one. Now on = a tinted fill and a soft inner glow, the border's empty track goes
-   DARK so the tail stands out against it, and the tail thickens a touch (rules below .vcell-knob). */
+/* ★ THREE RINGS, THREE MEANINGS (operator, 2026-11-10: "during the enabled/on state the tail blends
+   in with the position indicator making it look full"; a tinted fill was tried and rejected, "play
+   with the ring", and hover is a ring move too). On used to be an accent ring ON the border, the
+   same colour on the same line as the value's tail, so a lit cell read as a full one.
+     border tail (full accent) .... the VALUE, always
+     empty track (16 / 36 / 45 %) .. rest / hover / selected, never full strength
+     outer ring + halo ............. ON: a second thin ring 2 px OUTSIDE the cell, and a glow
+   So on never touches the value's line, and hover never looks like on. */
 .bank-load .vcell.play.playing {
-  background: color-mix(in srgb, var(--accent) 24%, var(--bg));
-  box-shadow: inset 0 0 16px color-mix(in srgb, var(--accent) 38%, transparent);
+  outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent);
+  outline-offset: 2px;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .bank-load .vcell.play.playing .vcell-value {
   color: var(--accent);
@@ -1921,8 +1925,9 @@ body.no-glow .hw-btn.shift.on {
   white-space: nowrap;
 }
 .bank-load .vcell.cue-fader.cue-on {
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
-  box-shadow: inset 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
+  outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .bank-load .vcell.cue-fader.cue-on .vcell-value {
   color: var(--accent);
@@ -2024,14 +2029,14 @@ body.no-glow .hw-btn.shift.on {
 .vcell:hover .vcell-knob-track {
   stroke: color-mix(in srgb, var(--accent) 36%, transparent);
 }
-/* Selected (tapped/clicked) — a ring + bright trace. */
+/* Selected (tapped/clicked) — a brighter empty track and a faint glow, but NEVER the full-accent
+   ring it used to be: that painted the whole border the value's colour, so a tapped cell read as
+   full (the same blend as the old on-state, and tapping play both selects it and turns it on). */
 .vcell:focus .vcell-knob-track {
-  stroke: var(--accent);
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .vcell:focus {
-  box-shadow:
-    inset 0 0 0 1px var(--accent),
-    0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 /* ★ THE PRESS LANGUAGE (see ValueCell.tsx). A cell is a BUTTONOID as well as a knob — a tap can
    toggle a mode, a right-click can reset it or open a menu — and a <div> gets none of the :active
@@ -2125,12 +2130,7 @@ body.no-glow .hw-btn.shift.on {
   stroke-linecap: round;
   filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent) 70%, transparent));
 }
-/* An ON cell (see .vcell.play.playing): dark track, heavier tail, so the value still reads. */
-.vcell.play.playing .vcell-knob-track,
-.vcell.cue-fader.cue-on .vcell-knob-track {
-  stroke: color-mix(in srgb, var(--bg) 75%, transparent);
-  stroke-width: 3;
-}
+/* An ON cell (see .vcell.play.playing): a heavier tail, so the value reads beside the outer ring. */
 .vcell.play.playing .vcell-knob-fill,
 .vcell.cue-fader.cue-on .vcell-knob-fill {
   stroke-width: 3;

@@ -58,7 +58,7 @@ export interface IntentDeck {
   pause(): void;
   seek(position: number): void;
   cuePoint: number;
-  scrubBegin(): void;
+  scrubBegin(slip?: boolean): void;
   scrubMove(delta: number): void;
   scrubEnd(): void;
   loopIn(): void;
@@ -82,8 +82,12 @@ export interface IntentEngine {
   deck(id: DeckId): IntentDeck;
   setCrossfade(v: number): void;
   resume(): void;
-  mirrorSyncDisplay(slave: DeckId | null): void;
-  mirrorKeyDisplay(slave: DeckId | null): void;
+  /** Take a peer's SYNC / KEY role for real (not just the button) — see AudioEngine.applySyncRole. */
+  applySyncRole(slave: DeckId | null): void;
+  applyKeyRole(slave: DeckId | null): void;
+  /** Remote tempo / pitch: an echo of the lock on the follower keeps it (syncRoles.isRoleEcho). */
+  applyRemoteTempo(id: DeckId, pct: number, follow?: boolean): void;
+  applyRemotePitch(id: DeckId, semis: number, follow?: boolean): void;
 }
 
 /** Everything an intent needs that is NOT the audio engine — React mirrors, the sampler bridge,
@@ -140,15 +144,17 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
     return;
   }
   if (intent.kind === "tempoRange") return host.tempoRange(intent.value);
-  // SYNC / KEY role: mirror the button(s) only — the master's tempo/pitch already crosses as
-  // control intents, so we don't re-run the engine on the follower.
+  // ★ SYNC / KEY role: the REAL role, not the button (operator, 2026-11-11: session sync audit).
+  // Mirroring only the label left this engine's follower id null, so the next press here inverted
+  // both devices. The receiver engages follow + key shift as a local press would, minus the
+  // broadcast and minus the align seek (the sender's explicit seek carries the position).
   if (intent.kind === "sync") {
-    engine.mirrorSyncDisplay(intent.slave);
+    engine.applySyncRole(intent.slave);
     host.refresh();
     return;
   }
   if (intent.kind === "key") {
-    engine.mirrorKeyDisplay(intent.slave);
+    engine.applyKeyRole(intent.slave);
     host.refresh();
     return;
   }
@@ -159,7 +165,9 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
   const deck = engine.deck(intent.deck);
   switch (intent.kind) {
     case "control":
-      if (intent.param === "tempo") deck.setTempo(intent.value);
+      // Tempo / pitch go through the engine: on the follower of a lock, the lock's own echo must not
+      // release it (syncRoles.isRoleEcho), while a hand on the far fader still does.
+      if (intent.param === "tempo") engine.applyRemoteTempo(intent.deck, intent.value, intent.follow);
       else if (intent.param === "trim") deck.setTrim(intent.value);
       else if (intent.param === "level") deck.setLevel(intent.value);
       else if (intent.param === "eqLow") deck.setEqLow(intent.value);
@@ -181,7 +189,7 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
       else if (intent.param === "eqMix") deck.setEqMix(intent.value);
       else if (intent.param === "eqOut") deck.setEqOut(intent.value);
       else if (intent.param === "filter") deck.setFilter(intent.value);
-      else if (intent.param === "pitch") deck.setPitch(Math.round(intent.value));
+      else if (intent.param === "pitch") engine.applyRemotePitch(intent.deck, Math.round(intent.value), intent.follow);
       break;
     case "toggle":
       if (intent.param === "keylock") deck.setKeylock(intent.value);
@@ -244,7 +252,7 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
       if (intent.phase === "start") {
         host.scrub(intent.deck, true);
         engine.resume();
-        deck.scrubBegin();
+        deck.scrubBegin(intent.slip); // the sender's slip, when it said (older peers: ours)
       } else if (intent.phase === "move") {
         deck.scrubMove(intent.delta ?? 0);
       } else {

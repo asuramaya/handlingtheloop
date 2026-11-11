@@ -62,3 +62,40 @@ registerBoardAction("censor", (deck, phase) => {
 registerBoardAction("smartFader", (deck, _phase, arg) => {
   deck.setKeylockPinnedOff(arg === "arm");
 });
+
+// ★ PERFORMANCE GESTURES THAT USED TO HAPPEN ON ONE DEVICE ONLY (operator, 2026-11-11: session sync
+// audit). Each of these moved the deck's audio or playhead and emitted nothing, so on a guest the
+// anchor's next tick yanked it back, and from the anchor a guest heard the gesture only as the tick
+// dragged the follower along. They are deck methods, so they register here like `censor`.
+
+// Hot-cue HOLD / CUE HOLD preview. `down` arg = the position to play from; `up` arg = the presser's
+// slip setting (1/0), so the return lands where it did on the presser rather than by this device's
+// own toggle. Shared, not a private audition: on a follower the preview moves the playhead the tick
+// owns, so a gesture kept local is a gesture the tick undoes.
+registerBoardAction("preview", (deck, phase, arg) => {
+  if (phase === "up") deck.previewRelease(arg === undefined ? undefined : arg === 1 || arg === "1");
+  else if (typeof arg === "number" && Number.isFinite(arg)) deck.previewHold(arg);
+});
+
+// Pitch BEND (lane drag / Shift-wheel, MIDI ring and non-vinyl platter). `arg` = the roll distance
+// in seconds, summed per frame by the sender. Playing → a momentary nudge; paused → the same frame
+// search the sender did (Deck.bend routes on the receiver's own play state, which the tick keeps
+// equal). On a follower it is inert — its rate is the anchor's — and the anchor's bend reaches the
+// follower through the tick's rate, so the gesture lands exactly once wherever it starts.
+registerBoardAction("bend", (deck, _phase, arg) => {
+  if (typeof arg === "number" && Number.isFinite(arg) && arg !== 0) deck.bend(arg);
+});
+
+// Spinback (arg = strength override; absent = the receiver's own length setting) and vinyl brake.
+registerBoardAction("spinback", (deck, _phase, arg) => {
+  deck.spinback(typeof arg === "number" ? arg : undefined);
+});
+registerBoardAction("brake", (deck) => {
+  deck.releaseBrake();
+});
+
+// Sustained REVERSE (SHIFT + censor): runs backward until released. A `censor` up also stops a
+// reverse (censorEnd = reverseStop), so a release may arrive as either.
+registerBoardAction("reverse", (deck, phase) => {
+  deck.setReverse(phase !== "up");
+});

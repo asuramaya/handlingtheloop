@@ -23,6 +23,7 @@
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
 import type { Intent } from "../room/protocol";
+import { syncStateIntents } from "../room/syncRoles";
 import { foldTempoOctave, tempoLockable } from "../analysis";
 import { trace } from "../debug/trace";
 import { clamp, clamp01, lerp } from "../../util/math";
@@ -76,6 +77,16 @@ export class SmartFader {
     this.engine.deck(id).setTempo(pct);
     this.emit({ kind: "control", deck: id, param: "tempo", value: pct });
   }
+  /** ★ Lock / unlock the incoming AND say so (operator, 2026-11-11: session sync audit). These two
+   *  toggleSync calls were the one move of the throw that never reached the wire, so the far side's
+   *  SYNC button and follower stayed wherever they were. Same emitting path as a SYNC press
+   *  (syncStateIntents: role, tempos, align seek). `announce` false = we are arming because a co-DJ
+   *  armed; their device sent its own lock, so ours stays quiet rather than echoing it back. */
+  private toggleSync(id: DeckId, announce: boolean): void {
+    this.engine.toggleSync(id);
+    if (!announce) return;
+    for (const i of syncStateIntents(this.engine, this.engine.takeAlignSeek?.() ?? null)) this.emit(i);
+  }
   /** Move a deck's low EQ AND say so — the bass swap is the most audible half of the throw. */
   private eqLow(id: DeckId, db: number): void {
     this.engine.deck(id).setEqLow(db);
@@ -103,7 +114,7 @@ export class SmartFader {
     if (this.armed) return true;
     // Saved per-deck BEFORE any pin, so disarm restores the user's own key-lock setting.
     this.keylockSaved = { A: this.engine.deck("A").keylock, B: this.engine.deck("B").keylock };
-    this.setupDirection(cf);
+    this.setupDirection(cf, announce);
     this.armed = true;
     // The mode itself crosses: the far side pins key-lock the same way (or its decks will not
     // glide with the morph) and its strip shows SMART instead of a plain crossfader.
@@ -177,7 +188,7 @@ export class SmartFader {
   // Pick live (= the side the fader favours; centre → whichever is playing) + incoming, beat-lock
   // the incoming to the live deck (SYNC: tempo + phase) and start it rolling. Records the morph
   // endpoints. Returns false if either deck has no beatgrid. Also used to re-arm in reverse.
-  private setupDirection(cf: number): boolean {
+  private setupDirection(cf: number, announce = true): boolean {
     let from: DeckId;
     if (cf < -0.05) from = "A";
     else if (cf > 0.05) from = "B";
@@ -198,7 +209,7 @@ export class SmartFader {
     this.locked = tempoLockable(fromDeck.effectiveBpm ?? fromBase, toBpm) && !!fromBase;
     if (!this.locked) {
       this.unpin();
-      if (this.engine.syncRole(to) === "slave") this.engine.toggleSync(to); // a previous throw's lock
+      if (this.engine.syncRole(to) === "slave") this.toggleSync(to, announce); // a previous throw's lock
       return true;
     }
     this.pin();
@@ -220,7 +231,7 @@ export class SmartFader {
     // Beat-lock incoming → live (the incoming becomes the SYNC slave; the live deck is master and
     // its tempo moves drive the slave via matchSlaveTempo). Sync only — playback starts on the
     // first THROW (see apply), never on arm, so the smart fader can be set up while paused.
-    if (this.engine.syncRole(to) !== "slave") this.engine.toggleSync(to);
+    if (this.engine.syncRole(to) !== "slave") this.toggleSync(to, announce);
     return true;
   }
 

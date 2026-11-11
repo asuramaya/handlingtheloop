@@ -73,6 +73,9 @@ interface DeckLaneProps {
   onJog?: (deltaSeconds: number) => void;
   onJogEnd?: () => void;
   onSeek?: (position: number) => void;
+  // A playing bend (Shift-wheel / drag) to share with the session — the paused frame-search already
+  // crosses as onSeek. Without it a guest's bend did nothing anywhere (audit 2026-11-11).
+  onBend?: (deltaSeconds: number) => void;
   // Release Brake / Censor — same session-broadcast shape as the keyboard/MIDI triggers, just
   // fired from the waveform's own long-press / two-finger-tap gestures (see WaveformViewport).
   onReleaseBrake?: () => void;
@@ -146,7 +149,7 @@ function LaneTitle({ name, artist }: { name: string; artist: string }) {
 
 // A full-width waveform lane. Deck A's lane sits directly above deck B's so the
 // beat grids line up vertically — that's what makes aligning the two obvious.
-export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, markerStyle, lanesMeet, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
+export function DeckLane({ id, deck, accent, focused, onFocus, background, selectorColor, loopColor, markerColor, stripColor, freqColors, freqLow, freqMid, freqHigh, vividness, bandLayers, bandFromDeck, stemsFollowDeck, debrick, glow, markerThickness, markerStyle, lanesMeet, stemColors, meta, status, stemStatus, captions, captionSource, lyricStatus, windowSec, expanded, collapsed, onToggleExpand, onZoom, wheelSeeks, locked, refresh, onLoadFile, onLoadTrack, onJogStart, onJog, onJogEnd, onSeek, onBend, onReleaseBrake, onCensorToggle, onReprocessLyrics }: DeckLaneProps) {
   // PHONE: the DECK header is a FOCUS control, not an expand control. Expanding solos one lane
   // by hiding the other — it buys waveform height by spending the second waveform, which is a
   // fair trade on a desktop and a bad one here: the phone already shows only ONE deck's controls
@@ -419,11 +422,12 @@ export function DeckLane({ id, deck, accent, focused, onFocus, background, selec
           // Shift+wheel → pitch-bend. deck.bend self-routes (playing = tempo nudge that
           // auto-reverts; paused = frame-search). deck.jogging drives the rAF while a
           // bend rides, so the playhead redraws; paused search still wants one nudge.
+          const playing = deck.playing;
           deck.bend(d);
-          if (!deck.playing) {
+          if (!playing) {
             refresh();
             onSeek?.(deck.position());
-          }
+          } else onBend?.(d);
         }}
         onReleaseBrake={() => {
           if (locked || deck.adjusting) return; // watch-only / boundary-adjust: no jog gestures

@@ -34,6 +34,8 @@ export interface MidiRoutingDeps {
   onJogStart: (id: DeckId) => void;
   onJogEnd: (id: DeckId) => void;
   emitJog: (id: DeckId, delta: number) => void;
+  /** Share a bend (frame-coalesced `board` bend; audit 2026-11-11). Optional for older callers. */
+  emitBend?: (id: DeckId, delta: number) => void;
   canDriveDeckRef: MutableRefObject<(id: DeckId) => boolean>;
   /** The crossfader is a WHOLE-BOARD move — full control only, never a stage DJ (canDriveBoard). */
   boardLockedRef: MutableRefObject<boolean>;
@@ -76,6 +78,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
     onJogStart,
     onJogEnd,
     emitJog,
+    emitBend,
     canDriveDeckRef,
     boardLockedRef,
     eqStemModeRef,
@@ -657,6 +660,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
               emitJog(ev.deck, sec);
             } else {
               deck.bend(sec); // no touch registered → fall back to a bend
+              emitBend?.(ev.deck, sec); // ★ shared (audit 2026-11-11)
             }
           } else {
             // Non-vinyl top plate → bend. If we wrongly grabbed (mode just flipped),
@@ -667,6 +671,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
               onJogEnd(ev.deck);
             }
             deck.bend(sec);
+            emitBend?.(ev.deck, sec); // ★ shared (audit 2026-11-11)
           }
           break;
         }
@@ -719,6 +724,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
             break;
           }
           deck.bend(ev.delta * SEC_PER_TICK);
+          emitBend?.(ev.deck, ev.delta * SEC_PER_TICK); // ★ the ring bend crosses (audit 2026-11-11)
           break;
         }
         case "jogSearch": {
@@ -766,7 +772,7 @@ export function useMidiRouting(deps: MidiRoutingDeps) {
           break;
       }
     },
-    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, closeLibrary, ensureSpinTimer, checkSpinFollow],
+    [engine, refresh, settings.tempoRange, settings.pitchRange, settings.jogSensitivity, emitSeekTo, onJogStart, onJogEnd, emitJog, emitBend, room, focused, midiShift, focusShift, shiftLatched, shiftHeld, setZoomFor, toggleLibrary, closeLibrary, ensureSpinTimer, checkSpinFollow],
   );
 
   return { onMidiEvent };

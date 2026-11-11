@@ -9,6 +9,7 @@ import { describe, test, expect, beforeEach } from "vitest";
 import { SmartFader } from "./smartFader";
 import type { AudioEngine } from "../audio/AudioEngine";
 import type { DeckId } from "../audio/index";
+import type { Intent } from "../room/protocol";
 
 class FakeDeck {
   playing = false;
@@ -17,6 +18,10 @@ class FakeDeck {
   effectiveBpm: number | undefined;
   beatgrid: { bpm: number } | null = null;
   tempoPct = 0; // last setTempo() argument (percent)
+  pitch = 0;
+  get tempo(): number {
+    return this.tempoPct;
+  }
   tempoLog: number[] = []; // every setTempo() call, in order
   play(): void {
     this.playing = true;
@@ -40,7 +45,7 @@ class FakeEngine {
   B = new FakeDeck();
   commandedRamp = false;
   crossfade = 0;
-  private syncSlave: Record<DeckId, boolean> = { A: false, B: false };
+  private slaved: Record<DeckId, boolean> = { A: false, B: false };
   deck(id: DeckId): FakeDeck {
     return id === "A" ? this.A : this.B;
   }
@@ -51,10 +56,16 @@ class FakeEngine {
     this.crossfade = cf;
   }
   syncRole(id: DeckId): string {
-    return this.syncSlave[id] ? "slave" : "off";
+    return this.slaved[id] ? "slave" : "off";
   }
   toggleSync(id: DeckId): void {
-    this.syncSlave[id] = !this.syncSlave[id];
+    this.slaved[id] = !this.slaved[id];
+  }
+  get syncSlave(): DeckId | null {
+    return this.slaved.A ? "A" : this.slaved.B ? "B" : null;
+  }
+  takeAlignSeek(): { deck: DeckId; pos: number } | null {
+    return this.syncSlave ? { deck: this.syncSlave, pos: 8 } : null;
   }
 }
 
@@ -148,5 +159,49 @@ describe("SmartFader tempo morph fold", () => {
     expect(sf.state().from).toBe("B");
     expect(sf.state().to).toBe("A");
     expect(eng.B.tempoLog.length).toBeGreaterThan(0); // the morph moved B, the live deck — not A
+  });
+
+  // ★ operator, 2026-11-11: session sync audit — the throw's SYNC lock was the one move that never
+  // reached the wire, so the far side's SYNC button and follower stayed wherever they were.
+  test("arming a locked throw SAYS so: the sync role, the tempos and the align seek cross", () => {
+    eng.A.beatgrid = { bpm: 124 };
+    eng.A.effectiveBpm = 124;
+    eng.A.playing = true;
+    eng.B.beatgrid = { bpm: 128 };
+    eng.B.effectiveBpm = 128;
+    const sent: Intent[] = [];
+    sf.setEmitter((i) => sent.push(i));
+    sf.arm(-1);
+    const sync = sent.filter((i) => i.kind === "sync");
+    expect(sync).toEqual([{ kind: "sync", slave: "B" }]);
+    expect(sent).toContainEqual({ kind: "control", deck: "B", param: "tempo", value: 0, follow: true });
+    expect(sent).toContainEqual({ kind: "transport", deck: "B", action: "seek", position: 8 });
+  });
+
+  test("arming BECAUSE a co-DJ armed (announce=false) does not echo the lock back", () => {
+    eng.A.beatgrid = { bpm: 124 };
+    eng.A.effectiveBpm = 124;
+    eng.A.playing = true;
+    eng.B.beatgrid = { bpm: 128 };
+    eng.B.effectiveBpm = 128;
+    const sent: Intent[] = [];
+    sf.setEmitter((i) => sent.push(i));
+    sf.arm(-1, false);
+    expect(eng.syncRole("B")).toBe("slave"); // locked here all the same
+    expect(sent.some((i) => i.kind === "sync")).toBe(false);
+  });
+
+  test("an unlockable pair releases a previous throw's lock and says so", () => {
+    eng.A.beatgrid = { bpm: 120 };
+    eng.A.effectiveBpm = 120;
+    eng.A.playing = true;
+    eng.B.beatgrid = { bpm: 174 };
+    eng.B.effectiveBpm = 174;
+    eng.toggleSync("B"); // a lock left over from before
+    const sent: Intent[] = [];
+    sf.setEmitter((i) => sent.push(i));
+    sf.arm(-1);
+    expect(eng.syncRole("B")).toBe("off");
+    expect(sent).toContainEqual({ kind: "sync", slave: null });
   });
 });

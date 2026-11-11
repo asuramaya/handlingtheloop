@@ -21,6 +21,7 @@ import { RING_REC_WORKLET_SRC, RING_SECONDS } from "./ringRecorderWorklet";
 import { bufferToWav } from "./encodeWav";
 import { nextReserve, primedFloor, reserveCfg, ZERO_RESERVE, POLL_MS, type ReserveState } from "./wirelessGuard";
 import { watchProcessor } from "./workletWatch";
+import { isRoleEcho, SYNC_ECHO_TEMPO_EPS, type AutoRoleCause } from "../room/syncRoles";
 
 type DeckId = "A" | "B";
 
@@ -1206,6 +1207,17 @@ export class AudioEngine {
       this.syncDiagState = this.idleSyncDiag(sid);
       return;
     }
+    // ★ A FOLLOWING DECK IS GOVERNED BY THE ANCHOR'S TICK, NOT BY THIS LOOP (operator, 2026-11-11:
+    // session sync audit). A received `sync` now gives a guest's engine the REAL role, so this loop
+    // would otherwise run on a deck whose rate and position the anchor's tick already set. Its trim
+    // is inert there (Deck.effRate ignores _syncTrim while a follow rate is set), but the hand-off
+    // below is not: a guest would re-assign roles and re-tune the new leader on its own clock. The
+    // anchor runs the loop and its hand-off crosses as intents (onRolesAuto), so a follower skips.
+    if (slave.tickFollowing || master.tickFollowing) {
+      slave.setSyncTrim(0);
+      this.syncDiagState = this.idleSyncDiag(sid);
+      return;
+    }
     // ★ MASTER FOLLOWS THE MUSIC. The follower playing on its own while the master has stopped is
     // the normal shape of a mix: the outgoing track ended or was paused, and the deck now playing
     // out is the follower. Leaving the master role on the stopped deck meant its next tempo move
@@ -1285,12 +1297,100 @@ export class AudioEngine {
   get syncSlave(): DeckId | null {
     return this.slaveId;
   }
-  /** Mirror a peer's SYNC role for the BUTTON only. We do NOT engage the tempo engine
-   *  here: the master's tempo already crosses as control intents, so a follower that
-   *  also matched would fight those values. Display state only. */
-  mirrorSyncDisplay(slave: DeckId | null) {
-    this.deckA.syncRole = slave == null ? "off" : slave === "A" ? "slave" : "master";
-    this.deckB.syncRole = slave == null ? "off" : slave === "B" ? "slave" : "master";
+  /** ★ A PEER'S SYNC ROLE, TAKEN FOR REAL (operator, 2026-11-11: session sync audit). This used to be
+   *  `mirrorSyncDisplay`: it lit the button and left `slaveId` null, so the next press here read the
+   *  ENGINE ("off"), engaged instead of releasing, and its tempo intent released the sender — both
+   *  ends inverted. Now the receiver holds the same role a local press would give it: the follower
+   *  tempo-matches its leader and later leader moves re-match it. What it does NOT do is the
+   *  phase-align SEEK: positions come from the sender's explicit seek (syncStateIntents), so two
+   *  devices never each pick their own alignment. Idempotent, so a republished snapshot is free.
+   *  On a following device this is harmless by construction: Deck.effRate runs at the anchor's tick
+   *  rate (ignoring _rate and _syncTrim), and phaseCorrect skips following decks. */
+  applySyncRole(slave: DeckId | null) {
+    if (slave === this.slaveId) return;
+    this.alignSeek = null;
+    this.slaveId = slave;
+    if (slave != null) {
+      this.syncFoldFactor = null;
+      this.matchSlaveTempo();
+      this.deck(slave).setSyncTrim(0);
+      this.syncIntegral = 0;
+      this.syncFF = 0;
+    }
+    this.writeRoles();
+  }
+
+  /** Apply a REMOTE tempo setpoint. On the deck that is this engine's sync FOLLOWER the shared rule
+   *  (syncRoles.isRoleEcho) decides whether it is the lock's own echo — applied without releasing —
+   *  or a hand on the other device's fader, which releases here exactly as it did there. */
+  applyRemoteTempo(id: DeckId, pct: number, follow?: boolean) {
+    const deck = this.deck(id);
+    if (isRoleEcho({ isFollower: this.slaveId === id, current: deck.tempo, incoming: pct, follow, eps: SYNC_ECHO_TEMPO_EPS })) {
+      this.propagating = true;
+      deck.setTempo(pct);
+      this.propagating = false;
+      return;
+    }
+    this.remoteWrite = true;
+    try {
+      deck.setTempo(pct);
+    } finally {
+      this.remoteWrite = false;
+    }
+  }
+
+  /** Apply a REMOTE pitch setpoint — KEY's twin of applyRemoteTempo (integer semitones, so equal
+   *  means equal). */
+  applyRemotePitch(id: DeckId, semis: number, follow?: boolean) {
+    const deck = this.deck(id);
+    if (isRoleEcho({ isFollower: this.keySlaveId === id, current: deck.pitch, incoming: semis, follow, eps: 0 })) {
+      this.keyPropagating = true;
+      deck.setPitch(semis);
+      this.keyPropagating = false;
+      return;
+    }
+    this.remoteWrite = true;
+    try {
+      deck.setPitch(semis);
+    } finally {
+      this.remoteWrite = false;
+    }
+  }
+
+  /** Run `fn` with the role hooks held: tempo/pitch writes inside it neither release a lock nor
+   *  re-match a follower. For restoring an AUTHORITATIVE board (a snapshot carries the roles and
+   *  every deck's tempo/pitch together, so each value is already the answer). */
+  withRolesHeld<T>(fn: () => T): T {
+    const p = this.propagating;
+    const k = this.keyPropagating;
+    this.propagating = true;
+    this.keyPropagating = true;
+    try {
+      return fn();
+    } finally {
+      this.propagating = p;
+      this.keyPropagating = k;
+    }
+  }
+
+  /** ★ ROLE CHANGES NOBODY PRESSED (operator, 2026-11-11: session sync audit). The automatic
+   *  hand-off (handMasterTo), a re-assert after a load, a release by a tempo/pitch move: all change
+   *  roles on this engine without a button, and so without an intent — guests' MASTER label went
+   *  stale. App listens here and, when this device is the anchor, sends the resulting state. */
+  onRolesAuto?: (what: "sync" | "key", cause: AutoRoleCause) => void;
+  /** True while a PEER's tempo/pitch is being written (applyRemoteTempo/Pitch), so a release it
+   *  causes is reported as remote (syncRoles.shouldAnnounceAutoRole). */
+  private remoteWrite = false;
+  /** The follower was re-matched to its leader (every leader tempo move). App rate-limits this into
+   *  `follow` tempo intents on the anchor (syncRoles.FollowTempoGate). */
+  onFollowTempo?: (id: DeckId, pct: number) => void;
+  /** Where the last engage/re-align put the follower, if it moved it — consumed by whoever emits the
+   *  role change, so the far side lands on the same phase instead of being yanked by the tick. */
+  private alignSeek: { deck: DeckId; pos: number } | null = null;
+  takeAlignSeek(): { deck: DeckId; pos: number } | null {
+    const a = this.alignSeek;
+    this.alignSeek = null;
+    return a;
   }
 
   /**
@@ -1302,6 +1402,7 @@ export class AudioEngine {
    * lock to) so the button never lights on an un-syncable pair.
    */
   toggleSync(id: DeckId) {
+    this.alignSeek = null; // only THIS press's alignment may be reported (takeAlignSeek)
     if (this.syncRole(id) === "slave") {
       this.slaveId = null; // toggle off
     } else {
@@ -1333,10 +1434,12 @@ export class AudioEngine {
     this.propagating = false;
     this.matchSlaveTempo();
     this.writeRoles();
+    this.onRolesAuto?.("sync", { kind: "handoff", remote: false }); // nobody pressed this: say so (the anchor sends it)
   }
 
   /** Release the pair (both off) without touching either deck's tempo. */
   releaseSync() {
+    this.alignSeek = null;
     if (this.slaveId == null) return;
     this.slaveId = null;
     this.writeRoles();
@@ -1374,6 +1477,7 @@ export class AudioEngine {
     this.propagating = true; // this setTempo is the echo — don't let it release sync
     slave.setTempo(slavePct);
     this.propagating = false;
+    this.onFollowTempo?.(sid, slavePct);
   }
 
   /** Where deck `id` should start so it is in phase with the other deck of the SYNC pair (see
@@ -1424,7 +1528,10 @@ export class AudioEngine {
       if (!master.playing) return;
       const pos = slave.position();
       const next = phaseAlignedStart({ grid: sg, pos, rate: slave.rate }, { grid: mg, pos: master.position(), rate: master.rate });
-      if (Math.abs(next - pos) > 1e-4) slave.seek(next);
+      if (Math.abs(next - pos) > 1e-4) {
+        slave.seek(next);
+        this.alignSeek = { deck: sid, pos: next };
+      }
       event("sync.engage", { deck: sid, live: true, moveMs: Math.round((next - pos) * 1000) });
       return;
     }
@@ -1438,11 +1545,13 @@ export class AudioEngine {
       if (target - pos > bar.length / 2) target -= bar.length;
       else if (pos - target > bar.length / 2) target += bar.length;
       slave.seek(target);
+      this.alignSeek = { deck: sid, pos: slave.position() };
     } else {
       const oFrac = beatPhase(mg, master.position());
       const sBeat = nearestBeat(sg, slave.position());
       const interval = beatTimeOffset(sg, sBeat, 1) - sBeat || sg.interval;
       slave.seek(sBeat + oFrac * interval);
+      this.alignSeek = { deck: sid, pos: slave.position() };
     }
   }
 
@@ -1463,6 +1572,7 @@ export class AudioEngine {
     if (id === this.slaveId) {
       this.slaveId = null;
       this.writeRoles();
+      this.onRolesAuto?.("sync", { kind: "release", remote: this.remoteWrite }); // released by a tempo move (here, or a peer's fader): say so
     } else {
       this.matchSlaveTempo();
     }
@@ -1471,6 +1581,7 @@ export class AudioEngine {
   /** Re-assert the lock after a deck in the pair loads a new track (grid changed). */
   reassertSync(id: DeckId) {
     if (this.slaveId == null || (id !== this.slaveId && id !== this.masterId)) return;
+    this.alignSeek = null;
     // The MASTER deck took a new track while the follower plays out: the follower is the music now.
     // Re-aligning the old way re-tuned and re-seeked the LIVE deck to a track nobody can hear yet.
     // Pass the master role to the live deck; the new track follows it (see handMasterTo).
@@ -1484,6 +1595,7 @@ export class AudioEngine {
       this.alignSlave();
     }
     this.writeRoles();
+    this.onRolesAuto?.("sync", { kind: "reassert", remote: false }); // a load re-aligned (or dropped) the pair: the anchor sends the result
   }
 
   // ---- key-lock state machine --------------------------------------------------
@@ -1517,11 +1629,23 @@ export class AudioEngine {
   get keySlave(): DeckId | null {
     return this.keySlaveId;
   }
-  /** Mirror a peer's KEY role for the button only (the master's pitch crosses as a
-   *  control intent, so the follower must not also re-shift). Display state only. */
-  mirrorKeyDisplay(slave: DeckId | null) {
-    this.deckA.keyRole = slave == null ? "off" : slave === "A" ? "slave" : "master";
-    this.deckB.keyRole = slave == null ? "off" : slave === "B" ? "slave" : "master";
+  /** A peer's KEY role, taken for real — the twin of applySyncRole (was `mirrorKeyDisplay`, which
+   *  lit the button only and inverted the next press; operator, 2026-11-11: session sync audit).
+   *  Exactly what a local press does, minus the broadcast: engaging shifts the follower to a key
+   *  compatible with its leader; releasing returns the old follower to its own key; a flip leaves
+   *  the old follower's shift alone (toggleKey on a master does the same). */
+  applyKeyRole(slave: DeckId | null) {
+    const prev = this.keySlaveId;
+    if (slave === prev) return;
+    this.keySlaveId = slave;
+    if (slave == null && prev != null) {
+      this.keyPropagating = true;
+      this.deck(prev).setPitch(0);
+      this.keyPropagating = false;
+    } else if (slave != null) {
+      this.matchKeyToMaster();
+    }
+    this.writeKeyRoles();
   }
 
   /** KEY toggle. off → become key-SLAVE, smart-shifted to a key compatible with the
@@ -1564,6 +1688,7 @@ export class AudioEngine {
     if (id === this.keySlaveId) {
       this.keySlaveId = null;
       this.writeKeyRoles();
+      this.onRolesAuto?.("key", { kind: "release", remote: this.remoteWrite });
     } else {
       this.matchKeyToMaster();
     }
@@ -1578,6 +1703,7 @@ export class AudioEngine {
       this.matchKeyToMaster();
     }
     this.writeKeyRoles();
+    this.onRolesAuto?.("key", { kind: "reassert", remote: false });
   }
 
   /** position in [-1, 1]: -1 = full A, 0 = both, +1 = full B. Smoothed with a short time

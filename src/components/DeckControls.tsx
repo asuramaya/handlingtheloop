@@ -49,6 +49,9 @@ interface DeckControlsProps {
   onToggleShift: () => void;
   onSync: () => void;
   onKey: () => void;
+  /** SYNC / KEY are BOARD-wide (a role spans both decks): a session device that does not hold both
+   *  decks may not press them (the server refuses the intent; audit 2026-11-11). Shown disabled. */
+  roleLocked?: boolean;
   cueFader?: boolean; // a separate cue device is selected → CUE becomes a headphone-level fader
   /** What the controller's HI/MID/LOW/CFX knobs drive right now (App eqStemMode), or undefined with
    *  no controller. The bank tags that row; on the board the SMART CFX lamp mirrors it. */
@@ -90,7 +93,7 @@ const PAD_MODE_BTNS: { base: PadMode; label: string; shiftLabel: string; kbd: st
 //   • ⌗ → a skip-size selector (1/16 beat … 8 bars) instead of the grid magnet
 //   • a pad → save the active loop to that pad (empty) / clear it (set)
 // `mirror` flips deck B so the two banks are symmetric around the center mixer.
-export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, cueFader, knobs, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
+export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused, onFocus, expanded, collapsed, mirror, shift, stemPending, stemPendingPct, otherStemPending, tempoRange, pitchRange, levelGainDb, onCycleTempoRange, onCyclePitchRange, onToggleShift, onSync, onKey, roleLocked, cueFader, knobs, locked, emitControls, sampler, onFxSelect, fxCtlRef }: DeckControlsProps) {
   const emit = useEmit();
   const refresh = useRefresh();
   // Beat size currently rolling (Shift-held loop pad), or null. A roll engages a
@@ -115,6 +118,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     clearTimeout(rec.tmr);
     if (rec.held) {
       deck.previewRelease(); // slip → snap to shadow; else return to where we were
+      emit({ kind: "board", deck: id, id: "preview", phase: "up", arg: deck.slipping ? 1 : 0 }); // ★ shared (audit 2026-11-11)
       padSuppress.current = true; // a hold consumed the gesture — don't also jump on click
       refresh();
     }
@@ -340,6 +344,10 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     rec.tmr = window.setTimeout(() => {
       rec.held = true;
       deck.previewHold(deck.cuePoint); // play from the cue while held
+      // ★ The hold crosses (operator, 2026-11-11: session sync audit). It moves the playhead and
+      // starts playback; kept local, a follower's preview was undone by the anchor's next tick and
+      // an anchor's never reached anyone. The release carries the presser's slip (board `preview`).
+      emit({ kind: "board", deck: id, id: "preview", phase: "down", arg: deck.cuePoint });
       refresh();
     }, HOLD_MS);
     cueHold.current = rec;
@@ -351,6 +359,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
     clearTimeout(rec.tmr);
     if (rec.held) {
       deck.previewRelease(); // slip-aware return to the cue point
+      emit({ kind: "board", deck: id, id: "preview", phase: "up", arg: deck.slipping ? 1 : 0 });
       cueSuppress.current = true; // the hold owned it — don't also set/jump on the trailing click
       refresh();
     }
@@ -548,6 +557,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   rec.tmr = window.setTimeout(() => {
                     rec.held = true;
                     deck.previewHold(cuePos); // play from the cue while held
+                    emit({ kind: "board", deck: id, id: "preview", phase: "down", arg: cuePos }); // ★ shared (audit 2026-11-11)
                     refresh();
                   }, HOLD_MS);
                   padHold.current = rec;
@@ -838,9 +848,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   ? "Key-locked — harmonically matched to the other deck (tap to release)"
                   : "Key match — harmonically shift to be compatible with the other deck"
             }
+            // ★ App's pressKey emits the role AND both pitches in order (syncRoles.keyStateIntents); a
+            // plain pitch emitted here after it would land on the far follower as a hand on the KEY
+            // knob and release the lock it just took (operator, 2026-11-11: session sync audit).
+            disabled={roleLocked}
+            style={roleLocked ? { opacity: 0.35, cursor: "not-allowed" } : undefined}
             onClick={act(() => {
+              if (roleLocked) return;
               onKey();
-              emit({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
             })}
           >
             {/* Very narrow phones (same 380px breakpoint the chin already uses to drop its
@@ -934,9 +949,14 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
                   ? "Synced — following the other deck (tap to release)"
                   : "Beat sync — lock tempo + phase to the other deck"
             }
+            // ★ No emitControls here any more: App's pressSync sends the role, the tempos and the align
+            // seek in the order a receiver needs (syncRoles.syncStateIntents). Re-broadcasting the whole
+            // strip after it put an unmarked tempo on the far follower, which released the lock.
+            disabled={roleLocked}
+            style={roleLocked ? { opacity: 0.35, cursor: "not-allowed" } : undefined}
             onClick={act(() => {
+              if (roleLocked) return;
               onSync();
-              emitControls(id);
             })}
           >
             <span className="btn-label-full">{deck.syncRole === "master" ? "MASTER" : "SYNC"}</span>

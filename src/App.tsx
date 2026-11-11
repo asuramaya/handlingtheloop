@@ -158,12 +158,13 @@ import { useLyricsSync } from "./App/useLyricsSync";
 import { useReplay } from "./App/useReplay";
 import { useMidiRouting } from "./App/useMidiRouting";
 import { SpineContext, useSpine, type Spine } from "./App/spine";
-import { fxBypassIntent } from "@htl/room/fxWire";
+import { fxBypassIntent, fxRackIntent } from "@htl/room/fxWire";
 import { scrubBegin, scrubEnd, scrubIdle, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
 import { isRemoteLoopApply, noteLocalIntent } from "@htl/room/localGestures";
 import { hotCueResultIntent, loopEditIntent } from "@htl/room/loopWire";
 import { isApplyingRemote } from "@htl/room/remoteApply";
 import type { LoopEdit } from "@htl/audio/LoopEngine";
+import { syncStateIntents, keyStateIntents, FollowTempoGate, SYNC_ECHO_TEMPO_EPS, shouldAnnounceAutoRole } from "@htl/room/syncRoles";
 import { registerBoardAction } from "@htl/board/boardActions";
 
 type DeckId = "A" | "B";
@@ -346,6 +347,16 @@ function AppBody() {
   useEffect(() => {
     xfaderEnabledRef.current = xfaderEnabled;
   }, [xfaderEnabled]);
+  // ★ A co-DJ's crossfader ENABLE switch lands here too (operator, 2026-11-11: session sync audit) —
+  // only its recentre used to cross. Board-wide, sent once on deck A (see xfaderToggle).
+  useEffect(() => {
+    registerBoardAction("xfader", (deck, _phase, arg) => {
+      if (deck !== engine.deckA) return;
+      const on = arg !== "off";
+      xfaderEnabledRef.current = on;
+      setXfaderEnabled(on);
+    });
+  }, [engine]);
   // Headphone (cue-device) master controls — display state for the buttonoids; the engine
   // holds the truth, these mirror it so the FLX 🎧 MIX knob and the on-screen cells agree.
   const [cueMix, setCueMixSt] = useState(0); // 0 = full CUE (PFL) … 1 = full MST (master)
@@ -784,6 +795,31 @@ function AppBody() {
   // passed, moved this device's crossfader, and emitted an intent the server drops (canDriveIntent
   // needs BOTH decks). Silent divergence on the shared board — 71277a23, from the seat one role up.
   const boardLockedRef = useRef(false);
+  // ★ ONE PRESS PATH FOR SYNC AND KEY, every surface (on-screen, keyboard, MIDI) — operator,
+  // 2026-11-11: session sync audit. The press is board-wide (a role spans both decks), so a device
+  // that does not hold BOTH decks may not make it: the server refuses the deck-less `sync` intent
+  // (canDriveIntent), but this engine applied it and the per-deck tempo intent that followed passed,
+  // so the anchor RELEASED its lock. What crosses afterwards is syncRoles' ordered state: the role,
+  // the leader's tempo, the follower's tempo marked `follow`, and the phase-align seek when the
+  // engage moved the follower (without it the anchor kept the unaligned phase and its tick yanked us).
+  const pressSync = useCallback(
+    (id: DeckId) => {
+      if (boardLockedRef.current) return;
+      doSync(id);
+      for (const i of syncStateIntents(engine, engine.takeAlignSeek())) emitRef.current(i);
+      refresh();
+    },
+    [engine, doSync, emitRef, refresh],
+  );
+  const pressKey = useCallback(
+    (id: DeckId) => {
+      if (boardLockedRef.current) return;
+      engine.toggleKey(id);
+      for (const i of keyStateIntents(engine)) emitRef.current(i);
+      refresh();
+    },
+    [engine, emitRef, refresh],
+  );
   // Per-deck "current FX" index — the device selected in each deck's FX strip, mirrored up so
   // the gamepad's bypass-current action (R3) knows which device to flip.
   const fxSelRef = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
@@ -1125,9 +1161,7 @@ function AppBody() {
           deck.setTempo(0);
           emitRef.current({ kind: "control", deck: id, param: "tempo", value: 0 });
         } else {
-          doSync(id);
-          emitDeckRef.current(id);
-          emitRef.current({ kind: "sync", slave: engine.syncSlave }); // mirror the button on peers
+          pressSync(id); // the role + its ordered state (syncStateIntents); board-gated
         }
       },
       keyMatch: (deck, id, s) => {
@@ -1136,9 +1170,7 @@ function AppBody() {
           emitRef.current({ kind: "control", deck: id, param: "pitch", value: 0 });
           return;
         }
-        engine.toggleKey(id);
-        emitRef.current({ kind: "control", deck: id, param: "pitch", value: deck.pitch });
-        emitRef.current({ kind: "key", slave: engine.keySlave }); // mirror the button on peers
+        pressKey(id); // the role + both pitches (keyStateIntents); board-gated
       },
       // Channel CUE (headphone PFL) toggle — pre-listen this deck in the cue device. LOCAL-ONLY
       // (each DJ's headphone is their own → never emitted to a session). 0 ↔ full send.
@@ -1154,6 +1186,7 @@ function AppBody() {
         fxCtlFor(id)?.closeMenu(); // hardware ON/OFF dismisses the preset browse
         if (s) {
           deck.resetFxAt(i);
+          emitRef.current(fxRackIntent(deck, id)); // ★ the reset crosses (audit 2026-11-11): it moved every param
           refresh();
           return;
         }
@@ -1163,11 +1196,15 @@ function AppBody() {
         emitRef.current(fxBypassIntent(deck, id, i, next));
         refresh();
       },
-      // BEAT FX SMART CFX → reset the focused deck's SELECTED effect to its defaults (local).
+      // BEAT FX SMART CFX → reset the focused deck's SELECTED effect to its defaults.
+      // ★ It was local only (operator, 2026-11-11: session sync audit): every param of the device
+      // jumped to its default here and stayed where it was on the far side. The reset is a rack
+      // state, so the rack crosses — the same message an FX preset recall sends.
       fxReset: (deck, id) => {
         const i = fxSelRef.current[id];
         if (!deck.fxDevices[i]) return;
         deck.resetFxAt(i);
+        emitRef.current(fxRackIntent(deck, id));
         refresh();
       },
       // BEAT FX BEAT ◀▶ → move the selection (add candidate in add-mode). SHIFT → reorder the tab.
@@ -1270,17 +1307,20 @@ function AppBody() {
         deck.phraseJump(1);
         emitRef.current({ kind: "transport", deck: id, action: "seek", position: deck.position() });
       },
-      spinback: (deck, _id, s) => {
+      spinback: (deck, id, s) => {
         // SHIFT = a stronger/longer spin (an explicit strength override — spinback() already
         // took one, nothing new to build engine-side). 20 is clearly past the settings knob's
         // normal 4..14 range (lerp(4,14,backSpinLength)), so it reads as a deliberately bigger
         // throw, not just "the Long preset."
-        deck.spinback(s ? 20 : undefined); // back-spin then catch to play (local audio effect)
+        deck.spinback(s ? 20 : undefined); // back-spin then catch to play
+        // ★ And the far side does it too (audit 2026-11-11): it moves the playhead the tick owns.
+        emitRef.current({ kind: "board", deck: id, id: "spinback", ...(s ? { arg: 20 } : {}) });
       },
       // Release-FX Vinyl Brake: decelerate to a stop now, always — independent of the Vinyl
       // Speed toggle and of Play/Pause's own brakeStop (see Deck.releaseBrake's doc comment).
-      releaseBrake: (deck) => {
+      releaseBrake: (deck, id) => {
         deck.releaseBrake();
+        emitRef.current({ kind: "board", deck: id, id: "brake" }); // shared (audit 2026-11-11)
       },
       slip: () => {
         // SLIP is a setting now (a scrub behaviour); Z toggles it for both decks.
@@ -1288,10 +1328,16 @@ function AppBody() {
       },
       // FLX SMART CFX → A/B the EQ (the permanent channel-strip device) on BOTH decks at once.
       // More useful than a colour-filter kill: drop/restore the whole EQ curve instantly.
+      // ★ It used to set both decks locally and emit nothing (operator, 2026-11-11: session sync
+      // audit). Each deck now asks whether this device may drive it and says what it did, as any
+      // both-deck action must (bothDeckActionScan.test.ts).
       eqBypass: () => {
         const on = !engine.deck("A").eqBypassed;
-        engine.deck("A").setEqBypass(on);
-        engine.deck("B").setEqBypass(on);
+        for (const d of ["A", "B"] as const) {
+          if (!canDriveDeckRef.current(d)) continue;
+          engine.deck(d).setEqBypass(on);
+          emitRef.current({ kind: "toggle", deck: d, param: "eqBypass", value: on });
+        }
         refresh();
       },
       // FLX SMART FADER (unshifted) → arm/disarm OUR Smart Fader (crossfader-driven transition).
@@ -1309,11 +1355,16 @@ function AppBody() {
       },
       // SHIFT + SMART FADER → enable/disable the crossfader entirely and recentre it.
       xfaderToggle: () => {
+        if (boardLockedRef.current) return; // a board-wide switch: full control only
         if (smartFader.isArmed) { smartFader.disarm(); setSmartFaderArmed(false); }
-        setXfaderEnabled((e) => !e);
+        const next = !xfaderEnabledRef.current;
+        setXfaderEnabled(next);
         setCrossfade(0);
         engine.setCrossfade(0);
         emitRef.current({ kind: "crossfade", value: 0 }); // sync the recentre to a session
+        // ★ …and the switch itself (audit 2026-11-11): only the recentre crossed, so the far side's
+        // fader stayed live (or dead) while this one was the other. Board-wide → sent once, on A.
+        emitRef.current({ kind: "board", deck: "A", id: "xfader", arg: next ? "on" : "off" });
         midiSendRef.current?.([0x96, 0x01, 0x00]); // force the HW Smart-Fader off immediately
       },
       // Keyboard Smart Fader: ONE shift-aware key — bare = arm/disarm Smart Fader, SHIFT = enable/
@@ -1328,7 +1379,10 @@ function AppBody() {
         if (!on) deck.censorEnd();
         else if (s) deck.setReverse(true);
         else deck.censorBegin();
-        if (!s) emitRef.current({ kind: "board", deck: id, id: "censor", phase: on ? "down" : "up" });
+        // ★ The SUSTAINED reverse (SHIFT) emitted nothing, and a censor released WITH shift emitted
+        // nothing either, leaving the far side running backward (audit 2026-11-11). A release is
+        // always `censor` up (censorEnd stops either); a start says which of the two it was.
+        emitRef.current({ kind: "board", deck: id, id: on && s ? "reverse" : "censor", phase: on ? "down" : "up" });
         refresh();
       },
       // Pad-mode selectors — switch what the 8 pads (keys 1-8) do on the focused deck. Emit
@@ -1463,7 +1517,7 @@ function AppBody() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyRelease);
     };
-  }, [engine, doSync, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, libOpen, settings.keyBindings]);
+  }, [engine, doSync, pressSync, pressKey, shift, focused, matchGain, cycleTempoRange, cyclePitchRange, refresh, libOpen, settings.keyBindings]);
 
   useEffect(() => {
     applySettings(settings);
@@ -2789,6 +2843,37 @@ function AppBody() {
   );
   emitRef.current = emit;
   emitDeckRef.current = emitDeckControls;
+  // ★ ROLE CHANGES NOBODY PRESSED, SAID BY THE ANCHOR (operator, 2026-11-11: session sync audit).
+  // The automatic master hand-off, a re-align after a load, a release by a tempo move, and the
+  // follower's continuous re-match all changed roles/tempo on the anchor with no intent, so guests'
+  // MASTER label and tempo readout went stale. The ANCHOR speaks for them; a guest speaks only for a
+  // release its own hand caused (syncRoles.shouldAnnounceAutoRole says why). The continuous follow is
+  // anchor-only and rate-limited (FollowTempoGate: beyond 0.02 %, at most 4/s, trailing value kept).
+  useEffect(() => {
+    const isAnchor = () => !!roomRef.current?.isAnchor;
+    const gate = new FollowTempoGate((deck, value) => emitRef.current({ kind: "control", deck, param: "tempo", value, follow: true }), {
+      minMs: 250,
+      eps: SYNC_ECHO_TEMPO_EPS,
+      now: () => performance.now(),
+      schedule: (fn, ms) => setTimeout(fn, ms),
+      cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    });
+    engine.onRolesAuto = (what, cause) => {
+      if (!shouldAnnounceAutoRole({ isAnchor: isAnchor(), cause })) return;
+      const out = what === "sync" ? syncStateIntents(engine, engine.takeAlignSeek()) : keyStateIntents(engine);
+      if (what === "sync" && engine.syncSlave == null) gate.reset();
+      for (const i of out) emitRef.current(i);
+      refresh();
+    };
+    engine.onFollowTempo = (id, pct) => {
+      if (isAnchor()) gate.note(id, pct);
+    };
+    return () => {
+      engine.onRolesAuto = undefined;
+      engine.onFollowTempo = undefined;
+      gate.reset();
+    };
+  }, [engine, emitRef, roomRef, refresh]);
   // Apply inbound control whenever we're a participant — intents are always from
   // OTHER controllers (the DO never echoes our own), so it never fights us.
   followRef.current = room.enabled || replay.active; // G1c: replay drives the same handlers
@@ -2833,9 +2918,11 @@ function AppBody() {
   const onJogStart = useCallback(
     (id: DeckId) => {
       scrubBegin(scrubbing.current[id], performance.now(), true);
-      emit({ kind: "jog", deck: id, phase: "start" });
+      // ★ The sender's slip rides the grab (operator, 2026-11-11: session sync audit): the far side's
+      // release used its OWN slip setting, so one device slip-snapped and the other coasted.
+      emit({ kind: "jog", deck: id, phase: "start", slip: engine.deck(id).slipping });
     },
-    [emit],
+    [emit, engine],
   );
   const emitJog = useCallback(
     (id: DeckId, delta: number) => {
@@ -2857,6 +2944,25 @@ function AppBody() {
       const f = scrubbing.current[id];
       const token = scrubEnd(f); // cancel-safe: a newer scrub's start/move voids this tail
       setTimeout(() => scrubTailDone(f, token), SCRUB_TAIL_MS);
+    },
+    [emit],
+  );
+  // ★ A BEND CROSSES (operator, 2026-11-11: session sync audit). The lane drag / Shift-wheel and the
+  // MIDI ring/platter bend nudged only this device; on a guest that is a no-op (its rate is the
+  // anchor's), so a guest could not beat-match at all, and an anchor's bend reached guests only as
+  // the tick dragged them. Summed per frame like the jog stream; a board `bend` (boardActions.ts).
+  const bendDelta = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  const bendRaf = useRef<Record<DeckId, number>>({ A: 0, B: 0 });
+  const emitBend = useCallback(
+    (id: DeckId, delta: number) => {
+      bendDelta.current[id] += delta;
+      if (bendRaf.current[id]) return;
+      bendRaf.current[id] = requestAnimationFrame(() => {
+        bendRaf.current[id] = 0;
+        const d = bendDelta.current[id];
+        bendDelta.current[id] = 0;
+        if (d !== 0) emit({ kind: "board", deck: id, id: "bend", arg: d });
+      });
     },
     [emit],
   );
@@ -2902,6 +3008,7 @@ function AppBody() {
     onJogStart,
     onJogEnd,
     emitJog,
+    emitBend,
     canDriveDeckRef,
     boardLockedRef,
     eqStemModeRef,
@@ -4280,11 +4387,12 @@ function AppBody() {
               onJog={(delta) => emitJog(id, delta)}
               onJogEnd={() => onJogEnd(id)}
               onSeek={(pos) => emitSeekTo(id, pos)}
+              onBend={(d) => emitBend(id, d)}
               // DeckLane already called censorBegin/End by the time this fires, so
               // deck.reversing reflects the NEW state — mirrors the keyboard censor
-              // handler's own board-event shape. releaseBrake has no session-sync from
-              // the keyboard either (spinback doesn't get one currently), so the touch
-              // gesture matches that as-is rather than inventing new sync for just one path.
+              // handler's own board-event shape. ★ The brake crosses now too, as the keyboard's
+              // does (operator, 2026-11-11: session sync audit) — it moves the playhead the tick owns.
+              onReleaseBrake={() => emitRef.current({ kind: "board", deck: id, id: "brake" })}
               onCensorToggle={() => emitRef.current({ kind: "board", deck: id, id: "censor", phase: engine.deck(id).reversing ? "down" : "up" })}
               onReprocessLyrics={(eng) => reprocessLyrics(id, eng)}
             />
@@ -4403,8 +4511,9 @@ function AppBody() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { doSync("A"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
-            onKey={() => { engine.toggleKey("A"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
+            onSync={() => pressSync("A")}
+            onKey={() => pressKey("A")}
+            roleLocked={boardLocked}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             locked={deckLocked("A")}
             emitControls={emitDeckControls}
@@ -4434,8 +4543,9 @@ function AppBody() {
             onCycleTempoRange={cycleTempoRange}
             onCyclePitchRange={cyclePitchRange}
             onToggleShift={() => setShiftLatched((v) => !v)}
-            onSync={() => { doSync("B"); emit({ kind: "sync", slave: engine.syncSlave }); refresh(); }}
-            onKey={() => { engine.toggleKey("B"); emit({ kind: "key", slave: engine.keySlave }); refresh(); }}
+            onSync={() => pressSync("B")}
+            onKey={() => pressKey("B")}
+            roleLocked={boardLocked}
             cueFader={!!settings.audioCueOutputId && engine.canCueDevice}
             locked={deckLocked("B")}
             emitControls={emitDeckControls}

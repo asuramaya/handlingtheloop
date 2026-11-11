@@ -22,6 +22,7 @@ import { LoopEngine, type LoopEdit } from "../audio/LoopEngine";
 import { nearestBeat, type Beatgrid } from "../analysis/analyze";
 import { loopEditIntent } from "./loopWire";
 import { isApplyingRemote } from "./remoteApply";
+import { isRoleEcho, keyStateIntents, shouldAnnounceAutoRole, syncStateIntents, SYNC_ECHO_TEMPO_EPS, type AutoRoleCause } from "./syncRoles";
 
 type BoardDeck = Deck;
 import type { DeckId, FxChainSlot, FxSlot, Intent, StemName } from "./protocol";
@@ -234,7 +235,10 @@ export class FakeDeck implements IntentDeck {
     this.eq[k] = v;
     this.log.push(`${k}=${v}`);
   }
-  setTempo(v: number) { this.tempo = v; this.log.push(`tempo=${v}`); }
+  /** The engine's role hooks, fired at the end of setTempo / setPitch exactly as the real Deck does. */
+  onTempoChange?: () => void;
+  onPitchChange?: () => void;
+  setTempo(v: number) { this.tempo = v; this.log.push(`tempo=${v}`); this.onTempoChange?.(); }
   setTrim(v: number) { this.trim = v; }
   setLevel(v: number) { this.level = v; }
   setEqLow(v: number) { this.eqSet("eqLow", v); }
@@ -256,7 +260,7 @@ export class FakeDeck implements IntentDeck {
   setEqMix(v: number) { this.eqSet("eqMix", v); }
   setEqOut(v: number) { this.eqSet("eqOut", v); }
   setFilter(v: number) { this.filter = v; this.log.push(`filter=${v}`); }
-  setPitch(v: number) { this.pitch = v; this.log.push(`pitch=${v}`); }
+  setPitch(v: number) { this.pitch = v; this.log.push(`pitch=${v}`); this.onPitchChange?.(); }
   setKeylock(v: boolean) { this.toggles.keylock = v; }
   setEqBypass(v: boolean) { this.toggles.eqBypass = v; }
   setQuantize(v: boolean) { this.toggles.quantize = v; }
@@ -266,7 +270,17 @@ export class FakeDeck implements IntentDeck {
   pause() { this.playing = false; this.log.push("pause"); }
   togglePlay() { if (this.playing) this.pause(); else this.play(); }
   seek(p: number) { this.pos = p; this.log.push(`seek ${p}`); }
-  scrubBegin() { this.log.push("scrubBegin"); }
+  scrubBegin(slip?: boolean) { this.log.push(slip === undefined ? "scrubBegin" : `scrubBegin slip=${slip}`); }
+  // Performance gestures that cross as `board` intents (boardActions.ts registers them against the
+  // real Deck's methods; these record that they arrived, with what).
+  previewHold(pos: number) { this.log.push(`previewHold ${pos}`); }
+  previewRelease(slip?: boolean) { this.log.push(`previewRelease slip=${slip}`); }
+  bend(d: number) { this.log.push(`bend ${d}`); }
+  spinback(strength?: number) { this.log.push(`spinback ${strength ?? "-"}`); }
+  releaseBrake() { this.log.push("brake"); }
+  setReverse(on: boolean) { this.log.push(`reverse ${on}`); }
+  censorBegin() { this.log.push("censorBegin"); }
+  censorEnd() { this.log.push("censorEnd"); }
   scrubMove(d: number) { this.log.push(`scrubMove ${d}`); }
   scrubEnd() { this.log.push("scrubEnd"); }
   // The loop surface — the real engine, with a receipt.
@@ -328,28 +342,137 @@ export class FakeDeck implements IntentDeck {
   }
 }
 
+/** ★ THE ROLE STATE MACHINE, MODELLED ON AudioEngine's (operator, 2026-11-11: session sync audit).
+ *  It used to be two display fields set by `mirror*Display` — the bug itself, faithfully simulated.
+ *  Now it holds a real follower id with the engine's semantics: a press on the follower releases, a
+ *  press elsewhere engages/flips; the follower tracks its leader's tempo; a tempo/pitch write on the
+ *  follower releases unless it is the lock's own echo (the SAME isRoleEcho the engine runs). "Tracks"
+ *  is modelled as the follower's tempo becoming the leader's — no beatgrids, no octave folding. */
 export class FakeEngine implements IntentEngine {
   readonly decks: Record<DeckId, FakeDeck> = { A: new FakeDeck(), B: new FakeDeck() };
   crossfade = 0;
   commandedRamp = false;
-  syncSlave: DeckId | null = null;
-  keySlave: DeckId | null = null;
   resumed = 0;
+  private slave: DeckId | null = null;
+  private keySlaveId: DeckId | null = null;
+  private propagating = false;
+  /** Fired when roles change with nobody pressing (a release by a tempo move) — AudioEngine.onRolesAuto. */
+  onRolesAuto?: (what: "sync" | "key", cause: AutoRoleCause) => void;
+  private remoteWrite = false;
+  constructor() {
+    for (const id of ["A", "B"] as DeckId[]) {
+      this.decks[id].onTempoChange = () => this.onDeckTempo(id);
+      this.decks[id].onPitchChange = () => this.onDeckPitch(id);
+    }
+  }
   deck(id: DeckId): FakeDeck {
     return this.decks[id];
   }
+  get syncSlave(): DeckId | null {
+    return this.slave;
+  }
+  get keySlave(): DeckId | null {
+    return this.keySlaveId;
+  }
   setCrossfade(v: number) { this.crossfade = v; }
   setCommandedRamp(on: boolean) { this.commandedRamp = on; }
-  // SmartFader beat-locks the incoming deck through these; the simulator only needs them to exist
-  // and to be consistent — no beat-matching is simulated and none is claimed.
-  private slave: DeckId | null = null;
-  syncRole(id: DeckId): "master" | "slave" | null {
-    return this.slave === id ? "slave" : this.slave ? "master" : null;
+  syncRole(id: DeckId): "master" | "slave" | "off" {
+    return this.slave === id ? "slave" : this.slave ? "master" : "off";
   }
-  toggleSync(id: DeckId) { this.slave = this.slave === id ? null : id; }
+  keyRole(id: DeckId): "master" | "slave" | "off" {
+    return this.keySlaveId === id ? "slave" : this.keySlaveId ? "master" : "off";
+  }
+  private other(id: DeckId): DeckId {
+    return id === "A" ? "B" : "A";
+  }
+  private matchFollower() {
+    if (this.slave == null) return;
+    this.propagating = true;
+    this.decks[this.slave].setTempo(this.decks[this.other(this.slave)].tempo);
+    this.propagating = false;
+  }
+  /** A LOCAL press, as AudioEngine.toggleSync. */
+  toggleSync(id: DeckId) {
+    if (this.slave === id) this.slave = null;
+    else {
+      this.slave = id;
+      this.matchFollower();
+    }
+  }
+  releaseSync() { this.slave = null; }
+  toggleKey(id: DeckId) {
+    if (this.keySlaveId === id) {
+      this.keySlaveId = null;
+      this.propagating = true;
+      this.decks[id].setPitch(0);
+      this.propagating = false;
+    } else {
+      this.keySlaveId = id;
+      this.propagating = true;
+      this.decks[id].setPitch(this.decks[this.other(id)].pitch + 1); // "a compatible key": any deterministic shift
+      this.propagating = false;
+    }
+  }
+  private onDeckTempo(id: DeckId) {
+    if (this.propagating || this.slave == null) return;
+    if (id === this.slave) {
+      this.slave = null;
+      this.onRolesAuto?.("sync", { kind: "release", remote: this.remoteWrite });
+    } else this.matchFollower();
+  }
+  private onDeckPitch(id: DeckId) {
+    if (this.propagating || this.keySlaveId == null) return;
+    if (id === this.keySlaveId) {
+      this.keySlaveId = null;
+      this.onRolesAuto?.("key", { kind: "release", remote: this.remoteWrite });
+    }
+  }
   resume() { this.resumed++; }
-  mirrorSyncDisplay(slave: DeckId | null) { this.syncSlave = slave; }
-  mirrorKeyDisplay(slave: DeckId | null) { this.keySlave = slave; }
+  applySyncRole(slave: DeckId | null) {
+    if (slave === this.slave) return;
+    this.slave = slave;
+    this.matchFollower();
+  }
+  applyKeyRole(slave: DeckId | null) {
+    const prev = this.keySlaveId;
+    if (slave === prev) return;
+    if (slave == null && prev != null) {
+      this.keySlaveId = null;
+      this.propagating = true;
+      this.decks[prev].setPitch(0);
+      this.propagating = false;
+    } else if (slave != null) {
+      this.keySlaveId = null;
+      this.toggleKey(slave);
+    }
+  }
+  applyRemoteTempo(id: DeckId, pct: number, follow?: boolean) {
+    const d = this.decks[id];
+    if (isRoleEcho({ isFollower: this.slave === id, current: d.tempo, incoming: pct, follow, eps: SYNC_ECHO_TEMPO_EPS })) {
+      this.propagating = true;
+      d.setTempo(pct);
+      this.propagating = false;
+    } else {
+      this.remoteWrite = true;
+      d.setTempo(pct);
+      this.remoteWrite = false;
+    }
+  }
+  applyRemotePitch(id: DeckId, semis: number, follow?: boolean) {
+    const d = this.decks[id];
+    if (isRoleEcho({ isFollower: this.keySlaveId === id, current: d.pitch, incoming: semis, follow, eps: 0 })) {
+      this.propagating = true;
+      d.setPitch(semis);
+      this.propagating = false;
+    } else {
+      this.remoteWrite = true;
+      d.setPitch(semis);
+      this.remoteWrite = false;
+    }
+  }
+  takeAlignSeek(): { deck: DeckId; pos: number } | null {
+    return null;
+  }
   snapshot() {
     return { crossfade: this.crossfade, syncSlave: this.syncSlave, keySlave: this.keySlave, A: this.decks.A.snapshot(), B: this.decks.B.snapshot() };
   }
@@ -364,6 +487,8 @@ export class SimDevice {
   readonly hostCalls: string[] = [];
   /** Set by Session so a gesture can go out on the wire. */
   wire: ((intent: Intent, from: SimDevice) => void) | null = null;
+  /** The board's authority (Session makes the first device the anchor). */
+  anchor = false;
   constructor(readonly name: string) {
     // The App's loopEdit wiring, reproduced: every LOCAL loop mutation broadcasts its absolute
     // result once, and nothing is broadcast while a peer's intent is being applied.
@@ -374,6 +499,23 @@ export class SimDevice {
         this.send(loopEditIntent(id, edit, deck.loopState()));
       };
     }
+    // Role changes nobody pressed go out by the app's own rule (App.tsx onRolesAuto).
+    this.engine.onRolesAuto = (what, cause) => {
+      if (!shouldAnnounceAutoRole({ isAnchor: this.anchor, cause })) return;
+      const out = what === "sync" ? syncStateIntents(this.engine, null) : keyStateIntents(this.engine);
+      for (const i of out) this.emit(i, { local: false });
+    };
+  }
+  /** A SYNC press, exactly as App.pressSync: the engine toggles, then the ordered state crosses. */
+  pressSync(id: DeckId): void {
+    if (this.engine.syncRole(id) === "master") this.engine.releaseSync();
+    else this.engine.toggleSync(id);
+    for (const i of syncStateIntents(this.engine, this.engine.takeAlignSeek())) this.emit(i, { local: false });
+  }
+  /** A KEY press, exactly as App.pressKey. */
+  pressKey(id: DeckId): void {
+    this.engine.toggleKey(id);
+    for (const i of keyStateIntents(this.engine)) this.emit(i, { local: false });
   }
   /** Put an intent on the wire WITHOUT applying it here: the local half already happened (the
    *  gesture ran on this device's deck), which is how a result-carrying emit works in the app. */
@@ -422,6 +564,7 @@ export class Session {
   readonly devices: SimDevice[];
   constructor(...names: string[]) {
     this.devices = names.map((n) => new SimDevice(n));
+    if (this.devices[0]) this.devices[0].anchor = true;
     for (const d of this.devices) d.wire = (intent, from) => {
       for (const other of this.devices) if (other !== from) other.apply(intent);
     };

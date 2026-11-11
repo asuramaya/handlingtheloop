@@ -1658,6 +1658,11 @@ export class Deck {
   get followTrim(): number {
     return this._followTrim;
   }
+  /** True while the anchor's tick drives this deck (a session follower). AudioEngine's SYNC loop
+   *  stands down on such a deck: its rate and position are the anchor's (audit 2026-11-11). */
+  get tickFollowing(): boolean {
+    return this.followOn;
+  }
   /** Stop following — the local clock drives the drawn playhead again. */
   endFollow(): void {
     this.followOn = false;
@@ -1843,9 +1848,17 @@ export class Deck {
     return this._syncTrim;
   }
 
-  /** Grip the platter (pointer/jog down) — stops it dead, then it follows the finger. */
-  scrubBegin() {
-    this.jog.scrubBegin();
+  /** Grip the platter (pointer/jog down) — stops it dead, then it follows the finger.
+   *  `slip` (a session peer's grab) arms the slip shadow by the SENDER's slip setting instead of
+   *  this device's, so a remote scratch releases where it did on the device that made it
+   *  (operator, 2026-11-11: session sync audit). Omitted = this device's own toggle, as before. */
+  scrubBegin(slip?: boolean) {
+    this.slipOverride = slip ?? null;
+    try {
+      this.jog.scrubBegin(); // calls slipArm synchronously (JogEngine.scrubBegin)
+    } finally {
+      this.slipOverride = null;
+    }
   }
 
   /** One (coalesced) pointer sample of finger motion, in track seconds — applied straight
@@ -2194,8 +2207,11 @@ export class Deck {
    *  unless SLIP is on AND the deck was playing (nothing advances under a paused deck).
    *  Called by JogEngine at the start of a grab (before the source stops). */
   slipArm() {
-    this.slipAnchor = this.slipEnabled && this._playing ? { pos: this.position(), t: this.ctx.currentTime } : null;
+    const slip = this.slipOverride ?? this.slipEnabled;
+    this.slipAnchor = slip && this._playing ? { pos: this.position(), t: this.ctx.currentTime } : null;
   }
+  /** A remote grab's slip setting, held only for the duration of scrubBegin (see there). */
+  private slipOverride: boolean | null = null;
   /** Force-anchor the shadow regardless of the SLIP toggle (CENSOR always slip-returns).
    *  Still playing-only — nothing advances under a paused deck. */
   slipArmForce() {
@@ -2254,11 +2270,13 @@ export class Deck {
   /** Release a preview hold: SLIP on (and we were playing) → snap to the shadow and keep
    *  playing (the hold was a non-destructive roll); else return to the pre-press position
    *  and restore the prior play state (classic cue-preview). */
-  previewRelease() {
+  previewRelease(slip?: boolean) {
     const a = this.previewAnchor;
     this.previewAnchor = null;
     if (!a) return;
-    if (this.slipEnabled && a.wasPlaying) {
+    // `slip` = a session peer's setting (the hold crossed as a board `preview` gesture), so the far
+    // side returns exactly where the presser did; omitted = this device's own toggle.
+    if ((slip ?? this.slipEnabled) && a.wasPlaying) {
       this.seek(this.shadowOf(a.pos, a.t)); // slip: snap to where it would be, keep playing
     } else if (a.wasPlaying) {
       this.seek(a.pos); // was playing, slip off: return to the press point, keep rolling

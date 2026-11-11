@@ -209,7 +209,10 @@ export interface WireLoopState {
 export type Intent =
   | { kind: "crossfade"; value: number }
   | { kind: "tempoRange"; value: number } // global tempo-fader range (±%)
-  | { kind: "control"; deck: DeckId; param: ControlParam; value: number }
+  // `follow` (optional): this tempo/pitch was PRODUCED by a SYNC/KEY lock on the sender, not moved
+  // by a hand — a receiver whose same deck is the follower applies it without releasing the lock
+  // (syncRoles.isRoleEcho; operator, 2026-11-11: session sync audit). Older peers ignore it.
+  | { kind: "control"; deck: DeckId; param: ControlParam; value: number; follow?: boolean }
   | { kind: "toggle"; deck: DeckId; param: ToggleParam; value: boolean }
   | { kind: "stemGain"; deck: DeckId; stem: StemName; value: number }
   | { kind: "stem"; deck: DeckId; stem: StemName; on: boolean }
@@ -246,7 +249,9 @@ export type Intent =
   // lands on the beat first). A receiver that is not already playing seeks there before playing, so
   // both devices start from the same place rather than from wherever each one's needle sat.
   | { kind: "transport"; deck: DeckId; action: "play" | "pause" | "seek"; position?: number }
-  | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number } // continuous scrub → platter physics
+  // continuous scrub → platter physics. `slip` (optional, on "start"): the SENDER's slip setting, so
+  // the receiver's release lands where the sender's does instead of by its own toggle (audit 2026-11-11).
+  | { kind: "jog"; deck: DeckId; phase: "start" | "move" | "end"; delta?: number; slip?: boolean }
   | { kind: "cue"; deck: DeckId; position: number } // set the cue point
   // ★ A LOOP INTENT CARRIES ITS RESULT (operator, 2026-11-11: session sync audit). `action` is the
   // gesture's name, which older peers still re-run at their own playhead; `state` is what the

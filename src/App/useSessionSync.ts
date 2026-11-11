@@ -193,7 +193,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // the repair for any intent lost in a blip and for the auto-DJ's direct deck moves; see
       // reconcileDeck in App/deckApply.ts for the two rules that make that safe over a live deck.
       const held = heldFor(id, d.videoId);
-      const wrote = reconcileDeck(deck, d, held);
+      // Held: the snapshot carries the SYNC/KEY roles AND every deck's tempo/pitch, so a tempo or pitch
+      // written here is the lock's own answer and must not release it (roles slice, audit 2026-11-11).
+      const wrote = engine.withRolesHeld(() => reconcileDeck(deck, d, held));
       if (wrote.length) event("room.repair", { deck: id, fields: wrote.join(",") });
       // #3 self-heal: the snapshot may have lit this deck's stem cells (markRemoteStems)
       // without the host's 4-lane envelopes yet present. stemControlsReady already gates
@@ -316,9 +318,10 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           engine.setCrossfade(snap.crossfade);
         }
         if (snap.tempoRange != null && !heldB("tempoRange")) setSettings((s) => (s.tempoRange === snap.tempoRange ? s : { ...s, tempoRange: snap.tempoRange! }));
-        // Mirror the SYNC/KEY button state (display only — tempo/pitch arrive as intents).
-        if (snap.syncSlave !== undefined) engine.mirrorSyncDisplay(snap.syncSlave);
-        if (snap.keySlave !== undefined) engine.mirrorKeyDisplay(snap.keySlave);
+        // ★ The SYNC/KEY roles, taken for REAL (was display-only, which inverted this device's next
+        // press; operator, 2026-11-11: session sync audit). Tempo/pitch land held (reconcileDeck).
+        if (snap.syncSlave !== undefined) engine.applySyncRole(snap.syncSlave);
+        if (snap.keySlave !== undefined) engine.applyKeyRole(snap.keySlave);
         // The sampler pads (a joiner never got the ones assigned before it arrived).
         if (snap.pads && !replayActiveRef?.current && !heldB("pads")) samplerPadsRef?.current?.apply(snap.pads);
       }

@@ -4032,3 +4032,18 @@ button.peer-pill:hover {
   padding: 0 12px;
   border-color: color-mix(in srgb, #e0617a 45%, var(--line));
 }
+
+/* v10 (operator, 2026-11-11): name, tags and the meta line side by side on one line (wrapping
+   only when the row is too narrow), and the meta text brighter. */
+.social-roster .social-card-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 2px;
+}
+.social-roster .social-card-meta {
+  margin-top: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+}

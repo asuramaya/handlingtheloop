@@ -199,7 +199,6 @@ export function SocialScreen({
         <div className="session-top">
           <div className="settings-head">
             <h2>{room.isGuest ? "Guest session" : "Session"}</h2>
-            {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
             {inSession && state === "idle" && room.user?.handle && (
               <button
                 className="hero-golive small"
@@ -210,14 +209,7 @@ export function SocialScreen({
                 ● Go live
               </button>
             )}
-            <button
-              className={`room-eye ${revealed ? "on" : ""}`}
-              onClick={toggleRevealed}
-              aria-label={revealed ? "Hide names" : "Reveal names"}
-              title={revealed ? "Hide names" : "Reveal names"}
-            >
-              {revealed ? "🙈" : "👁"}
-            </button>
+            {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
           </div>
 
           {room.engineStale && (
@@ -409,13 +401,22 @@ export function SocialScreen({
                 )}
               </div>
             )}
-            {!room.isGuest && room.signedIn ? (
-              <button className={`hw-btn small ${inviteOpen ? "on" : ""}`} onClick={openInvite} aria-expanded={inviteOpen}>
-                ＋ Invite
+            <span className="session-foot-left">
+              {!room.isGuest && room.signedIn && (
+                <button className={`hw-btn small ${inviteOpen ? "on" : ""}`} onClick={openInvite} aria-expanded={inviteOpen}>
+                  ＋ Invite
+                </button>
+              )}
+              {/* Names are masked for streaming; the switch lives with the other session-wide tools. */}
+              <button
+                className={`hw-btn small session-names ${revealed ? "on" : ""}`}
+                onClick={toggleRevealed}
+                aria-pressed={revealed}
+                title={revealed ? "Hide names (for streaming)" : "Show names"}
+              >
+                {revealed ? "Hide names" : "Show names"}
               </button>
-            ) : (
-              <span />
-            )}
+            </span>
             {room.joined ? (
               <button className="hw-btn small danger" onClick={room.leave}>Leave session</button>
             ) : room.pending ? (

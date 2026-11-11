@@ -3580,13 +3580,54 @@ button.peer-pill:hover {
   color: #fff;
   background: color-mix(in srgb, #e0617a 30%, transparent);
 }
+/* NARROW: the pills stay to the RIGHT of the name as one column, Sound over Decks (operator,
+   2026-11-11: wrapping them under the tags made every row too tall). */
 @container (max-width: 460px) {
   .social-card {
-    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 10px;
+    padding: 10px 12px;
   }
   .social-card-pills {
-    grid-column: 2 / -1;
-    justify-content: flex-start;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
   }
+  /* Sound (the 2nd pill) above Decks; Floor / remove after them. */
+  .social-card-pills > :nth-child(2) {
+    order: -1;
+  }
+  .social-card-pills .peer-pill {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 11.5px;
+  }
+  .social-card-pills .peer-pill.static {
+    padding: 0 4px;
+  }
+  .social-card-pills .peer-pill.kick {
+    width: auto;
+    align-self: flex-end;
+    padding: 0 8px;
+  }
+}
+
+/* Status label at the top right (it took the names eye's place; the eye moved to the footer). */
+.session-top > .settings-head .session-status {
+  margin-left: auto;
+}
+.session-foot-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.session-names {
+  color: var(--muted);
+}
+/* Chat tab: the mode controls sit under the composer, quiet and unlabelled. */
+.chat-panel.fill > .chat-head {
+  justify-content: flex-start;
+  margin-top: -2px;
+}
+.chat-panel.fill > .chat-head .chat-slow-sel {
+  flex-wrap: wrap;
 }

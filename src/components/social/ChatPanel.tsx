@@ -74,37 +74,25 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
   const placeholder = off ? "Chat is off" : room.iAmMuted ? "You're muted" : room.chatSlow > 0 ? `Slow mode · ${room.chatSlow}s` : "Say something…";
   const pct = Math.round(room.hype * 100);
 
-  return (
-    // `fill`: the Session's Chat TAB. The log takes the tab's height and the composer sits on its
-    // floor, like any messenger; no card frame and no "Chat" heading (the tab already says it).
-    <div className={`chat-panel ${fill ? "fill" : ""}`}>
-      {crowd && (
-        <>
-          <div className="hype-row">
-            <span className="hype-label">🔥 Hype</span>
-            <div className={`hype-bar ${pct >= 70 ? "hot" : ""}`}>
-              <div className="hype-fill" style={{ width: `${pct}%` }} />
-              <div className="hype-sprites" aria-hidden="true">
-                {sprites.map((s) => (
-                  <span key={s.id} className="hype-sprite" style={{ left: `${s.x}%` }}>
-                    {s.emoji}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="react-bar">
-            {REACTIONS.map((e) => (
-              <button key={e} className="react-btn" onClick={() => room.react(e)} aria-label={`React ${e}`}>
-                {e}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+  // ★ MY ACCOUNT, NOT MY DEVICE (operator, 2026-11-11: "it does not recognise 2 devices on the same
+  // account as the same you"). A line typed on my phone showed up on my laptop under my masked
+  // name, as if a stranger had said it. Mine = this device, or any device on my own account: for
+  // the host that is every host device; for a guest, its devices carry the same account name.
+  const me = room.peers.find((p) => p.id === room.you) ?? null;
+  const myDevices = new Set(
+    room.peers.filter((p) => p.id === room.you || (me != null && p.host === me.host && (me.host || p.name === me.name))).map((p) => p.id),
+  );
+  // A device that has since LEFT is no longer in the roster; its lines are mine when they carry my
+  // account name. (A device still present is judged by the roster, never by name alone.)
+  const present = new Set(room.peers.map((p) => p.id));
+  const mine = (dev: string, name: string) =>
+    dev === room.you || myDevices.has(dev) || (me != null && !present.has(dev) && name === me.name);
 
+  // The chat-mode row: a heading row in the card form; in the Chat TAB it sits under the composer
+  // (operator: "chat controls should move to the bottom", unlabelled — the controls say what they do).
+  const controls = (
       <div className="social-section-head chat-head">
-        {fill ? (room.host ? <span className="chat-head-label">Who can chat</span> : <span />) : "💬 Chat"}
+        {fill ? null : "💬 Chat"}
         {/* A listener sees WHY the room may refuse them; the host gets the toggle. */}
         {!room.host && room.chatFollowers && (
           <span className="chat-mode-badge">
@@ -134,10 +122,42 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
           </span>
         )}
       </div>
+  );
+
+  return (
+    // `fill`: the Session's Chat TAB. The log takes the tab's height and the composer sits on its
+    // floor, like any messenger; no card frame and no "Chat" heading (the tab already says it).
+    <div className={`chat-panel ${fill ? "fill" : ""}`}>
+      {crowd && (
+        <>
+          <div className="hype-row">
+            <span className="hype-label">🔥 Hype</span>
+            <div className={`hype-bar ${pct >= 70 ? "hot" : ""}`}>
+              <div className="hype-fill" style={{ width: `${pct}%` }} />
+              <div className="hype-sprites" aria-hidden="true">
+                {sprites.map((s) => (
+                  <span key={s.id} className="hype-sprite" style={{ left: `${s.x}%` }}>
+                    {s.emoji}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="react-bar">
+            {REACTIONS.map((e) => (
+              <button key={e} className="react-btn" onClick={() => room.react(e)} aria-label={`React ${e}`}>
+                {e}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!fill && controls}
       <div className="chat-log">
         {room.chatLog.length === 0 && <div className="chat-empty">No messages yet — say hi 👋</div>}
         {room.chatLog.map((m) => {
-          const self = m.dev === room.you;
+          const self = mine(m.dev, m.name);
           return (
             <div key={m.id} className={`chat-line ${self ? "self" : ""}`}>
               <span className="chat-who">{self ? "You" : revealed ? m.name : maskName(m.name)}</span>
@@ -207,6 +227,7 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
           Send
         </button>
       </form>
+      {fill && controls}
     </div>
   );
 }

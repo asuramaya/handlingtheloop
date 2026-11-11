@@ -2532,11 +2532,21 @@ body.no-glow .hw-btn.shift.on {
 .vcell.play .vcell-value::before {
   content: "❚❚";
   letter-spacing: -1px;
-  margin-right: 0.45em;
 }
 .vcell.play .vcell-value::after {
   content: "▶";
-  margin-left: 0.45em;
+}
+/* No "TRIM" label (operator, 2026-11-10): pause · number · play centred in the cell and spread
+   evenly across it. SHIFT still labels the cell RESET. */
+.vcell.play .vcell-label:empty {
+  display: none;
+}
+.vcell.play .vcell-value {
+  display: flex;
+  align-self: stretch;
+  width: 100%;
+  align-items: center;
+  justify-content: space-evenly;
 }
 .vcell.play:not(.playing) .vcell-value::before,
 .vcell.play.playing .vcell-value::after {

@@ -798,7 +798,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
               click resets trim to unity. The board's TRIM knob drives the same value. */}
           <ValueCell
             className={`play ${deck.playing ? "playing" : ""}`}
-            label={shift ? "RESET" : "TRIM"}
+            label={shift ? "RESET" : "" /* no "TRIM": the glyphs and the number say what it is (operator) */}
             value={deck.trim}
             min={0}
             max={2}

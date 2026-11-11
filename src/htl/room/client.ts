@@ -174,6 +174,8 @@ export class RoomClient {
   static readonly PING_BURST = 8;
   /** Room-server time (ms) now, or null until the first pong. */
   serverNow(): number | null {
+    // A sleep / suspend discontinuity drops the estimate (clockSync.ts) — re-burst pings at once.
+    if (this.clock.checkContinuity(performance.now(), Date.now())) this.schedulePing(0);
     return this.clock.toServer(performance.now());
   }
   private schedulePing(delay: number): void {
@@ -504,7 +506,7 @@ export class RoomClient {
     }
     switch (msg.t) {
       case "pong":
-        this.clock.add(msg.c, msg.s, performance.now());
+        this.clock.add(msg.c, msg.s, performance.now(), Date.now());
         break;
       case "welcome":
         this.anchorId = msg.anchorId;

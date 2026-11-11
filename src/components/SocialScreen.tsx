@@ -5,7 +5,7 @@ import type { PanelKey, PanelPlacement } from "@htl";
 import { QRCode } from "./QRCode";
 import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { StageBar } from "./social/StageBar";
-import { SelfSwitches, SocialCard } from "./social/SocialCard";
+import { SocialCard } from "./social/SocialCard";
 import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
 import { InviteFriends } from "./social/InviteFriends";
@@ -48,6 +48,7 @@ import { deviceIcon } from "./social/util";
 //   • FOOT (fixed): THIS device: its Decks / Sound switches and Leave / Join.
 type SessionTab = "room" | "chat";
 let lastTab: SessionTab = "room"; // survives closing and reopening the panel
+let lastInviteUrl: string | null = null; // one link per session: reopen shows it, never re-creates
 
 export function SocialScreen({
   room,
@@ -64,10 +65,14 @@ export function SocialScreen({
   dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
   panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
 }) {
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [inviteUrl, setInviteUrlState] = useState<string | null>(lastInviteUrl);
+  const setInviteUrl = (u: string | null) => {
+    lastInviteUrl = u;
+    setInviteUrlState(u);
+  };
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false); // private-invite card collapses by default
+  const [inviteOpen, setInviteOpen] = useState(false); // the invite card, up from the footer
   const revealed = usePrivacyRevealed();
 
   const online = room.status === "online";
@@ -92,11 +97,22 @@ export function SocialScreen({
     setInviting(true);
     const inv = await room.createInvite();
     setInviting(false);
-    if (inv) {
-      setInviteUrl(inv.url);
-      await copyLink(inv.url);
-    }
+    if (inv) setInviteUrl(inv.url);
   }
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const shareLink = async (url: string) => {
+    try {
+      await navigator.share({ title: "Join my session", url });
+    } catch {
+      /* dismissed / unsupported: the copy button is right beside it */
+    }
+  };
+  // Opening the card makes the link if there is none yet: one tap to a QR, not two.
+  const openInvite = () => {
+    const next = !inviteOpen;
+    setInviteOpen(next);
+    if (next && !inviteUrl && !inviting) void makeInvite();
+  };
 
   const startSession = () => {
     onActivate?.();
@@ -169,8 +185,6 @@ export function SocialScreen({
               ? { label: "Private", tone: "accent" }
               : { label: "Not in a session", tone: "dim" };
 
-  const me = room.peers.find((p) => p.id === room.you) ?? null;
-
   // Conditionally mounted by App (only exists while open) — mount itself IS "just opened".
   const centerZ = useCenterZIndex(dockMode, true);
   const zIndex = panelZIndex(dockMode, "session", panelOrder, centerZ);
@@ -186,6 +200,16 @@ export function SocialScreen({
           <div className="settings-head">
             <h2>{room.isGuest ? "Guest session" : "Session"}</h2>
             {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
+            {inSession && state === "idle" && room.user?.handle && (
+              <button
+                className="hero-golive small"
+                onClick={goLive}
+                disabled={!online}
+                title={`Open @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks.`}
+              >
+                ● Go live
+              </button>
+            )}
             <button
               className={`room-eye ${revealed ? "on" : ""}`}
               onClick={toggleRevealed}
@@ -249,27 +273,6 @@ export function SocialScreen({
                         ))}
                       </span>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {state === "idle" && (
-                <div className="session-line">
-                  {room.user?.handle ? (
-                    <>
-                      <span>
-                        Only people you invite can join.
-                        <InfoDot
-                          text={`Go live opens @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks.`}
-                          label="Go live"
-                        />
-                      </span>
-                      <button className="hero-golive small" onClick={goLive} disabled={!online}>
-                        ● Go live
-                      </button>
-                    </>
-                  ) : (
-                    <span>Only people you invite can join. To go live, claim a @handle under People ▸ You.</span>
                   )}
                 </div>
               )}
@@ -339,7 +342,7 @@ export function SocialScreen({
                   {room.peers
                     .filter((p) => !p.pending)
                     .map((p) => (
-                      <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} selfActs={false} />
+                      <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} />
                     ))}
                   {others.length === 0 && !sessionLive && (
                     <li className="social-ghost">Open htl on another device on this account, or invite someone below.</li>
@@ -347,37 +350,8 @@ export function SocialScreen({
                 </ul>
               )}
 
-              {/* INVITE — the narrower, deliberate door (Go live is the open one). */}
-              {!room.isGuest && room.signedIn && !room.listeningTo && (
-                <div className="settings-section session-invite">
-                  <button className="settings-section-head as-toggle" onClick={() => setInviteOpen((o) => !o)} aria-expanded={inviteOpen}>
-                    <span className="settings-label">Invite someone</span>
-                    <span className="settings-head-note">{inviteOpen ? "▾" : "▸"}</span>
-                  </button>
-                  {inviteOpen && (
-                    <>
-                      <InviteFriends live={room.roomPublic} />
-                      <div className="settings-row">
-                        <span className="settings-label">Invite link</span>
-                        <span className="settings-control">
-                          <button className="hw-btn small" onClick={makeInvite} disabled={inviting}>
-                            {inviting ? "Creating…" : copied ? "Copied ✓" : "Create link"}
-                          </button>
-                        </span>
-                      </div>
-                      {inviteUrl && (
-                        <div className="room-invite-share">
-                          <button type="button" className="room-invite-link" onClick={() => copyLink(inviteUrl)}>
-                            {copied ? "Link copied ✓" : inviteUrl.replace(/^https?:\/\//, "")}
-                          </button>
-                          <QRCode value={inviteUrl} size={172} className="room-invite-qr" />
-                          <span className="room-invite-scan">Scan to join on another device</span>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
+              {/* Friends who are on right now, one tap to invite (absent when nobody is). */}
+              {!room.isGuest && room.signedIn && !room.listeningTo && <InviteFriends live={room.roomPublic} quiet />}
             </>
           ) : (
             <>
@@ -393,26 +367,64 @@ export function SocialScreen({
 
         {room.error && <p className="settings-note bad session-error">{room.error}</p>}
 
-        {/* ═════════════ FOOT — fixed: THIS device ═════════════ */}
+        {/* ═════════════ FOOT — fixed: invite + leave ═════════════ */}
         {inSession && online && !room.listeningTo && (
           <div className="session-foot">
-            <span className="session-foot-who">
-              <span aria-hidden="true">{deviceIcon(me?.kind ?? "")}</span> This device
-            </span>
-            <span className="session-foot-acts">
-              {room.joined && me && <SelfSwitches room={room} p={me} onActivate={onActivate} />}
-              {room.joined ? (
-                <button className="hw-btn small danger" onClick={room.leave}>Leave</button>
-              ) : room.pending ? (
-                <span className="settings-value">waiting…</span>
-              ) : sessionLive ? (
-                <button className="hw-btn small primary" onClick={joinSession}>{room.host ? "Join as remote" : "Join session"}</button>
-              ) : room.isGuest ? (
-                <button className="hw-btn small primary" onClick={joinSession}>Join session</button>
-              ) : (
-                <button className="hw-btn small primary" onClick={startSession}>Start a private session</button>
-              )}
-            </span>
+            {/* ═════════════ INVITE CARD — rises from the footer ═════════════ */}
+            {inviteOpen && inSession && (
+              <div className="session-invite-card" role="dialog" aria-label="Invite to this session">
+                <div className="session-invite-head">
+                  <span className="settings-label">Invite to this session</span>
+                  <button className="session-invite-x" onClick={() => setInviteOpen(false)} aria-label="Close">
+                    ✕
+                  </button>
+                </div>
+                {inviteUrl ? (
+                  <div className="session-invite-body">
+                    <QRCode value={inviteUrl} size={148} className="room-invite-qr" />
+                    <div className="session-invite-side">
+                      <button type="button" className="room-invite-link" onClick={() => copyLink(inviteUrl)} title="Copy link">
+                        {inviteUrl.replace(/^https?:\/\//, "")}
+                      </button>
+                      <div className="session-invite-acts">
+                        <button className="hw-btn small primary" onClick={() => copyLink(inviteUrl)}>
+                          {copied ? "Copied ✓" : "Copy link"}
+                        </button>
+                        {canShare && (
+                          <button className="hw-btn small" onClick={() => shareLink(inviteUrl)}>
+                            Share…
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="session-invite-body making">
+                    <button className="hw-btn small primary" onClick={makeInvite} disabled={inviting}>
+                      {inviting ? "Making a link…" : "Create link"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {!room.isGuest && room.signedIn ? (
+              <button className={`hw-btn small ${inviteOpen ? "on" : ""}`} onClick={openInvite} aria-expanded={inviteOpen}>
+                ＋ Invite
+              </button>
+            ) : (
+              <span />
+            )}
+            {room.joined ? (
+              <button className="hw-btn small danger" onClick={room.leave}>Leave session</button>
+            ) : room.pending ? (
+              <span className="settings-value">waiting…</span>
+            ) : sessionLive ? (
+              <button className="hw-btn small primary" onClick={joinSession}>{room.host ? "Join as remote" : "Join session"}</button>
+            ) : room.isGuest ? (
+              <button className="hw-btn small primary" onClick={joinSession}>Join session</button>
+            ) : (
+              <button className="hw-btn small primary" onClick={startSession}>Start a private session</button>
+            )}
           </div>
         )}
       </div>

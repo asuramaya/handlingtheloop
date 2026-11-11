@@ -6,7 +6,7 @@ import { type FriendPresence, fetchFriendsOnline, sendInvite } from "@htl/accoun
 // the invite is one notification ("come to my session"); the LANDING adapts (private → they jam
 // your booth; live → they drop into the set and can step up). One fetch on mount, no poll — this
 // is a deliberate action, not an ambient surface.
-export function InviteFriends({ live }: { live: boolean }) {
+export function InviteFriends({ live, quiet = false }: { live: boolean; quiet?: boolean }) {
   const [friends, setFriends] = useState<FriendPresence[] | null>(null); // null = loading
   const [invited, setInvited] = useState<Set<string>>(new Set());
 
@@ -25,12 +25,14 @@ export function InviteFriends({ live }: { live: boolean }) {
     void sendInvite(handle);
   };
 
-  if (friends === null) return <p className="invite-friends-empty">Checking who's around…</p>;
+  // quiet: the Session's Room tab, where an empty list is just absence, not news.
+  if (friends === null) return quiet ? null : <p className="invite-friends-empty">Checking who's around…</p>;
   if (friends.length === 0)
-    return <p className="invite-friends-empty">No friends online right now — they'll show here when they're on.</p>;
+    return quiet ? null : <p className="invite-friends-empty">No friends online right now — they'll show here when they're on.</p>;
 
   return (
     <>
+      {quiet && <div className="session-sub-head">Friends online</div>}
       <span className="share-mode-sub">
         {live
           ? "They drop straight into your live set and can step up to the decks."

@@ -3304,3 +3304,94 @@ span.profile-handle:hover {
   opacity: 1;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
 }
+
+/* Session v2 (operator, 2026-11-11): controls live on each device's row, the footer is Invite +
+   Leave, and the invite is a card that rises from the footer. No left-edge accent on the rows. */
+.session-foot {
+  position: relative;
+}
+.session-foot .hw-btn.small.on {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.session-invite-card {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: var(--panel-2);
+  box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.5);
+  animation: panel-in 0.14s ease-out;
+}
+.session-invite-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.session-invite-x {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.session-invite-x:hover {
+  color: var(--text);
+}
+.session-invite-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.session-invite-body.making {
+  justify-content: center;
+  padding: 18px 0;
+}
+.session-invite-body .room-invite-qr {
+  flex: none;
+}
+.session-invite-side {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.session-invite-side .room-invite-link {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.session-invite-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+@media (max-width: 480px) {
+  .session-invite-body {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .session-invite-body .room-invite-qr {
+    align-self: center;
+  }
+}
+.session-sub-head {
+  margin: 4px 0 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+}

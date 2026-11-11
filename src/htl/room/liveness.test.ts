@@ -15,6 +15,11 @@ const base: LivenessInput = {
 };
 
 describe("livenessVerdict", () => {
+  it("a socket stuck CLOSING while we still say online is dead after the grace (the never-firing onclose)", () => {
+    expect(livenessVerdict({ ...base, notOpenSince: 98_000 })).toBe("not-open");
+    expect(livenessVerdict({ ...base, notOpenSince: 99_500 })).toBe("ok");
+  });
+
   it("an unanswered ping past the timeout is dead — for the ANCHOR too (no follower condition)", () => {
     expect(livenessVerdict({ ...base, pingOutstandingSince: 89_000 })).toBe("no-pong");
   });

@@ -11,7 +11,7 @@ import { mergeChatHistory, CHAT_LOG_MAX } from "./chatLog";
 export type { TickDecks } from "./protocol";
 
 export interface RoomCallbacks {
-  onIntent?: (intent: Intent, from: string) => void;
+  onIntent?: (intent: Intent, from: string, at?: number) => void;
   onState?: (snapshot: unknown) => void;
   /** The board as it stands NOW, for when the room asks a freshly-claimed anchor what it holds.
    *  Distinct from publishing on change: this answers a question rather than announcing an event. */
@@ -39,6 +39,8 @@ export type Attachment = { to: "home" } | { to: "rig"; host: string };
 
 export interface RoomState {
   enabled: boolean; // "in the session" = joined as a participant
+  /** The user's own intent to be in the session (survives a reconnect's not-yet-rejoined window). */
+  wantsJoined: () => boolean;
   signedIn: boolean;
   user: AccountUser | null;
   status: RoomStatus;
@@ -246,7 +248,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       presence: setPeers,
       role: setAnchorId,
       error: setError,
-      intent: (i, from) => cbRef.current.onIntent?.(i, from),
+      intent: (i, from, _seq, at) => cbRef.current.onIntent?.(i, from, at),
       state: (s) => cbRef.current.onState?.(s),
       snapshot: () => cbRef.current.snapshotNow?.(),
       automix: (s) => cbRef.current.onAutomix?.(s),
@@ -536,6 +538,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
 
   return {
     enabled: joined,
+    wantsJoined: () => clientRef.current?.wantsJoined ?? false,
     signedIn: !!user,
     user,
     status,

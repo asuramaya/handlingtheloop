@@ -39,7 +39,7 @@ import {
 } from "@htl/room/sessionFollow";
 import { checkScrub, scrubBegin, scrubEnd, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
 import { sinceLocalLoopMs, sinceLocalTransportMs, withRemoteLoopApply } from "@htl/room/localGestures";
-import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
+import { applyIntent as applyIntentTo, type ApplyOpts, type IntentEngine } from "@htl/room/applyIntent";
 import { PendingDeckState, deckStateKey, pendingTarget } from "@htl/room/pendingDeckState";
 import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
@@ -108,7 +108,7 @@ export interface SessionSyncDeps {
 export interface SessionSync {
   runRoomLoad: (id: DeckId, videoId: string, track: TrackMeta, restore?: DeckSnapshot) => void;
   applyRoomSnapshot: (snapshot: unknown) => void;
-  onRoomIntent: (intent: Intent) => void;
+  onRoomIntent: (intent: Intent, at?: number) => void;
   onRoomTick: (decks: TickDecks) => void;
 }
 
@@ -440,7 +440,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   // so a test can drive it: while it sat inline here, "does this gesture reach the other device
   // intact?" was a question the suite could not ask. This is the wiring, that is the behaviour.
   const applyIntent = useCallback(
-    (intent: Intent) => {
+    (intent: Intent, opts?: ApplyOpts) => {
       applyIntentTo(intent, engine as unknown as IntentEngine, {
         automix: (action) => autoMixerControlRef.current(action),
         board: (deckId, id, phase, arg) => {
@@ -476,7 +476,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         },
         ensureGuestStems: (deckId) => ensureGuestStemsRef.current(deckId),
         refresh,
-      });
+      }, opts);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [engine, runRoomLoad, refresh],
@@ -501,7 +501,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   }, [loaded, applyIntent, refresh]);
   // Inbound control intent from a co-DJ → apply locally + repaint. Never re-emit.
   const onRoomIntent = useCallback(
-    (intent: Intent) => {
+    (intent: Intent, at?: number) => {
       if (!followRef.current) return; // not following → ignore the controller's intents
       // A remote asked the audio host to make stems for a deck — handled specially (the
       // host separates + streams the view back); it's not a local control to apply.
@@ -547,7 +547,12 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // A peer's jog move is proof its scrub is alive (the watchdog's clock), and starts one whose
       // start was lost.
       if (intent.kind === "jog" && intent.phase === "move") scrubMove(scrubbing.current[intent.deck], performance.now(), false);
-      applyIntent(intent);
+      // How long ago the sender did it (room clock), so a landed position is carried across the
+      // transit (applyIntent.carried). Bounded: an outbox flush after a reconnect is old news, and the
+      // tick corrects anything this does not.
+      const sNow = roomRef.current?.serverNow() ?? null;
+      const lateS = at != null && sNow != null ? (sNow - at) / 1000 : 0;
+      applyIntent(intent, { late: lateS > 0 && lateS < 1.5 ? lateS : 0 });
       refresh();
     },
     [applyIntent, refresh],

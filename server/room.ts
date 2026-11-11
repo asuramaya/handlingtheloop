@@ -986,7 +986,9 @@ export class DjRoom {
           this.refuse(ws, msg.intent, "Only the host drives the auto-DJ.");
           break;
         }
-        const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent } satisfies ServerMsg;
+        // `at` (the sender's room-clock moment) rides through untouched: receivers carry a landed
+        // position across the transit with it.
+        const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent, ...(typeof msg.at === "number" && Number.isFinite(msg.at) ? { at: msg.at } : {}) } satisfies ServerMsg;
         // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
         // may be driving / mirroring the platter). skipListeners=true → non-pub only.
         this.relay(self, out, true);

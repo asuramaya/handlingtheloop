@@ -2587,7 +2587,7 @@ function AppBody() {
       // The room asks a device what is on its board the moment it takes the anchor slot; answer with
       // the CURRENT one rather than whatever was last published (a fresh page has published nothing).
       snapshotNow: () => stampSnapshot(buildSnapshot()),
-      onIntent: onRoomIntent,
+      onIntent: (i, _from, at) => onRoomIntent(i, at),
       onAutomix: (s) => setRemoteAutomix(s as AutoMixMirror | null),
       onTick: onRoomTick,
       onStemView: onRoomStemView,
@@ -3758,13 +3758,34 @@ function AppBody() {
     const w = window as unknown as { __htlProbe?: () => unknown };
     w.__htlProbe = () => {
       const lat = engine.audibleLatency();
-      const d = (x: Deck) => ({ audible: x.position() - (x.playing ? lat * x.effectiveRate : 0), playing: x.playing, rate: x.effectiveRate, trim: x.followTrim });
-      return { wall: performance.timeOrigin + performance.now(), latencyMs: Math.round(lat * 1000), rttMs: room.clockRtt(), A: d(engine.deckA), B: d(engine.deckB) };
+      const d = (x: Deck, id: DeckId) => ({
+        audible: x.position() - (x.playing ? lat * x.effectiveRate : 0),
+        playing: x.playing,
+        rate: x.effectiveRate,
+        trim: x.followTrim,
+        // board state for the two-device checks (session sync audit): what each side holds
+        vid: latest.current.loaded[id] || null,
+        loop: x.loop ? { ...x.loop } : null,
+        cue: x.cuePoint,
+        hot: x.hotCues.slice(0, 8),
+        sync: engine.syncRole(id),
+        tempo: x.tempo,
+      });
+      return {
+        wall: performance.timeOrigin + performance.now(),
+        latencyMs: Math.round(lat * 1000),
+        rttMs: room.clockRtt(),
+        anchor: room.isAnchor,
+        status: room.status,
+        focused,
+        A: d(engine.deckA, "A"),
+        B: d(engine.deckB, "B"),
+      };
     };
     return () => {
       delete w.__htlProbe;
     };
-  }, [engine, room.clockRtt]);
+  }, [engine, room.clockRtt, room.isAnchor, room.status, focused]);
 
   // The anchor streams its real playhead (~12 Hz) so every participant's waveforms +
   // own audio stream stay locked to one reference clock (even with shared control).
@@ -3855,7 +3876,11 @@ function AppBody() {
     wasEnabledRef.current = room.enabled;
     // Only a genuine leave drops `enabled` while still ONLINE; a reconnect blip drops the
     // status too (and self-heals on the next tick) so we skip it.
-    if (was && !room.enabled && room.status === "online") {
+    // ★ AND A RECONNECT IS NOT A LEAVE (operator, 2026-11-11: session sync audit). A new socket is
+    // online before the room has processed its join, so for a moment the roster says not-joined
+    // while online, and this paused BOTH decks: a host whose link blinked stopped the whole set
+    // (measured). The user's own intent decides: only an explicit leave clears it.
+    if (was && !room.enabled && room.status === "online" && !room.wantsJoined()) {
       event("room.leave", { pausedA: engine.deckA.playing, pausedB: engine.deckB.playing });
       engine.deckA.pause();
       engine.deckB.pause();

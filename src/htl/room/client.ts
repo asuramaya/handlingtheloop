@@ -19,7 +19,7 @@ export interface RoomHandlers {
   status?: (s: RoomStatus) => void;
   presence?: (peers: Peer[]) => void;
   role?: (anchorId: string | null) => void;
-  intent?: (intent: Intent, from: string, seq: number) => void;
+  intent?: (intent: Intent, from: string, seq: number, at?: number) => void;
   tick?: (decks: TickDecks) => void;
   state?: (snapshot: unknown) => void;
   /** Called when the ROOM asks this device to republish (it just took the anchor slot). Returns the
@@ -259,6 +259,11 @@ export class RoomClient {
     this.wantListen = e.listen;
   }
 
+  /** Does the USER still want to be in the session? False only after an explicit leave (or a kick
+   *  that dropped the engage). A reconnect keeps it true while the roster briefly says not-joined. */
+  get wantsJoined(): boolean {
+    return this.wantJoined;
+  }
   get isAnchor(): boolean {
     return this.anchorId !== null && this.anchorId === this.you;
   }
@@ -331,7 +336,9 @@ export class RoomClient {
     this.send({ t: "kick", to });
   }
   sendIntent(intent: Intent): void {
-    const msg: ClientMsg = { t: "intent", intent };
+    // Stamp WHEN (room clock) so a receiver can carry a landed position across the transit.
+    const at = this.serverNow();
+    const msg: ClientMsg = at != null ? { t: "intent", intent, at: Math.round(at) } : { t: "intent", intent };
     if (this.canDeliver()) {
       this.flushOutbox(); // anything held goes first, so the order the DJ made them is kept
       this.send(msg);
@@ -602,6 +609,7 @@ export class RoomClient {
   // is checked too — a dead anchor socket is what froze rooms — and inbound silence only counts for a
   // follower that has actually been receiving ticks on this connection (it was tripping on one slow
   // pong when no ticks were flowing, churning the anchor).
+  private notOpenSince = 0; // when the socket left OPEN while status still said online (0 = open)
   private checkLiveness(): void {
     const now = Date.now();
     // A watchdog that ran late by a lot means this page was frozen (an iPhone locked, a discarded
@@ -610,7 +618,12 @@ export class RoomClient {
     this.lastWatchdogAt = now;
     if (frozen && this.status === "online" && !this.closed) this.schedulePing(0);
     const follower = (this.wantJoined || !!this.listenHandle) && this.anchorId !== null && this.anchorId !== this.you;
+    const ws = this.ws;
+    if (ws && this.status === "online" && ws.readyState !== WebSocket.OPEN) {
+      if (!this.notOpenSince) this.notOpenSince = now;
+    } else this.notOpenSince = 0;
     const verdict = livenessVerdict({
+      notOpenSince: this.notOpenSince,
       now,
       online: this.status === "online",
       hasSocket: !!this.ws && !this.closed,
@@ -629,6 +642,7 @@ export class RoomClient {
   // socket re-joins and re-syncs, and the outbox flushes once the room confirms the join.
   private revive(verdict: LivenessVerdict): void {
     event("room.liveness", { verdict, anchor: this.isAnchor, outbox: this.outbox.size });
+    this.notOpenSince = 0;
     this.detachSocket();
     this.setStatus("offline");
     if (this.timer) {
@@ -758,7 +772,7 @@ export class RoomClient {
         this.h.role?.(msg.anchorId);
         break;
       case "intent":
-        this.h.intent?.(msg.intent, msg.from, msg.seq);
+        this.h.intent?.(msg.intent, msg.from, msg.seq, msg.at);
         break;
       case "tick":
         this.ticksSeen = true;

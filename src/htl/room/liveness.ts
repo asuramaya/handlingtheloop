@@ -26,12 +26,19 @@ export interface LivenessInput {
   ticksExpected: boolean;
   lastRecvAt: number; // last inbound message (0 = none yet)
   staleMs: number;
+  /** Since when the socket has been CLOSING/CLOSED while we still say online (0 = it is open). A
+   *  close whose handshake never completes leaves onclose unfired and no ping can even be sent, so
+   *  neither signal above ever arms (measured: a host stuck "online" on a CLOSING socket for good
+   *  while the room handed its clock away). */
+  notOpenSince?: number;
+  notOpenMs?: number;
 }
 
-export type LivenessVerdict = "ok" | "no-pong" | "stale";
+export type LivenessVerdict = "ok" | "no-pong" | "stale" | "not-open";
 
 export function livenessVerdict(p: LivenessInput): LivenessVerdict {
   if (!p.online || !p.hasSocket) return "ok"; // nothing to judge: connecting / offline has its own path
+  if (p.notOpenSince && p.now - p.notOpenSince >= (p.notOpenMs ?? 1500)) return "not-open";
   if (p.pingOutstandingSince > 0 && p.now - p.pingOutstandingSince >= p.pongTimeoutMs) return "no-pong";
   if (p.ticksExpected && p.lastRecvAt > 0 && p.now - p.lastRecvAt >= p.staleMs) return "stale";
   return "ok";

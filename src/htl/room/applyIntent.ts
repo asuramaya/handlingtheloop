@@ -54,6 +54,10 @@ export interface IntentDeck {
   setStemGain(stem: StemName, value: number): void;
   setStemMute(stem: StemName, muted: boolean): void;
   readonly playing: boolean;
+  /** Sounding rate (tempo, bend, trim), for carrying a landed position across the transit time. */
+  readonly effectiveRate?: number;
+  /** The active loop, if any, so a carried position folds back inside it. */
+  readonly loop?: { active: boolean; start: number; end: number } | null;
   play(): void;
   pause(): void;
   seek(position: number): void;
@@ -128,11 +132,33 @@ function fxSlot(deck: IntentDeck, chain: string | undefined, fx: string | undefi
 /** ★ Applied INSIDE withRemote (operator, 2026-11-11: session sync audit): a deck method this runs
  *  (an older peer's loop re-run, say) must not broadcast its own result back as if the DJ here had
  *  made it. See remoteApply.ts. */
-export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHost): void {
-  withRemote(() => applyIntentNow(intent, engine, host));
+/** Options for one application. `late` is how long ago (s, room clock) the sender performed it. */
+export interface ApplyOpts {
+  late?: number;
 }
 
-function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost): void {
+/** ★ WHERE THE SENDER IS NOW, NOT WHERE IT WAS (operator, 2026-11-11: session sync audit). A seek,
+ *  a play from a position, a hot-cue jump or a loop snap-back carries where the sender's head
+ *  landed, and it reaches us one network delay later: landing exactly there left a playing receiver
+ *  that delay behind (measured 45-60 ms on a 150 ms link), which the follow trim then took seconds
+ *  to glide out. While the deck will be playing, carry the position forward by the transit time at
+ *  the deck's rate, folded back into a loop that is active. Paused decks land exactly. */
+export function carried(pos: number, late: number, rate: number, loop: { active: boolean; start: number; end: number } | null | undefined): number {
+  if (!(late > 0)) return pos;
+  let p = pos + late * rate;
+  if (loop && loop.active && loop.end > loop.start && pos >= loop.start - 1e-6 && pos <= loop.end + 1e-6) {
+    const len = loop.end - loop.start;
+    p = loop.start + ((((p - loop.start) % len) + len) % len);
+  }
+  return p;
+}
+
+export function applyIntent(intent: Intent, engine: IntentEngine, host: IntentHost, opts: ApplyOpts = {}): void {
+  withRemote(() => applyIntentNow(intent, engine, host, opts));
+}
+
+function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost, opts: ApplyOpts): void {
+  const late = opts.late ?? 0;
   if (intent.kind === "automix") return host.automix(intent.action);
   // Board-agnostic gesture (pad mode, FX-pad throw, …) — the registry owns the semantics, so new
   // board controls sync + replay without touching this switch.
@@ -236,13 +262,16 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
       if (intent.action === "play") {
         if (!deck.playing) {
           engine.resume(); // a co-DJ's deck must advance (silently) to track the master
-          if (intent.position != null) deck.seek(intent.position);
+          if (intent.position != null) deck.seek(carried(intent.position, late, deck.effectiveRate ?? 1, deck.loop));
           deck.play();
         }
       } else if (intent.action === "pause") {
         if (deck.playing) deck.pause();
         if (intent.position != null) deck.seek(intent.position);
-      } else if (intent.action === "seek") deck.seek(intent.position ?? 0);
+      } else if (intent.action === "seek") {
+        const p = intent.position ?? 0;
+        deck.seek(deck.playing ? carried(p, late, deck.effectiveRate ?? 1, deck.loop) : p);
+      }
       break;
     case "cue":
       deck.cuePoint = intent.position;
@@ -265,7 +294,8 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
       // head move if it made one. Only a message from an older bundle (no `state`) is re-run here,
       // at this device's playhead, as before.
       if (intent.state !== undefined) {
-        deck.applyLoopState(intent.state.loop, intent.state.inPoint, intent.position);
+        const seek = intent.position != null && deck.playing ? carried(intent.position, late, deck.effectiveRate ?? 1, intent.state.loop) : intent.position;
+        deck.applyLoopState(intent.state.loop, intent.state.inPoint, seek);
         break;
       }
       if (intent.action === "in") deck.loopIn();
@@ -279,7 +309,7 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
         // The slot holds what the sender's slot holds; a press that moved the sender's head moves
         // this one to the same LANDED place, whatever this device had stored on the pad.
         deck.applyHotCue(intent.slot, intent.cue ?? null, intent.loop ?? null);
-        if (intent.position != null) deck.seek(intent.position);
+        if (intent.position != null) deck.seek(deck.playing ? carried(intent.position, late, deck.effectiveRate ?? 1, deck.loop) : intent.position);
         break;
       }
       if (intent.action === "press") deck.hotCue(intent.slot);
@@ -291,7 +321,11 @@ function applyIntentNow(intent: Intent, engine: IntentEngine, host: IntentHost):
       break;
     case "loopBounds":
       // fine-adjust / move. The newer sender's count and head move ride along when present.
-      if (intent.beats != null || intent.position != null) deck.applyLoopState({ start: intent.start, end: intent.end, active: intent.active, beats: intent.beats }, undefined, intent.position);
+      if (intent.beats != null || intent.position != null) {
+        const region = { start: intent.start, end: intent.end, active: intent.active, beats: intent.beats };
+        const seek = intent.position != null && deck.playing ? carried(intent.position, late, deck.effectiveRate ?? 1, region) : intent.position;
+        deck.applyLoopState(region, undefined, seek);
+      }
       else deck.applyLoopRegion(intent.start, intent.end, intent.active);
       break;
     case "load":

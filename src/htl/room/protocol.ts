@@ -354,7 +354,9 @@ export type ClientMsg =
   | { t: "chat-followers"; on: boolean } // HOST: followers-only chat (only the host's followers + host/stage may post)
   | { t: "mute"; to: string; on: boolean } // HOST: mute/unmute a device's chat (L1)
   | { t: "ban"; to: string } // HOST: ban a device — evict + block re-entry for the session (L1)
-  | { t: "intent"; intent: Intent }
+  // `at` = the sender's room-clock ms when it performed the gesture (ClockSync), so a receiver can
+  // carry a landed position across the transit time (applyIntent.carried). Optional: older senders.
+  | { t: "intent"; intent: Intent; at?: number }
   | { t: "tick"; decks: TickDecks }
   | { t: "ping"; c: number } // clock sync: our send time (ms); the server answers `pong` at once
   | { t: "state"; snapshot: unknown }
@@ -400,7 +402,7 @@ export type ServerMsg =
   // decaying crowd-energy level 0..1 (drives the meter).
   | { t: "reactions"; counts: Record<string, number>; hype: number }
   | { t: "role"; anchorId: string | null } // the anchor (clock) moved
-  | { t: "intent"; from: string; seq: number; intent: Intent }
+  | { t: "intent"; from: string; seq: number; intent: Intent; at?: number }
   | { t: "tick"; decks: TickDecks }
   | { t: "pong"; c: number; s: number } // clock sync: the ping's send time echoed + the server clock (ms)
   | { t: "state"; snapshot: unknown }

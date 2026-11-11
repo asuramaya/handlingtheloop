@@ -1,4 +1,5 @@
 import { displayTrack } from "../util/format";
+import { Ticker } from "./lib/Ticker";
 import { useMemo, useState, type DragEvent } from "react";
 import type { Library } from "@htl";
 import { trackKey } from "@htl/library";
@@ -120,10 +121,14 @@ function TrackCard({ t, side, deck, empty }: { t: TrackMeta | null; side: "now" 
       {t.thumbnail ? <img className="mixq-card-art" src={t.thumbnail} alt="" loading="lazy" /> : <span className="mixq-card-art is-blank" aria-hidden="true" />}
       <div className="mixq-card-text">
         {kicker}
+        {/* One line each, scrolling when long (the deck title's ticker), so NOW and NEXT are always
+            the same height (operator, 2026-11-11: a two-line title made the cards unequal). */}
         <span className="mixq-card-title" title={t.title}>
-          {d.title || t.videoId}
+          <Ticker>{d.title || t.videoId}</Ticker>
         </span>
-        <span className="mixq-card-artist">{d.artist}</span>
+        <span className="mixq-card-artist">
+          <Ticker>{d.artist}</Ticker>
+        </span>
       </div>
       <dl className="mixq-card-stats">
         {stats.map(([k, v]) => (

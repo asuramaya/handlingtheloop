@@ -626,13 +626,9 @@
   .mixq-source { min-width: 0; max-width: 100%; }
   .mixq-source .mixq-chip { min-width: 0; }
   .mixq-source .mixq-chip-label { min-width: 0; }
+  /* one line that scrolls (Ticker in MixQueuePanel), not a two-line wrap: NOW and NEXT keep one height */
   .mixq-card-title {
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
   }
   .mixq-stage {
     grid-template-columns: minmax(0, 1fr);
@@ -689,4 +685,10 @@
   .mixq-stat.stat-time {
     display: none;
   }
+}
+
+/* The card's ticker fills the title / artist line. */
+.mixq-card-title .ticker-box,
+.mixq-card-artist .ticker-box {
+  display: block;
 }

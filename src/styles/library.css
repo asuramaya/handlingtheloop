@@ -1606,6 +1606,15 @@ td.col-num {
   text-overflow: clip;
   animation: lane-ticker var(--ticker-dur, 8s) linear infinite alternate;
 }
+/* ★ ROWS SCROLL ONLY UNDER THE POINTER OR THE CURSOR (operator, 2026-11-11: "across the library only
+   let the name and title scroll if the song is hovered or selected"). A whole list of tickers moving
+   at once is noise; at rest a long name is an ellipsis, the row you are on reads in full. */
+.track-table tbody tr:not(:hover):not(.tt-cursor):not(.selected) .ticker-box.ticker .ticker-inner {
+  animation: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A table cell's content is one row: badges, pips, the ticking text taking what is left, +N. */
 .track-table td .tt-cell {
   display: flex;

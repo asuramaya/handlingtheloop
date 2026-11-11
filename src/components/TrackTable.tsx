@@ -404,7 +404,6 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   }, [virtualize, recompute, view.length]);
   const vStart = virtualize ? Math.min(range.start, Math.max(0, view.length)) : 0;
   const vEnd = virtualize ? Math.min(range.end, view.length) : view.length;
-  const colCount = 7 + (extraCol ? 1 : 0);
 
   // ----- Hardware browse cursor (FLX4 wheel + LOAD A/B) -----
   // A highlighted row the browse encoder steps through and the LOAD buttons act on. The
@@ -743,7 +742,11 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {/* Top spacer reserves the height of the rows scrolled above the window. */}
             {vStart > 0 && (
               <tr aria-hidden="true" className="tt-spacer">
-                <td colSpan={colCount} style={{ height: vStart * rowH, padding: 0, border: 0 }} />
+                {/* ★ NO colSpan (operator, 2026-11-11: a dead strip right of the phone table). The spacer only
+                    gives height; spanning colCount (7) while the narrow view hides # and artwork made the
+                    browser invent 2 phantom columns at the end, which swallowed the leftover width (measured:
+                    cells ended at 283 of 390 px, Title squeezed to 53 px). */}
+                <td style={{ height: vStart * rowH, padding: 0, border: 0 }} />
               </tr>
             )}
             {view.slice(vStart, vEnd).map((t, k) => {
@@ -924,7 +927,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
             {/* Bottom spacer reserves the height of the rows below the window. */}
             {vEnd < view.length && (
               <tr aria-hidden="true" className="tt-spacer">
-                <td colSpan={colCount} style={{ height: (view.length - vEnd) * rowH, padding: 0, border: 0 }} />
+                <td style={{ height: (view.length - vEnd) * rowH, padding: 0, border: 0 }} />
               </tr>
             )}
           </tbody>

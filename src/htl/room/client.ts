@@ -6,10 +6,12 @@
 import { ClockSync } from "./clockSync";
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { ENGINE_VERSION } from "./protocol";
-import { isSocketStale } from "./sessionFollow";
 import { republishSnapshot } from "./republish";
 import { event } from "../debug/trace";
 import { SetCapture, type CapturedSet } from "./setCapture";
+import { IntentOutbox } from "./outbox";
+import { livenessVerdict, type LivenessVerdict } from "./liveness";
+import { DeviceIdClaim, type ClaimChannel, type IdStore } from "./deviceClaim";
 
 export type RoomStatus = "offline" | "connecting" | "online" | "error";
 
@@ -45,6 +47,10 @@ export interface RoomHandlers {
   hostColor?: (color: string) => void; // the room vibe (host accent) — applies for crowd listeners too (no roster)
   setCaptured?: (set: CapturedSet) => void; // G1a HOST: a broadcast ended → here's the captured recipe to persist
   kicked?: (reason?: string) => void;
+  /** The room refused an intent this device sent (session sync audit): its move was NOT shared. */
+  refused?: (kind: string, reason: string) => void;
+  /** This tab's socket was replaced by a newer socket of the SAME device id (another tab): it stops. */
+  replaced?: () => void;
   error?: (message: string) => void;
 }
 
@@ -65,18 +71,48 @@ const DEVICE_KEY = "htl_device_id";
  *  connected (a connect/disconnect flap that looked like a hang). It survives a same-tab
  *  refresh (sessionStorage persists across reloads); a fresh tab / browser restart starts
  *  a new id, and the ENGAGE auto-rejoin (localStorage) covers re-entry into a live set. */
+/** ★ DUPLICATE TAB (operator, 2026-11-11: session sync audit): Duplicate Tab copies sessionStorage,
+ *  so the copy arrived wearing this tab's id and the two replaced each other's socket forever. The
+ *  claim (deviceClaim.ts) asks the other tabs on startup and re-mints for the newcomer; connect()
+ *  waits for that answer before opening. */
 export function deviceId(): string {
-  const mint = () => "d-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  return deviceClaim().id;
+}
+let claimSingleton: DeviceIdClaim | null = null;
+function deviceClaim(): DeviceIdClaim {
+  if (claimSingleton) return claimSingleton;
+  const store: IdStore = {
+    get: () => {
+      try {
+        return sessionStorage.getItem(DEVICE_KEY);
+      } catch {
+        return null;
+      }
+    },
+    set: (id) => {
+      try {
+        sessionStorage.setItem(DEVICE_KEY, id);
+      } catch {
+        /* storage unavailable — the id lives for this page */
+      }
+    },
+  };
+  let channel: ClaimChannel | null = null;
   try {
-    let id = sessionStorage.getItem(DEVICE_KEY);
-    if (!id) {
-      id = mint();
-      sessionStorage.setItem(DEVICE_KEY, id);
+    if (typeof BroadcastChannel !== "undefined") {
+      const bc = new BroadcastChannel("htl_device_id");
+      (bc as unknown as { unref?: () => void }).unref?.(); // Node (tests): never hold the process open
+      channel = bc as unknown as ClaimChannel;
     }
-    return id;
   } catch {
-    return mint();
+    channel = null;
   }
+  claimSingleton = new DeviceIdClaim(store, channel);
+  return claimSingleton;
+}
+/** Tests only: install a claim (e.g. one with no channel) so deviceId() is deterministic. */
+export function __setDeviceClaimForTests(c: DeviceIdClaim | null): void {
+  claimSingleton = c;
 }
 
 /** A friendly device label derived from the UA (used when no account name is known). */
@@ -131,7 +167,10 @@ function saveEngage(joined: boolean, control: boolean, listen: boolean): void {
 }
 
 export class RoomClient {
-  readonly you = deviceId();
+  /** This tab's device id (settled by the duplicate-tab claim before the first connect). */
+  get you(): string {
+    return deviceId();
+  }
   readonly name: string;
   readonly kind = deviceName(); // device TYPE (iPhone / Mac / Linux …), separate from the label
   private joinCode: string | null;
@@ -166,6 +205,18 @@ export class RoomClient {
   private static STALE_MS = 6000;
   private static WATCHDOG_MS = 2000;
   private lastRecvAt = 0; // wall-clock of the last inbound message (0 = none yet this connection)
+  // ★ PONG LIVENESS FOR EVERY ROLE (operator, 2026-11-11: session sync audit; see liveness.ts). A
+  // ping unanswered for PONG_TIMEOUT_MS (two steady-state ping intervals) means the link is dead —
+  // the anchor included, which the old follower-only watchdog never checked.
+  static readonly PONG_TIMEOUT_MS = 2 * 5_000;
+  private pingOutstandingSince = 0; // Date.now() of the oldest unanswered ping (0 = none)
+  private ticksSeen = false; // the anchor's ticks have reached this connection (inbound silence then means something)
+  private lastWatchdogAt = 0;
+  // ★ THE OUTBOX (outbox.ts): intents made while disconnected or before the room has processed our
+  // join are held and flushed once it confirms (`joined`), instead of being dropped at the socket.
+  private outbox = new IntentOutbox();
+  private joinAcked = false; // the room has processed this connection's join (or approved our knock)
+  private replaced = false; // a newer socket of this device id (another tab) took over → stay down
   // ★ THE ROOM CLOCK (clockSync.ts): pings on connect in a quick burst, then every PING_MS, so a
   // tick can say WHEN its playhead was true and a follower can tell lag from latency.
   readonly clock = new ClockSync();
@@ -185,6 +236,7 @@ export class RoomClient {
       const ws = this.ws;
       if (!ws || ws.readyState !== WebSocket.OPEN || this.closed) return;
       ws.send(JSON.stringify({ t: "ping", c: performance.now() } satisfies ClientMsg)); // not captured: not set data
+      if (this.pingOutstandingSince === 0) this.pingOutstandingSince = Date.now();
       this.schedulePing(this.clock.count < RoomClient.PING_BURST ? 300 : RoomClient.PING_MS);
     }, delay);
   }
@@ -217,12 +269,18 @@ export class RoomClient {
 
   connect(): void {
     this.closed = false;
+    this.replaced = false;
     if (!this.watchdog) this.watchdog = setInterval(() => this.checkLiveness(), RoomClient.WATCHDOG_MS);
-    this.open();
+    // Wait for the duplicate-tab claim (≤ ~250 ms, usually already settled while /api/me loaded) so
+    // a duplicated tab never connects wearing its sibling's id.
+    void deviceClaim().ready.then(() => {
+      if (!this.closed && !this.ws) this.open();
+    });
   }
 
   close(): void {
     this.closed = true;
+    this.outbox.clear();
     this.finalizeCapture(); // teardown mid-broadcast still keeps the set (best-effort; G1a)
     if (this.timer) {
       clearTimeout(this.timer);
@@ -247,6 +305,7 @@ export class RoomClient {
     this.wantControl = false;
     this.wantListen = false;
     saveEngage(false, false, false);
+    this.outbox.clear(); // nothing held is owed to a session we just left
     this.send({ t: "leave" });
   }
   control(on: boolean): void {
@@ -272,7 +331,33 @@ export class RoomClient {
     this.send({ t: "kick", to });
   }
   sendIntent(intent: Intent): void {
-    this.send({ t: "intent", intent });
+    const msg: ClientMsg = { t: "intent", intent };
+    if (this.canDeliver()) {
+      this.flushOutbox(); // anything held goes first, so the order the DJ made them is kept
+      this.send(msg);
+      return;
+    }
+    // ★ HELD, NOT DROPPED (operator, 2026-11-11: session sync audit). A session member whose socket
+    // is down, or up but not yet re-joined, used to lose this at the socket (or at the room, which
+    // refuses an un-joined sender). Outside a session (solo / a tuned-in listener) nothing is owed.
+    if (this.wantJoined && !this.listenHandle) {
+      this.outbox.push(intent, Date.now());
+      this.capture.record(msg); // the recipe keeps the gesture's real moment
+      return;
+    }
+    this.send(msg);
+  }
+  /** Socket open AND (the room has processed our join, or we are not in a session at all). */
+  private canDeliver(): boolean {
+    const open = !!this.ws && this.ws.readyState === WebSocket.OPEN && this.status === "online";
+    return open && (this.joinAcked || !this.wantJoined || !!this.listenHandle);
+  }
+  private flushOutbox(): void {
+    if (this.outbox.size === 0 || !this.canDeliver()) return;
+    const held = this.outbox.drain(Date.now());
+    if (held.length || this.outbox.dropped) event("room.outbox", { flushed: held.length, dropped: this.outbox.dropped });
+    this.outbox.dropped = 0;
+    for (const intent of held) this.ws!.send(JSON.stringify({ t: "intent", intent } satisfies ClientMsg)); // already captured when held
   }
   sendTick(decks: TickDecks): void {
     this.send({ t: "tick", decks });
@@ -422,7 +507,11 @@ export class RoomClient {
     if (this.color) params.set("color", this.color);
     params.set("ev", String(ENGINE_VERSION)); // D5: report our reconstruction-engine version
     const url = `${proto}://${location.host}/api/room?${params.toString()}`;
+    this.detachSocket(); // never two live sockets with handlers: a stale one's close must not clobber this one
     this.setStatus("connecting");
+    this.joinAcked = false; // a fresh socket starts un-joined on the server
+    this.pingOutstandingSince = 0;
+    this.ticksSeen = false;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
@@ -440,7 +529,19 @@ export class RoomClient {
     };
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onclose = (ev) => {
+      if (this.ws !== ws) return; // a socket we already gave up on — its close is not news
       this.ws = null;
+      // ★ REPLACED BY ANOTHER TAB OF THIS DEVICE (4004; operator, 2026-11-11: session sync audit).
+      // The room keeps one socket per device id, so reconnecting here would kick the other tab, which
+      // would kick this one, forever. Stop, and say why through the existing status/error path.
+      if (ev.code === 4004) {
+        this.replaced = true;
+        event("room.replaced", {});
+        this.setStatus("offline");
+        this.h.replaced?.();
+        this.h.error?.("This session is open in another tab — this tab stopped syncing. Reload it to take over.");
+        return;
+      }
       // App-level TERMINAL closes (4001 kicked, 4002 broadcast ended, 4003 room full) carry their
       // reason via a `kicked` message just before the close — DON'T reconnect into them, or a
       // whole crowd storms a room that just told them to leave (E10 / broadcast-end).
@@ -451,7 +552,26 @@ export class RoomClient {
         this.scheduleReconnect();
       }
     };
-    ws.onerror = () => this.setStatus("error");
+    ws.onerror = () => {
+      if (this.ws === ws) this.setStatus("error");
+    };
+  }
+
+  /** Forget the current socket: its handlers are detached first, so nothing it does later (a close
+   *  that lands seconds afterwards on a half-open link) can touch the connection that replaces it. */
+  private detachSocket(): void {
+    const old = this.ws;
+    this.ws = null;
+    if (!old) return;
+    old.onopen = null;
+    old.onmessage = null;
+    old.onclose = null;
+    old.onerror = null;
+    try {
+      old.close();
+    } catch {
+      /* close can throw on some states — it is detached either way */
+    }
   }
 
   private scheduleReconnect(): void {
@@ -478,22 +598,44 @@ export class RoomClient {
   // anchor itself, a lone session, or a passive listener may legitimately be quiet, so we don't
   // reconnect them on silence. Force-closing fires `onclose` → scheduleReconnect → welcome →
   // requestState, which re-syncs the current track + board (closing the 4G-stall divergence).
+  // ★ NOW EVERY ROLE, PONG-BASED (operator, 2026-11-11: session sync audit; liveness.ts). The anchor
+  // is checked too — a dead anchor socket is what froze rooms — and inbound silence only counts for a
+  // follower that has actually been receiving ticks on this connection (it was tripping on one slow
+  // pong when no ticks were flowing, churning the anchor).
   private checkLiveness(): void {
-    const follower = this.wantJoined && this.anchorId !== null && this.anchorId !== this.you;
-    const stale = isSocketStale({
+    const now = Date.now();
+    // A watchdog that ran late by a lot means this page was frozen (an iPhone locked, a discarded
+    // tab): probe the link at once rather than waiting out the ping cadence.
+    const frozen = this.lastWatchdogAt > 0 && now - this.lastWatchdogAt > 3 * RoomClient.WATCHDOG_MS;
+    this.lastWatchdogAt = now;
+    if (frozen && this.status === "online" && !this.closed) this.schedulePing(0);
+    const follower = (this.wantJoined || !!this.listenHandle) && this.anchorId !== null && this.anchorId !== this.you;
+    const verdict = livenessVerdict({
+      now,
       online: this.status === "online",
       hasSocket: !!this.ws && !this.closed,
-      follower,
+      pingOutstandingSince: this.pingOutstandingSince,
+      pongTimeoutMs: RoomClient.PONG_TIMEOUT_MS,
+      ticksExpected: follower && this.ticksSeen,
       lastRecvAt: this.lastRecvAt,
-      now: Date.now(),
       staleMs: RoomClient.STALE_MS,
     });
-    if (!stale) return;
-    try {
-      this.ws?.close(); // half-open → tear it down; the reconnect path pulls a fresh snapshot
-    } catch {
-      /* close can throw on some states — onclose/scheduleReconnect still runs */
+    if (verdict !== "ok") this.revive(verdict);
+  }
+
+  // ★ DON'T WAIT FOR onclose (operator, 2026-11-11: session sync audit). On a half-open link the
+  // close handshake can take a long time, and meanwhile status said "online" while send dropped
+  // everything. Detach the dead socket, say offline, and open a new one NOW; the welcome on the new
+  // socket re-joins and re-syncs, and the outbox flushes once the room confirms the join.
+  private revive(verdict: LivenessVerdict): void {
+    event("room.liveness", { verdict, anchor: this.isAnchor, outbox: this.outbox.size });
+    this.detachSocket();
+    this.setStatus("offline");
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
+    if (!this.closed && !this.replaced) this.open();
   }
 
   private onMessage(ev: MessageEvent): void {
@@ -506,7 +648,19 @@ export class RoomClient {
     }
     switch (msg.t) {
       case "pong":
+        this.pingOutstandingSince = 0; // the link answered (liveness.ts)
         this.clock.add(msg.c, msg.s, performance.now(), Date.now());
+        break;
+      case "joined":
+        // The room has processed our join (or approved our knock): release what we held.
+        this.joinAcked = true;
+        this.flushOutbox();
+        break;
+      case "refused":
+        // ★ The room refused one of our intents (operator, 2026-11-11: session sync audit) — the
+        // move happened here and NOWHERE else. Recorded, and surfaced through the room's error path.
+        event("room.refused", { kind: msg.kind, reason: msg.reason });
+        this.h.refused?.(msg.kind, msg.reason);
         break;
       case "welcome":
         this.anchorId = msg.anchorId;
@@ -552,6 +706,11 @@ export class RoomClient {
         break;
       case "presence":
         this.peers = msg.peers;
+        // An older room never sends `joined`: our own roster row saying joined is the same fact.
+        if (!this.joinAcked && msg.peers.some((p) => p.id === this.you && p.joined && !p.pending)) {
+          this.joinAcked = true;
+          this.flushOutbox();
+        }
         this.listenerCount = msg.listeners ?? this.listenerCount;
         this.roomPublic = msg.public ?? this.roomPublic;
         this.stageReqs = msg.stage ?? this.stageReqs;
@@ -593,6 +752,7 @@ export class RoomClient {
         break;
       }
       case "role":
+        if (msg.anchorId !== this.anchorId) this.ticksSeen = false; // a new anchor: wait for ITS ticks before judging silence
         this.anchorId = msg.anchorId;
         this.peers = this.peers.map((p) => ({ ...p, anchor: p.id === msg.anchorId }));
         this.h.role?.(msg.anchorId);
@@ -601,6 +761,7 @@ export class RoomClient {
         this.h.intent?.(msg.intent, msg.from, msg.seq);
         break;
       case "tick":
+        this.ticksSeen = true;
         this.h.tick?.(msg.decks);
         break;
       case "state":

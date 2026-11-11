@@ -22,6 +22,8 @@ export interface RoomCallbacks {
   onLyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   onSettings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings → adopt (LWW)
   onKicked?: (reason?: string) => void;
+  /** The room refused one of this device's intents (session sync audit): the move was not shared. */
+  onRefused?: (kind: string, reason: string) => void;
 }
 
 export interface Invite {
@@ -159,6 +161,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [peers, setPeers] = useState<Peer[]>([]);
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [replacedTab, setReplacedTab] = useState(false); // another tab of this device took the socket (4004)
   const [roomPublic, setRoomPublic] = useState(false);
   const [listenerCount, setListenerCount] = useState(0);
   const [engineStale, setEngineStale] = useState(false);
@@ -287,6 +290,14 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       muted: (on) => setIAmMuted(on),
       mutedList: (ids) => setMutedDevices(new Set(ids)),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
+      // ★ A refused intent shows where room errors already show (operator, 2026-11-11: session sync
+      // audit), and reaches the app in case it wants to undo the local move.
+      // Another tab of this device took the socket: the client stopped; keep its notice up (below).
+      replaced: () => setReplacedTab(true),
+      refused: (kind, reason) => {
+        setError(reason);
+        cbRef.current.onRefused?.(kind, reason);
+      },
     });
     c.connect();
     // A SIGNED-IN device consumes an invite code ONCE, then strips it from the URL so a
@@ -310,6 +321,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setAnchorId(null);
       setStatus("offline");
       setError(null);
+      setReplacedTab(false);
       setRoomPublic(false);
       setListenerCount(0);
       setStageRequests([]);
@@ -335,10 +347,10 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // Server-side rejections (e.g. a guest tapping a locked 🎛️) arrive as transient
   // notices — show them, then clear so the popup doesn't carry a stale warning (#10).
   useEffect(() => {
-    if (!error) return;
+    if (!error || replacedTab) return; // "open in another tab" is a STATE, not a passing notice
     const t = setTimeout(() => setError(null), 4000);
     return () => clearTimeout(t);
-  }, [error]);
+  }, [error, replacedTab]);
 
   // Actions are stable (they target the live client via a ref), so effects that
   // depend on them don't re-fire every render.

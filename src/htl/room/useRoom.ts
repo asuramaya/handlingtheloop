@@ -98,6 +98,10 @@ export interface RoomState {
   sendChat: (text: string) => void; // post a chat line
   setChatSlow: (seconds: number) => void; // HOST: set slow-mode / turn chat off
   setChatFollowers: (on: boolean) => void; // HOST: toggle followers-only chat
+  /** The host's invite code guests may pass on ("" = guests cannot invite). */
+  guestInvite: string;
+  /** HOST: let guests pass the invite link on (code = the host's own invite code, "" = stop). */
+  setGuestInvite: (code: string) => void;
   muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
   banDevice: (to: string) => void; // HOST: ban a device (evict + block re-entry)
   error: string | null;
@@ -182,6 +186,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const [chatLog, setChatLog] = useState<ChatMsg[]>([]);
   const [chatSlow, setChatSlowState] = useState(0);
   const [chatFollowers, setChatFollowersState] = useState(false);
+  const [guestInvite, setGuestInviteState] = useState("");
   const [iAmMuted, setIAmMuted] = useState(false);
   const [mutedDevices, setMutedDevices] = useState<Set<string>>(new Set());
   // Only the session OWNER (a host device) announces the room to the directory — a
@@ -289,6 +294,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       chatHistory: (list) => setChatLog((l) => mergeChatHistory(l, list)),
       chatSlow: (s) => setChatSlowState(s),
       chatFollowers: (on) => setChatFollowersState(on),
+      guestInvite: (code) => setGuestInviteState(code),
       muted: (on) => setIAmMuted(on),
       mutedList: (ids) => setMutedDevices(new Set(ids)),
       kicked: (reason) => cbRef.current.onKicked?.(reason),
@@ -336,6 +342,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       setChatLog([]);
       setChatSlowState(0);
       setChatFollowersState(false);
+      setGuestInviteState("");
       setIAmMuted(false);
       setMutedDevices(new Set());
     };
@@ -456,6 +463,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const sendChat = useCallback((text: string) => clientRef.current?.sendChat(text), []);
   const setChatSlow = useCallback((seconds: number) => clientRef.current?.setChatSlow(seconds), []);
   const setChatFollowers = useCallback((on: boolean) => clientRef.current?.setChatFollowers(on), []);
+  const setGuestInvite = useCallback((code: string) => clientRef.current?.setGuestInvite(code), []);
   const muteDevice = useCallback((to: string, on: boolean) => clientRef.current?.muteDevice(to, on), []);
   const banDevice = useCallback((to: string) => clientRef.current?.banDevice(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
@@ -592,6 +600,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     sendChat,
     setChatSlow,
     setChatFollowers,
+    guestInvite,
+    setGuestInvite,
     muteDevice,
     banDevice,
     error,

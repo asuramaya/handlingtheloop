@@ -230,6 +230,7 @@ export class DjRoom {
   private chat = new Chat();
   private chatSlow = 0; // <0 chat off, 0 normal, >0 slow-mode seconds
   private chatFollowers = false; // followers-only chat: only host followers (+ host/stage) may post
+  private guestInvite = ""; // the host's invite code guests may pass on ("" = guests cannot invite)
   private muted = new Set<string>();
   private banned = new Set<string>();
 
@@ -292,6 +293,7 @@ export class DjRoom {
     this.stageGate = (await this.state.storage.get<StageGate>("stageGate")) ?? "request";
     this.chatSlow = (await this.state.storage.get<number>("chatSlow")) ?? 0;
     this.chatFollowers = (await this.state.storage.get<boolean>("chatFollowers")) ?? false;
+    this.guestInvite = (await this.state.storage.get<string>("guestInvite")) ?? "";
     // Moderation (L1) survives a DO eviction — a ban that evaporated when the room idled wasn't
     // a ban. Mute persists too so a re-muted spammer stays muted across a cold restart.
     this.muted = new Set((await this.state.storage.get<string[]>("muted")) ?? []);
@@ -902,6 +904,19 @@ export class DjRoom {
         if (s === this.chatSlow) break;
         this.chatSlow = s;
         await this.state.storage.put("chatSlow", s);
+        this.broadcastPresence();
+        break;
+      }
+      case "guest-invite": {
+        // HOST lets guests pass the session's link on (operator, 2026-11-11: "giving someone a free
+        // invite link but then not letting them invite into a private session"). Only the code's
+        // shape is checked: a code only NAMES a session (the upgrade is authed per connection) and
+        // anyone arriving by it still knocks, so a guest cannot bring someone in unapproved.
+        if (!this.isHostDevice(self)) break;
+        const code = typeof msg.code === "string" && /^[a-z0-9]{4,40}$/i.test(msg.code) ? msg.code : "";
+        if (code === this.guestInvite) break;
+        this.guestInvite = code;
+        await this.state.storage.put("guestInvite", code);
         this.broadcastPresence();
         break;
       }
@@ -1841,6 +1856,7 @@ export class DjRoom {
       stage: this.stageReqs(),
       chatSlow: this.chatSlow,
       chatFollowers: this.chatFollowers,
+      guestInvite: this.guestInvite,
       muted: [...this.muted],
       engineVersion: this.engineVersion(),
       hostColor: this.hostColor(),

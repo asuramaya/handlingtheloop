@@ -60,6 +60,7 @@ describe("welcomeFor / presenceFor", () => {
     stageGate: "open",
     stage: [{ id: "x", name: "X", deck: "A" }],
     chatSlow: 0,
+    guestInvite: "",
     chatFollowers: false,
     muted: [],
     engineVersion: 1,

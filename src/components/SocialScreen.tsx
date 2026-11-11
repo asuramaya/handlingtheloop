@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { heroState, type RoomState } from "@htl/room";
-import { maskName, toggleRevealed, usePrivacyRevealed } from "@htl/privacy";
+import { maskName, setRevealed, usePrivacyRevealed } from "@htl/privacy";
 import type { PanelKey, PanelPlacement } from "@htl";
 import { QRCode } from "./QRCode";
 import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
@@ -11,6 +11,7 @@ import { ChatPanel } from "./social/ChatPanel";
 import { InviteFriends } from "./social/InviteFriends";
 import { SetSavedPrompt } from "./social/SetSavedPrompt";
 import { InfoDot } from "./settings/InfoDot";
+import { ToggleRow } from "./settings/ControlsTab";
 import { deviceIcon } from "./social/util";
 
 // The Session screen — the room you're in or hosting. (The live-rooms DIRECTORY is in People ▸
@@ -73,6 +74,10 @@ export function SocialScreen({
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false); // the invite card, up from the footer
+  // ★ SESSION SETTINGS, a view of its own (operator, 2026-11-11: "a dedicated settings panel for
+  // social"): names, who can chat, and whether guests may pass the invite on. The chat controls
+  // under the composer and the names button in the footer both read as clutter where they were.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const revealed = usePrivacyRevealed();
 
   const online = room.status === "online";
@@ -100,6 +105,18 @@ export function SocialScreen({
     if (inv) setInviteUrl(inv.url);
   }
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  // A guest invites with the HOST's link, when the host allows it (Session ▸ Settings).
+  const guestShareUrl = room.isGuest && room.guestInvite ? `${location.origin}/?join=${room.guestInvite}` : null;
+  const canInvite = (!room.isGuest && room.signedIn) || !!guestShareUrl;
+  const shownInviteUrl = guestShareUrl ?? inviteUrl;
+  const setGuestsInvite = async (on: boolean) => {
+    if (!on) return room.setGuestInvite("");
+    const inv = await room.createInvite();
+    if (inv) {
+      setInviteUrl(inv.url);
+      room.setGuestInvite(inv.code);
+    }
+  };
   const shareLink = async (url: string) => {
     try {
       await navigator.share({ title: "Join my session", url });
@@ -111,7 +128,7 @@ export function SocialScreen({
   const openInvite = () => {
     const next = !inviteOpen;
     setInviteOpen(next);
-    if (next && !inviteUrl && !inviting) void makeInvite();
+    if (next && !shownInviteUrl && !inviting) void makeInvite();
   };
 
   const startSession = () => {
@@ -307,6 +324,13 @@ export function SocialScreen({
 
               {!room.isGuest && room.signedIn && <SetSavedPrompt setsRev={room.setsRev} />}
 
+              {settingsOpen ? (
+                <div className="session-settings-head">
+                  <button className="people-back" onClick={() => setSettingsOpen(false)}>
+                    <span aria-hidden="true">‹</span> Session settings
+                  </button>
+                </div>
+              ) : (
               <div className="settings-tabs session-tabs" role="tablist" aria-label="Session">
                 <button role="tab" aria-selected={tab === "room"} className={`settings-tab ${tab === "room" ? "on" : ""}`} onClick={() => setTab("room")}>
                   Room
@@ -317,14 +341,77 @@ export function SocialScreen({
                   {unreadChat > 0 && <span className="tab-badge">{unreadChat > 9 ? "9+" : unreadChat}</span>}
                 </button>
               </div>
+              )}
             </>
           )}
         </div>
 
         {/* ═════════════ BODY — the only scroller ═════════════ */}
-        <div className={`settings-body session-body ${tab === "chat" && inSession ? "chat" : ""}`}>
+        <div className={`settings-body session-body ${tab === "chat" && inSession && !settingsOpen ? "chat" : ""}`}>
           {!inSession ? (
             <p className="settings-note">Sign in under People ▸ You, or open an invite link, to join a shared session.</p>
+          ) : settingsOpen ? (
+            <div className="session-settings">
+              <div className="settings-section">
+                <ToggleRow
+                  label="Show names"
+                  info="Names of the people and devices in the session. Turn this off while you stream or share your screen: names show as a first letter and dots. Remembered on this device."
+                  on={revealed}
+                  onToggle={() => setRevealed(!revealed)}
+                />
+              </div>
+              {room.host && (
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <span className="settings-label">Chat</span>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">
+                      Chat
+                      <InfoDot text="Off closes the chat. Slow mode lets each person post one line per 5 or 15 seconds." label="Chat" />
+                    </span>
+                    <span className="settings-control">
+                      <span className="seg-group">
+                        {([
+                          { v: -1, l: "Off" },
+                          { v: 0, l: "On" },
+                          { v: 5, l: "Slow 5s" },
+                          { v: 15, l: "Slow 15s" },
+                        ] as const).map((o) => (
+                          <button
+                            key={o.v}
+                            className={`hw-btn small ${room.chatSlow === o.v ? "on" : ""}`}
+                            onClick={() => room.setChatSlow(o.v)}
+                            aria-pressed={room.chatSlow === o.v}
+                          >
+                            {o.l}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  </div>
+                  <ToggleRow
+                    label="Followers only"
+                    info="Only people who follow you (and anyone on your decks) can post."
+                    on={room.chatFollowers}
+                    onToggle={() => room.setChatFollowers(!room.chatFollowers)}
+                  />
+                </div>
+              )}
+              {room.host && !room.isGuest && room.signedIn && (
+                <div className="settings-section">
+                  <div className="settings-section-head">
+                    <span className="settings-label">Invites</span>
+                  </div>
+                  <ToggleRow
+                    label="Guests can invite"
+                    info="Guests get the Invite button with your session's link, so they can bring friends. Anyone arriving still knocks, and you let them in."
+                    on={!!room.guestInvite}
+                    onToggle={() => void setGuestsInvite(!room.guestInvite)}
+                  />
+                </div>
+              )}
+            </div>
           ) : tab === "room" ? (
             <>
               {room.listeningTo ? (
@@ -368,25 +455,25 @@ export function SocialScreen({
                 <button className="session-invite-x" onClick={() => setInviteOpen(false)} aria-label="Close">
                   ✕
                 </button>
-                {inviteUrl ? (
+                {shownInviteUrl ? (
                   <>
-                    <QRCode value={inviteUrl} size={164} className="room-invite-qr" />
+                    <QRCode value={shownInviteUrl} size={164} className="room-invite-qr" />
                     {/* The link IS the copy control: the whole field copies, the glyph says so. */}
                     <div className="session-invite-field">
-                      <button type="button" className="session-invite-url" onClick={() => copyLink(inviteUrl)} title="Copy link">
-                        {inviteUrl.replace(/^https?:\/\//, "")}
+                      <button type="button" className="session-invite-url" onClick={() => copyLink(shownInviteUrl)} title="Copy link">
+                        {shownInviteUrl.replace(/^https?:\/\//, "")}
                       </button>
                       <button
                         type="button"
                         className={`session-invite-glyph ${copied ? "done" : ""}`}
-                        onClick={() => copyLink(inviteUrl)}
+                        onClick={() => copyLink(shownInviteUrl)}
                         aria-label={copied ? "Copied" : "Copy link"}
                         title={copied ? "Copied" : "Copy link"}
                       >
                         {copied ? "✓" : "⧉"}
                       </button>
                       {canShare && (
-                        <button type="button" className="session-invite-glyph" onClick={() => shareLink(inviteUrl)} aria-label="Share" title="Share">
+                        <button type="button" className="session-invite-glyph" onClick={() => shareLink(shownInviteUrl)} aria-label="Share" title="Share">
                           ⇪
                         </button>
                       )}
@@ -402,19 +489,22 @@ export function SocialScreen({
               </div>
             )}
             <span className="session-foot-left">
-              {!room.isGuest && room.signedIn && (
+              {canInvite && (
                 <button className={`hw-btn small ${inviteOpen ? "on" : ""}`} onClick={openInvite} aria-expanded={inviteOpen}>
                   ＋ Invite
                 </button>
               )}
-              {/* Names are masked for streaming; the switch lives with the other session-wide tools. */}
               <button
-                className={`hw-btn small session-names ${revealed ? "on" : ""}`}
-                onClick={toggleRevealed}
-                aria-pressed={revealed}
-                title={revealed ? "Hide names (for streaming)" : "Show names"}
+                className={`hw-btn small session-gear ${settingsOpen ? "on" : ""}`}
+                onClick={() => {
+                  setInviteOpen(false);
+                  setSettingsOpen((o) => !o);
+                }}
+                aria-pressed={settingsOpen}
+                aria-label="Session settings"
+                title="Session settings"
               >
-                {revealed ? "Hide names" : "Show names"}
+                ⚙
               </button>
             </span>
             {room.joined ? (

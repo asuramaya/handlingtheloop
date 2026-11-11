@@ -352,6 +352,9 @@ export type ClientMsg =
   | { t: "chat"; text: string } // send a chat line (F5) — rate-limited + slow-moded
   | { t: "chat-slow"; seconds: number } // HOST: slow-mode interval (<0 = chat off, 0 = normal, >0 = N-second gate)
   | { t: "chat-followers"; on: boolean } // HOST: followers-only chat (only the host's followers + host/stage may post)
+  // HOST: let guests pass the session's invite link on. `code` is the host's own invite code (the
+  // same one /api/room/invite hands the host), "" to stop. Arrivals by it still knock.
+  | { t: "guest-invite"; code: string }
   | { t: "mute"; to: string; on: boolean } // HOST: mute/unmute a device's chat (L1)
   | { t: "ban"; to: string } // HOST: ban a device — evict + block re-entry for the session (L1)
   // `at` = the sender's room-clock ms when it performed the gesture (ClockSync), so a receiver can
@@ -375,13 +378,13 @@ export type ServerMsg =
   // `engineVersion` = the room's authoritative reconstruction-engine version (the anchor's;
   // D5). A client compares it to its local ENGINE_VERSION to detect a mix it can't faithfully
   // rebuild (stale bundle on either side).
-  | { t: "welcome"; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number; chatFollowers?: boolean; muted?: string[]; engineVersion?: number; hostColor?: string }
+  | { t: "welcome"; guestInvite?: string; you: string; anchorId: string | null; peers: Peer[]; listeners?: number; public?: boolean; pub?: boolean; stage?: StageReq[]; stageGate?: StageGate; requests?: SongRequest[]; chatSlow?: number; chatFollowers?: boolean; muted?: string[]; engineVersion?: number; hostColor?: string }
   // The live song-request list (F1), sent to PARTICIPANTS (the DJ acts on them).
   | { t: "requests"; list: SongRequest[] }
   // `stage` = the pending floor→stage hand-raises (listeners asking to play), sent to
   // PARTICIPANTS only (the host acts on them); the anonymous crowd gets the lite payload.
   // `stageGate`/`chatSlow` ride BOTH payloads — a listener needs them to step up / chat.
-  | { t: "presence"; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number; chatFollowers?: boolean; muted?: string[]; engineVersion?: number; hostColor?: string }
+  | { t: "presence"; guestInvite?: string; peers: Peer[]; listeners?: number; public?: boolean; stage?: StageReq[]; stageGate?: StageGate; chatSlow?: number; chatFollowers?: boolean; muted?: string[]; engineVersion?: number; hostColor?: string }
   // Direct, per-socket feedback to a hand-raising LISTENER on the fate of its request — the
   // crowd's lite presence carries no stage data, so a decline is signalled here explicitly.
   | { t: "stage-self"; status: "declined" }

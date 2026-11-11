@@ -172,6 +172,35 @@ describe("DjRoom membership", () => {
     expect(drivesAnything(friend.a)).toBe(false); // admitted ≠ control (still needs a host grant)
   });
 
+  it("guests can invite: only the HOST shares its code, it rides presence to participants, \"\" stops it", async () => {
+    vi.useFakeTimers();
+    try {
+      const host = (await h.connect({ device: "host1", host: true })).ws!;
+      await h.send(host, { t: "join" });
+      const friend = (await h.connect({ device: "g1", host: false, invited: true })).ws!;
+      await h.send(friend, { t: "join" });
+      // presence is coalesced (1 s window): read it after the window
+      const shared = async () => {
+        await vi.advanceTimersByTimeAsync(1_100);
+        return (friend.last("presence") as { guestInvite?: string } | undefined)?.guestInvite ?? "";
+      };
+      // a guest cannot set it
+      await h.send(friend, { t: "guest-invite", code: "abc123" });
+      expect(await shared()).toBe("");
+      // the host can; a malformed code is refused as ""
+      await h.send(host, { t: "guest-invite", code: "abc123" });
+      expect(await shared()).toBe("abc123");
+      await h.send(host, { t: "guest-invite", code: "../bad code" });
+      expect(await shared()).toBe("");
+      await h.send(host, { t: "guest-invite", code: "abc123" });
+      expect(await shared()).toBe("abc123");
+      await h.send(host, { t: "guest-invite", code: "" });
+      expect(await shared()).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #48: /internal/ismember authorizes a session GUEST fetching the HOST's global sample clip.
   // Only a JOINED participant (by un-forgeable account) matches — never a stranger or empty acct.
   const askMember = async (h: ReturnType<typeof makeRoom>, acct: string) =>

@@ -5,12 +5,26 @@
 // (the session roster, the Accounts panel) shares one state and one toggle.
 import { useSyncExternalStore } from "react";
 
-let revealed = false;
+// ★ SHOWN BY DEFAULT (operator, 2026-11-11: "we can show names by default"); hiding them is a
+// choice for streaming, made in Session ▸ Settings and remembered on this device.
+const KEY = "htl_show_names";
+let revealed = (() => {
+  try {
+    return localStorage.getItem(KEY) !== "0";
+  } catch {
+    return true;
+  }
+})();
 const subs = new Set<() => void>();
 
 export function setRevealed(v: boolean): void {
   if (revealed === v) return;
   revealed = v;
+  try {
+    localStorage.setItem(KEY, v ? "1" : "0");
+  } catch {
+    /* storage unavailable: the choice lasts this page */
+  }
   for (const f of subs) f();
 }
 export function toggleRevealed(): void {

@@ -3631,3 +3631,24 @@ button.peer-pill:hover {
 .chat-panel.fill > .chat-head .chat-slow-sel {
   flex-wrap: wrap;
 }
+
+/* Session settings (a view of the panel, opened by the footer's gear). */
+.session-gear {
+  width: 34px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 15px;
+}
+.session-gear.on {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.session-settings-head {
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.session-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}

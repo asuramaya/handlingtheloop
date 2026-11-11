@@ -130,6 +130,7 @@ export interface RoomView {
   stage: StageReq[]; // pending hand-raises (participants only)
   chatSlow: number; // chat slow-mode: <0 off, 0 normal, >0 N-second gate
   chatFollowers: boolean; // followers-only chat: only the host's followers (+ host/stage) may post
+  guestInvite: string; // the host's invite code guests may pass on ("" = guests cannot invite); participants only
   muted: string[]; // device ids the host has muted (participants only — drives the unmute toggle)
   engineVersion: number; // the anchor's reconstruction-engine version (D5; 0 if unknown)
   hostColor: string; // the host/anchor's account accent → the room "vibe" (rides every payload so
@@ -143,14 +144,14 @@ export function welcomeFor(you: string, view: RoomView, pub: boolean, requests: 
   const base = { you, anchorId: view.anchorId, listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, chatFollowers: view.chatFollowers, engineVersion: view.engineVersion, hostColor: view.hostColor, requests } as const;
   return pub
     ? { t: "welcome", ...base, peers: [], pub: true }
-    : { t: "welcome", ...base, peers: view.peers, stage: view.stage, muted: view.muted };
+    : { t: "welcome", ...base, peers: view.peers, stage: view.stage, muted: view.muted, guestInvite: view.guestInvite };
 }
 
 // The two presence payloads: the FULL roster (+ hand-raises) for participants, and the LITE
 // count-only frame for the crowd (so the big roster never fans out to hundreds of listeners).
 export function presenceFor(view: RoomView): { full: ServerMsg; lite: ServerMsg } {
   return {
-    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow, chatFollowers: view.chatFollowers, muted: view.muted, engineVersion: view.engineVersion, hostColor: view.hostColor },
+    full: { t: "presence", peers: view.peers, listeners: view.listeners, public: view.isPublic, stage: view.stage, stageGate: view.stageGate, chatSlow: view.chatSlow, chatFollowers: view.chatFollowers, guestInvite: view.guestInvite, muted: view.muted, engineVersion: view.engineVersion, hostColor: view.hostColor },
     lite: { t: "presence", peers: [], listeners: view.listeners, public: view.isPublic, stageGate: view.stageGate, chatSlow: view.chatSlow, chatFollowers: view.chatFollowers, hostColor: view.hostColor },
   };
 }

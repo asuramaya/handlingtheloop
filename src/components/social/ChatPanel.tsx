@@ -71,7 +71,15 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
     room.sendChat(t);
     setText("");
   };
-  const placeholder = off ? "Chat is off" : room.iAmMuted ? "You're muted" : room.chatSlow > 0 ? `Slow mode · ${room.chatSlow}s` : "Say something…";
+  const placeholder = off
+    ? "Chat is off"
+    : room.iAmMuted
+      ? "You're muted"
+      : room.chatSlow > 0
+        ? `Slow mode · ${room.chatSlow}s`
+        : fill && room.chatFollowers && !room.host
+          ? "Say something… (followers only)"
+          : "Say something…";
   const pct = Math.round(room.hype * 100);
 
   // ★ MY ACCOUNT, NOT MY DEVICE (operator, 2026-11-11: "it does not recognise 2 devices on the same
@@ -227,7 +235,7 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
           Send
         </button>
       </form>
-      {fill && controls}
+
     </div>
   );
 }

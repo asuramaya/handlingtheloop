@@ -124,6 +124,7 @@ import { ModFx } from "./ModFx";
 import { GateFx } from "./GateFx";
 import { NoiseFx } from "./NoiseFx";
 import { RING_BEND, stepBend } from "./bendPhysics";
+import { nextFollowRate } from "./followClock";
 
 // A single deck: source -> EQ3 -> trim gain -> output (into the crossfader).
 //
@@ -1618,10 +1619,15 @@ export class Deck {
     // Adopt the anchor's effective rate so our clock + (listener) audio run in lockstep with
     // the host (its bend/sync-trim never cross as intents). Re-speed the worklet only when it
     // moved meaningfully, so a listener's own audio tracks the host's tempo/jog.
-    if (rate != null && rate > 0) {
-      const moved = this._followRate == null || Math.abs(this._followRate - rate) > 0.0008;
-      this._followRate = rate;
-      if (moved) this.pushRate();
+    // ★ Re-anchor BEFORE the rate changes, and compare against the rate last PUSHED (operator,
+    // 2026-11-11: session sync audit). Swapping the rate un-anchored rescaled the whole elapsed time
+    // (a playhead jump of elapsed × Δrate, then a needless seek), and comparing to the previous tick
+    // let a slow ramp move the clock without ever reaching the worklet. See followClock.ts.
+    const next = nextFollowRate(this._followRate, rate);
+    if (next != null) {
+      this.reanchorClock();
+      this._followRate = next;
+      this.pushRate();
     }
     if (this.followOn && this.followPlaying && playing) {
       const predicted = this.followExtrapolate(now);
@@ -1656,11 +1662,22 @@ export class Deck {
   endFollow(): void {
     this.followOn = false;
     this.followBias = 0;
+    if (this._followRate == null && this._followTrim === 0) return;
+    // ★ Role flip (operator, 2026-11-11: session sync audit). Becoming the anchor (or leaving) used to
+    // drop the host's rate un-anchored (a playhead jump) and step straight to our own _rate (an
+    // audible tempo step: the host's bend + sync trim + our follow trim gone at once). Re-anchor so
+    // the position is continuous, then hand the residual rate difference to the BEND, whose decay
+    // glides it home to the set tempo like a released jog nudge. Clamped to the bend's range.
+    const was = this.effRate();
+    this.reanchorClock();
     this._followTrim = 0;
-    if (this._followRate != null) {
-      this._followRate = null; // back to our own tempo/pitch
-      this.pushRate();
+    this._followRate = null; // back to our own tempo/pitch
+    const own = this._rate * (1 + this._syncTrim);
+    if (this._playing && own > 0 && Math.abs(was / own - 1) > 1e-4) {
+      this._bend = Math.max(-this._bendMax, Math.min(this._bendMax, was / own - 1));
+      this.startBendDecay();
     }
+    this.pushRate();
   }
   /** Playhead for DRAWING. A follower draws the smooth, phase-locked extrapolation of
    *  the anchor tick (so the head glides at the display rate even when the local audio
@@ -1685,7 +1702,8 @@ export class Deck {
     return this.followPlaying;
   }
 
-  play() {
+  /** `exact`: start precisely at startOffset, no SYNC phase snap (the session follower's own starts). */
+  play(opts?: { exact?: boolean }) {
     this.moveCancel();
     this.jog.cancelJog(); // a transport action wins over an in-flight platter coast
     this.clearBend();
@@ -1695,7 +1713,10 @@ export class Deck {
     // fresh load + Play (no prior scrub) rendered silence. Resume on the Play gesture.
     if (this.ctx.state === "suspended") void this.ctx.resume();
     // A synced deck starts in phase with the other (nearest in-phase point, ≤ half a beat away).
-    if (this.startAlign) this.startOffset = Math.max(0, Math.min(this._duration, this.startAlign(this.startOffset)));
+    // ★ Not while following the session clock (operator, 2026-11-11: session sync audit): the anchor's
+    // tick governs a follower's position, and a phase snap against our OTHER deck (up to half a beat)
+    // made every follow start land off target, so the next tick seeked again, forever.
+    if (this.startAlign && !opts?.exact && !this.followOn) this.startOffset = Math.max(0, Math.min(this._duration, this.startAlign(this.startOffset)));
     this.spawnSource(this.startOffset);
     this._playing = true;
   }
@@ -1724,7 +1745,8 @@ export class Deck {
     this.jog.brakeStop();
   }
 
-  seek(seconds: number) {
+  /** `exact`: land precisely on `seconds`, no SYNC phase snap (the session follower's own seeks). */
+  seek(seconds: number, opts?: { exact?: boolean }) {
     this.moveCancel(); // a jump ends any held FX2 move (no-op on the move stack's own landing)
     this.jog.cancelJog();
     this.clearBend();
@@ -1732,7 +1754,8 @@ export class Deck {
     if (this._playing) {
       // A jump while playing lands in phase with a synced partner (paused, the exact spot is kept:
       // a cue point must stay where it was set, and play() aligns when it starts).
-      if (this.startAlign) target = Math.max(0, Math.min(this.duration, this.startAlign(target)));
+      // Never for a follower (see play): the anchor's tick already says where this deck is.
+      if (this.startAlign && !opts?.exact && !this.followOn) target = Math.max(0, Math.min(this.duration, this.startAlign(target)));
       // Declicked gapless re-seat. The old stopSource()+spawnSource() pair coalesced in
       // the worklet before any audio rendered, so the 5 ms fade never happened → a hard
       // click at the discontinuity on every cue/loop jump (worse on rapid fire). One

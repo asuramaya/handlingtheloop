@@ -174,7 +174,7 @@ export function SettingsPanel({
       <DockPlacementResizer mode={dockMode} />
       <div className="panel settings-panel" onPointerDown={(e) => e.stopPropagation()}>
         {dockMode === "center" && <CenterResizeHandles panelKey="settings" />}
-        <div className="settings-head">
+        <div className={`settings-head ${navOpen ? "nav-open" : ""}`}>
           <button
             className={`settings-nav-btn ${navOpen ? "open" : ""}`}
             onClick={() => setNavOpen((o) => !o)}

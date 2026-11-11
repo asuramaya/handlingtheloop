@@ -2343,17 +2343,32 @@
 .settings-frame.nav-open > .settings-body {
   margin-left: 0;
 }
+/* ★ THE WHOLE PANEL, NOT A FOLD (operator, 2026-11-11: "the hamburger menu in settings needs the
+   same treatment as library because it cannot fold from the side, there is not enough space").
+   Below 520 px the sections cover the content edge to edge, like the Library's narrow drawer; a
+   pick or the ☰ closes it (SettingsPanel). */
 @container (max-width: 519px) {
   .settings-nav {
     position: absolute;
-    inset: 0 auto 0 0;
-    z-index: 4;
-    width: min(200px, 70%);
+    inset: 0;
+    z-index: 40; /* above the content's own sticky layers (the waveform preview is 5, info pops 20-30) */
+    width: auto;
     margin: 0;
-    padding: 6px;
+    padding: 6px 0;
     background: var(--panel, var(--bg));
-    border-right: 1px solid var(--line);
-    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.45);
+    border-right: none;
+    box-shadow: none;
+  }
+  .settings-nav .settings-nav-item {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+}
+/* Menu open: one layer. The title bar is just ☰ and the name; the profile picker belongs to the
+   section underneath (the same rule as the Library's title bar). */
+@container settings-panel (max-width: 519px) {
+  .settings-head.nav-open .profilebar {
+    display: none;
   }
 }
 .settings-nav-item {

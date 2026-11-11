@@ -93,24 +93,56 @@ export function SocialCard({
         ? "Plays the mix out loud"
         : "Follows silently";
 
+  // The two pills, one definition for both homes (the wide row's right side, the narrow drop-down).
+  const pills = (
+    <>
+      {deckBtn ? (
+        <button className={`peer-pill ${p.controlling ? "on" : ""}`} onClick={onDecks} aria-pressed={p.controlling} title={deckTitle}>
+          <span aria-hidden="true">🎛️</span>
+          {deckLabel}
+        </button>
+      ) : (
+        <span className={`peer-pill static ${p.controlling ? "on" : ""}`} title={deckTitle}>
+          <span aria-hidden="true">🎛️</span>
+          {deckLabel}
+        </span>
+      )}
+      {soundBtn ? (
+        <button className={`peer-pill ${p.listening ? "on" : ""}`} onClick={onSound} aria-pressed={p.listening} title={soundTitle}>
+          <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
+          {p.listening ? "Sound" : "Muted"}
+        </button>
+      ) : (
+        <span className={`peer-pill static ${p.listening ? "on" : ""}`} title={soundTitle}>
+          <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
+          {p.listening ? "Sound" : "Muted"}
+        </span>
+      )}
+    </>
+  );
+  // ★ TWO LAYOUTS, ONE ROW (operator, 2026-11-11). WIDE: the pills and a remove ✕ sit inline at the
+  // right. NARROW: the row shows only a glance of its state; tapping it drops down a strip holding
+  // Sound, Decks and Remove. The container query on the roster picks which; the markup has both.
+  const openable = p.joined && (deckBtn || soundBtn || canModerate);
+  const toggle = () => openable && setOpen((o) => !o);
+
   return (
-    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${canModerate ? "can-open" : ""} ${open ? "open" : ""}`}>
+    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${openable ? "can-open" : ""} ${open ? "open" : ""} ${canModerate ? "has-kick" : ""}`}>
       <span className="social-card-ico" aria-hidden="true">
         {deviceIcon(p.kind)}
       </span>
       <div
         className="social-card-main"
-        {...(canModerate
+        {...(openable
           ? {
               role: "button",
               tabIndex: 0,
               "aria-expanded": open,
-              title: open ? "Hide actions" : "Actions",
-              onClick: () => setOpen((o) => !o),
+              onClick: toggle,
               onKeyDown: (e: React.KeyboardEvent) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  setOpen((o) => !o);
+                  toggle();
                 }
               },
             }
@@ -129,41 +161,42 @@ export function SocialCard({
         {meta && <div className="social-card-meta">{meta}</div>}
       </div>
       {p.joined && (
-        <div className="social-card-pills">
-          {deckBtn ? (
-            <button className={`peer-pill ${p.controlling ? "on" : ""}`} onClick={onDecks} aria-pressed={p.controlling} title={deckTitle}>
-              <span aria-hidden="true">🎛️</span>
-              {deckLabel}
+        <>
+          {/* WIDE */}
+          <div className="social-card-pills">
+            {pills}
+            {canModerate && p.stage && (
+              <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="Send them back to the crowd (they keep listening)">
+                ⬇ Crowd
+              </button>
+            )}
+          </div>
+          {canModerate && (
+            <button className="social-card-kick" onClick={() => room.kick(p.id)} title="Remove from the session" aria-label="Remove from the session">
+              ✕
             </button>
-          ) : (
-            <span className={`peer-pill static ${p.controlling ? "on" : ""}`} title={deckTitle}>
-              <span aria-hidden="true">🎛️</span>
-              {deckLabel}
-            </span>
           )}
-          {soundBtn ? (
-            <button className={`peer-pill ${p.listening ? "on" : ""}`} onClick={onSound} aria-pressed={p.listening} title={soundTitle}>
-              <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
-              {p.listening ? "Sound" : "Muted"}
-            </button>
-          ) : (
-            <span className={`peer-pill static ${p.listening ? "on" : ""}`} title={soundTitle}>
-              <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
-              {p.listening ? "Sound" : "Muted"}
-            </span>
-          )}
-        </div>
+          {/* NARROW: a read-only glance while folded */}
+          <span className="social-card-glance" aria-hidden="true" onClick={toggle}>
+            <span className={p.listening ? "on" : ""}>{p.listening ? "🔊" : "🔇"}</span>
+            <span className={p.controlling ? "on" : ""}>🎛️</span>
+          </span>
+        </>
       )}
-      {canModerate && open && (
-        <div className="social-card-actions">
-          {p.stage && (
-            <button className="hw-btn small" onClick={() => room.denyStage(p.id)} title="They keep listening">
-              Send back to the crowd
+      {/* NARROW: the drop-down */}
+      {openable && open && (
+        <div className="social-card-drop">
+          {pills}
+          {canModerate && p.stage && (
+            <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="They keep listening">
+              ⬇ Crowd
             </button>
           )}
-          <button className="hw-btn small danger" onClick={() => room.kick(p.id)}>
-            Remove from session
-          </button>
+          {canModerate && (
+            <button className="peer-pill kick" onClick={() => room.kick(p.id)} title="Remove from the session">
+              ✕ Remove
+            </button>
+          )}
         </div>
       )}
     </li>

@@ -165,7 +165,7 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
       <div className="chat-log">
         {room.chatLog.length === 0 && (
           <div className="chat-empty">
-            <span className="chat-empty-bubble" aria-hidden="true">👋</span>
+            <span className="chat-empty-wave" aria-hidden="true">👋</span>
             <b>No messages yet</b>
             <span>Say hi to the room.</span>
           </div>

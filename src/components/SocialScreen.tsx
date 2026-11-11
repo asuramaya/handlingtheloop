@@ -7,6 +7,7 @@ import { QRCode } from "./QRCode";
 import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { StageBar } from "./social/StageBar";
 import { SocialCard } from "./social/SocialCard";
+import { relationOf, type Relation } from "./social/relation";
 import { RequestList } from "./social/RequestList";
 import { ChatPanel } from "./social/ChatPanel";
 import { InviteFriends } from "./social/InviteFriends";
@@ -386,6 +387,24 @@ export function SocialScreen({
                   onToggle={() => setRevealed(!revealed)}
                 />
               </div>
+              {/* Public / private: the broadcast (Go live) as a switch, beside the other room rules. */}
+              {room.host && !room.isGuest && room.signedIn && (
+                <div className="settings-section">
+                  {room.user?.handle ? (
+                    <ToggleRow
+                      label="Public"
+                      info={`Public opens @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks. Private: only people you invite.`}
+                      on={room.roomPublic}
+                      onToggle={() => (room.roomPublic ? room.goPublic(false) : goLive())}
+                    />
+                  ) : (
+                    <div className="settings-row">
+                      <span className="settings-label">Public</span>
+                      <span className="settings-value">Claim a @handle under People ▸ You first</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {room.host && (
                 <div className="settings-section">
                   <div className="settings-section-head">
@@ -444,11 +463,32 @@ export function SocialScreen({
                 <p className="settings-note">You're tuned in to @{room.listeningTo}'s broadcast. The decks and the people on them are theirs.</p>
               ) : (
                 <ul className="social-roster">
-                  {room.peers
-                    .filter((p) => !p.pending)
-                    .map((p) => (
-                      <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} friends={friends} />
-                    ))}
+                  {/* ★ THIS DEVICE FIRST, THEN SECTIONS (operator, 2026-11-11): you, the host, friends,
+                      guests, the crowd, each under a small label. */}
+                  {(() => {
+                    const me = room.peers.find((x) => x.id === room.you) ?? null;
+                    const order: Relation[] = ["you", "host", "friend", "guest", "crowd"];
+                    const title: Record<Relation, string> = { you: "You", host: "Host", friend: "Friends", guest: "Guests", crowd: "From the crowd" };
+                    const rows = room.peers.filter((p) => !p.pending);
+                    const groups = order
+                      .map((rel) => ({
+                        rel,
+                        list: rows
+                          .filter((p) => relationOf(p, me, room.you, friends) === rel)
+                          .sort((a, b) => (a.id === room.you ? -1 : b.id === room.you ? 1 : (a.joinedAt || 0) - (b.joinedAt || 0))),
+                      }))
+                      .filter((g) => g.list.length > 0);
+                    return groups.map((g) => (
+                      <li key={g.rel} className="social-roster-group">
+                        {groups.length > 1 && <div className={`social-roster-sep rel-${g.rel}`}>{title[g.rel]}</div>}
+                        <ul className="social-roster-list">
+                          {g.list.map((p) => (
+                            <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} friends={friends} />
+                          ))}
+                        </ul>
+                      </li>
+                    ));
+                  })()}
                   {others.length === 0 && !sessionLive && (
                     <li className="social-ghost">Open htl on another device on this account, or invite someone below.</li>
                   )}

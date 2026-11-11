@@ -4,16 +4,49 @@ import { ago, deviceIcon } from "./util";
 
 // One roster row: who the device is, what it's doing (driving / hearing / on stage / clock),
 // and the self-switches + host moderation that apply to it.
+/** This device's own two switches — drive the decks, hear the mix. Rendered in the Session footer
+ *  (they are about THIS device, so they sit with its Leave button, not inside a roster row). */
+export function SelfSwitches({ room, p, onActivate }: { room: RoomState; p: RoomState["peers"][number]; onActivate?: () => void }) {
+  const canSelfDrive = room.host || p.controlling;
+  return (
+    <>
+      <button
+        className={`room-tog labeled ${p.controlling ? "on" : ""} ${canSelfDrive ? "" : "locked"}`}
+        onClick={canSelfDrive ? () => room.setControl(!p.controlling) : undefined}
+        disabled={!canSelfDrive}
+        aria-pressed={p.controlling}
+        title={canSelfDrive ? (p.controlling ? "Stop driving the decks from this device" : "Drive the decks from this device") : "The host hands you the decks"}
+      >
+        <span aria-hidden="true">🎛️</span> Decks
+      </button>
+      <button
+        className={`room-tog labeled ${p.listening ? "on" : ""}`}
+        onClick={() => {
+          if (!p.listening) onActivate?.();
+          room.setListening(!p.listening);
+        }}
+        aria-pressed={p.listening}
+        title={p.listening ? "Mute the mix on this device" : "Hear the mix on this device"}
+      >
+        <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span> Sound
+      </button>
+    </>
+  );
+}
+
 export function SocialCard({
   room,
   p,
   revealed,
   onActivate,
+  selfActs = true,
 }: {
   room: RoomState;
   p: RoomState["peers"][number];
   revealed: boolean;
   onActivate?: () => void;
+  /** Show this device's own switches on its row (false when the Session footer carries them). */
+  selfActs?: boolean;
 }) {
   const isSelf = p.id === room.you;
   const isGuest = !p.host;
@@ -21,12 +54,22 @@ export function SocialCard({
 
   // Role line: what this device is doing right now. A stepped-up listener shows the deck
   // they hold (🎛️ Deck B) so a b2b is legible at a glance.
-  const driveLabel = p.controlling ? (p.stage && (p.decks === "A" || p.decks === "B") ? `🎛️ Deck ${p.decks}` : "🎛️ driving") : null;
-  const role = !p.joined
-    ? "discovered"
-    : [p.stage ? "● stage" : null, driveLabel, p.listening ? "🔊 hearing" : "🔇 muted", p.anchor ? "clock" : null]
-        .filter(Boolean)
-        .join(" · ");
+  // ★ CHIPS, NOT A SENTENCE OF EMOJI (operator, 2026-11-11: "an eye sore… hard to understand at
+  // first glance"). "🎛️ driving · 🔇 muted · clock" asked the reader to decode three glyphs and a
+  // word that meant nothing to them; each fact is now a small labelled chip, and "clock" (the
+  // device whose playhead everyone follows) says what it is.
+  const chips: { k: string; label: string; on: boolean; title: string }[] = !p.joined
+    ? [{ k: "seen", label: "Not joined", on: false, title: "Signed in on this account but not in the session" }]
+    : [
+        ...(p.stage ? [{ k: "stage", label: "On stage", on: true, title: "Stepped up from the crowd" }] : []),
+        p.controlling
+          ? { k: "drive", label: p.stage && (p.decks === "A" || p.decks === "B") ? `Deck ${p.decks}` : "Decks", on: true, title: "Can drive the decks" }
+          : { k: "drive", label: "Watching", on: false, title: "Follows the decks, cannot drive them" },
+        p.listening
+          ? { k: "sound", label: "Sound on", on: true, title: "Plays the mix out loud" }
+          : { k: "sound", label: "Muted", on: false, title: "Follows silently" },
+        ...(p.anchor ? [{ k: "clock", label: "Timekeeper", on: true, title: "Everyone's playhead follows this device" }] : []),
+      ];
 
   // Self switches (own drive — host/granted only; own sound — always self).
   const toggleSelfSound = () => {
@@ -53,10 +96,16 @@ export function SocialCard({
           {p.host ? <span className="room-host-tag">host</span> : <span className="room-guest-tag">guest</span>}
           {p.joined && p.joinedAt > 0 && <span className="social-card-since">{ago(p.joinedAt)}</span>}
         </div>
-        <div className="social-card-role">{role}</div>
+        <div className="social-card-role">
+          {chips.map((c) => (
+            <span key={c.k} className={`room-chip ${c.k} ${c.on ? "on" : ""}`} title={c.title}>
+              {c.label}
+            </span>
+          ))}
+        </div>
       </div>
       <div className="social-card-acts">
-        {isSelf && p.joined && (
+        {isSelf && p.joined && selfActs && (
           <>
             <button
               className={`room-tog ${p.controlling ? "on" : ""} ${canSelfDrive ? "" : "locked"}`}

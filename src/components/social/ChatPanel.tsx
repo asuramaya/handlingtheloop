@@ -16,7 +16,7 @@ const SLOW_OPTS = [
   { v: 15, l: "15s", t: "Slow mode — one line per 15s" },
 ] as const;
 
-export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boolean }) {
+export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; revealed: boolean; fill?: boolean }) {
   const [text, setText] = useState("");
   const [reported, setReported] = useState<Set<string>>(new Set());
   const endRef = useRef<HTMLDivElement>(null);
@@ -75,7 +75,9 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
   const pct = Math.round(room.hype * 100);
 
   return (
-    <div className="chat-panel">
+    // `fill`: the Session's Chat TAB. The log takes the tab's height and the composer sits on its
+    // floor, like any messenger; no card frame and no "Chat" heading (the tab already says it).
+    <div className={`chat-panel ${fill ? "fill" : ""}`}>
       {crowd && (
         <>
           <div className="hype-row">
@@ -102,7 +104,7 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
       )}
 
       <div className="social-section-head chat-head">
-        💬 Chat
+        {fill ? (room.host ? <span className="chat-head-label">Who can chat</span> : <span />) : "💬 Chat"}
         {/* A listener sees WHY the room may refuse them; the host gets the toggle. */}
         {!room.host && room.chatFollowers && (
           <span className="chat-mode-badge">
@@ -116,7 +118,7 @@ export function ChatPanel({ room, revealed }: { room: RoomState; revealed: boole
               onClick={() => room.setChatFollowers(!room.chatFollowers)}
               aria-pressed={room.chatFollowers}
             >
-              👥
+              {fill ? "Followers" : "👥"}
             </button>
             {SLOW_OPTS.map((o) => (
               <button

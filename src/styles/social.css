@@ -3054,3 +3054,253 @@ span.profile-handle:hover {
   font-size: 19px;
   line-height: 1;
 }
+
+/* ================= SESSION: fixed top · tabbed body · fixed foot (operator, 2026-11-11) ========
+   "An eye sore… hard to understand at first glance… make a footer/header section for static
+   elements and make room/chat 2 different tabs." The panel is three bands now: the TOP never
+   scrolls (title + status, the one action, anyone waiting, the tabs), the BODY is the chosen tab
+   and the only scroller, and the FOOT is this device (its switches and Leave). */
+.panel.social-screen {
+  gap: 0;
+  padding-bottom: 0;
+}
+.session-top {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.session-top > .settings-head {
+  justify-content: flex-start;
+  gap: 10px;
+  margin-bottom: 0;
+}
+.session-top > .settings-head .room-eye {
+  margin-left: auto;
+}
+/* The one-word status beside the title: what this session IS, readable before anything else. */
+.session-status {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.session-status.accent {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.session-status.live {
+  color: #fff;
+  border-color: #c8506a;
+  background: #c8506a;
+}
+/* A one-line explanation with its action at the end (idle / knocking), in place of a whole card. */
+.session-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.session-line .info-wrap {
+  margin-left: 4px;
+}
+.hero-golive.small {
+  align-self: auto;
+  flex: none;
+  padding: 7px 14px;
+  font-size: 12.5px;
+}
+.room-hero {
+  margin-bottom: 0;
+  padding: 10px 12px;
+}
+.room-hero .hero-row .hero-listeners {
+  margin-left: auto;
+}
+.hero-gate {
+  font-size: 12px;
+}
+/* WAITING ON YOU, compact rows in the fixed top. */
+.session-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.session-wait-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.session-wait-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.social-screen .hw-btn.small.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+  font-weight: 800;
+}
+.session-tabs {
+  margin: 2px 0 0;
+}
+.settings-tab .tab-count {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+/* BODY */
+.session-body {
+  padding-top: 12px;
+  padding-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.session-invite {
+  margin-top: 2px;
+}
+/* The Chat tab: the log takes the height and scrolls itself; the composer sits on the floor. */
+.session-body.chat {
+  overflow: hidden;
+}
+.chat-panel.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.chat-panel.fill .chat-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+.chat-panel.fill .chat-head:not(:has(button, .chat-mode-badge)) {
+  display: none;
+}
+.chat-panel.fill .chat-head {
+  font-size: 11px;
+}
+.chat-head-label {
+  color: var(--muted);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.chat-panel.fill .chat-input {
+  padding: 9px 12px;
+}
+.chat-panel.fill .chat-send {
+  padding: 9px 16px;
+}
+.session-body.chat > .req-list {
+  flex: 0 1 auto;
+  max-height: 38%;
+  overflow-y: auto;
+}
+.session-empty {
+  margin: auto 0;
+  text-align: center;
+}
+.session-error {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+}
+/* Roster rows: chips instead of an emoji sentence. */
+.social-card-role {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.room-chip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.room-chip.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.room-chip.clock.on {
+  border-color: color-mix(in srgb, #6bdc9e 45%, var(--line));
+  background: color-mix(in srgb, #6bdc9e 12%, transparent);
+}
+.room-chip.stage.on {
+  border-color: #c8506a;
+  background: color-mix(in srgb, #c8506a 16%, transparent);
+}
+/* FOOT: this device. */
+.session-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -18px;
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.session-foot-who {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.session-foot-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.room-tog.labeled {
+  width: auto;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+/* The names eye: a real button in the title row (it was a 13 px glyph at 60 % that read as
+   nothing at all on the dark panel). */
+.session-top > .settings-head .room-eye {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+  opacity: 0.85;
+}
+.session-top > .settings-head .room-eye:hover,
+.session-top > .settings-head .room-eye.on {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}

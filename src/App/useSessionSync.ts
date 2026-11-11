@@ -14,7 +14,7 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
-import { TIMED_ERR_ALPHA, decideFollowTick, decideTimedFollow, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import { TIMED_ERR_ALPHA, decideFollowTick, decideTimedFollow, decideSnapshotDeck, decideStemConverge, decideTickResync, holdsForeignTrack, isAudibleDeckIntent, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
 import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
@@ -49,7 +49,7 @@ export interface SessionSyncDeps {
   followSeekAt: MutableRefObject<Record<DeckId, number>>;
   resyncAt: MutableRefObject<Record<DeckId, number | null>>; // last divergence-reload attempt per deck; null = never
   resyncTries: MutableRefObject<Record<DeckId, number>>; //    consecutive attempts since this deck last landed
-  loadingSince: MutableRefObject<Record<DeckId, number>>; //   when the current in-flight claim was made
+  loadingSince: MutableRefObject<Record<DeckId, number>>; //   the in-flight load's last sign of life (claim, chunk, decode, analysis)
   scrubbing: MutableRefObject<Record<DeckId, boolean>>;
   stemTouch: MutableRefObject<Record<DeckId, Record<string, number>>>;
   snapFollowRef: MutableRefObject<boolean>;
@@ -213,7 +213,14 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   // so the next snapshot or intent can retry — otherwise the deck stays stuck on the old
   // track and the session silently drifts out of sync.
   const runRoomLoad = useCallback(
-    (id: DeckId, videoId: string, track: TrackMeta, restore?: DeckSnapshot) => {
+    (id: DeckId, videoId: string, track: TrackMeta, snapRestore?: DeckSnapshot) => {
+      // ★ THE SNAPSHOT'S TRANSPORT IS NOT RESTORED HERE. Its position is as old as the snapshot plus
+      // the whole download and decode, and restoring it (applyDeckControls seeks it and plays) made a
+      // guest joining mid-song PLAY seconds of the wrong part and then jump when the first tick
+      // arrived (measured: started 2.03 s behind, seeked 84 ms later). The deck lands paused at
+      // the snapshot's position; the tick follower starts it at the host's live position, and the
+      // post-decode fallback below still starts it when nothing is ticking.
+      const restore = snapRestore ? { ...snapRestore, playing: false } : undefined;
       roomLoadTarget.current[id] = videoId;
       reconciledTarget.current[id] = null; // re-arm the post-decode discrete-state reconcile
       // Muted passenger → don't build an audio graph (iOS OOM, bug #2). Stash the target;
@@ -326,6 +333,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // the audible skip on join. Only start from the snapshot when no tick is driving.
         const deck = engine.deck(id);
         if (shouldStartOnDecode({ snapPlaying: d.playing, deckPlaying: deck.playing, sinceLastTickMs: performance.now() - (lastTickAt.current[id] ?? 0) })) {
+          event("room.follow", { deck: id, kind: "decode-start", pos: +d.position.toFixed(2) });
           engine.resume();
           deck.seek(d.position);
           deck.play();
@@ -378,6 +386,8 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     [engine, runRoomLoad, refresh],
   );
 
+  // The videoId the anchor last stamped on each deck's tick (null: none yet / an older anchor).
+  const tickVid = useRef<Record<DeckId, string | null>>({ A: null, B: null });
   // Inbound control intent from a co-DJ → apply locally + repaint. Never re-emit.
   const onRoomIntent = useCallback(
     (intent: Intent) => {
@@ -393,6 +403,14 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       if (intent.kind === "stemsAck") {
         stemAckRef?.current(intent.deck, intent.state, intent.reason, intent.pct);
         return;
+      }
+      if ("deck" in intent && isAudibleDeckIntent(intent.kind, "action" in intent ? String(intent.action) : undefined)) {
+        const d = intent.deck;
+        const foreign = holdsForeignTrack({ loadedId: latest.current.loaded[d], tickVid: tickVid.current[d], roomLoadTarget: roomLoadTarget.current[d] });
+        event("room.intent", { deck: d, kind: intent.kind, action: "action" in intent ? intent.action : null, applied: !foreign });
+        // The host's play/seek/hot-cue on a deck still holding another track would sound THAT track;
+        // the tick follower starts the session's track at the live position once it lands.
+        if (foreign) return;
       }
       applyIntent(intent);
       refresh();
@@ -424,6 +442,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // anchor's track (throttled; force-load defeats a stuck load-guard). Also pulls a fresh
         // snapshot so the new track's cue/loop/fx land. See sessionFollow.decideTickResync.
         const vid = t.vid;
+        tickVid.current[id] = vid ?? null;
         const loadingThis = vid != null && (roomLoadTarget.current[id] === vid || loadingVid.current[id] === vid);
         const lastResync = resyncAt.current[id];
         const resync = decideTickResync({
@@ -470,6 +489,12 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
             });
             roomRef.current?.requestState(); // pull the authoritative snapshot for the new track's discrete state
           }
+          // …and never let it SOUND either: a track the session is not playing (see holdsForeignTrack).
+          if (deck.playing && holdsForeignTrack({ loadedId: latest.current.loaded[id], tickVid: vid, roomLoadTarget: roomLoadTarget.current[id] })) {
+            event("room.follow", { deck: id, kind: "silence-foreign", loadedVid: latest.current.loaded[id] || null, vid: vid ?? null });
+            deck.pause();
+            flipped = true;
+          }
           return; // diverged → never drive this deck
         }
         // ★ "Can this deck play?", not "does it still hold the float32 mix". A phone RELEASES the mix
@@ -506,7 +531,10 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
             sinceFollowSeekMs: now - followSeekAt.current[id],
             smoothErr: followErr.current[id] ?? undefined,
           });
-          if (timed.kind !== "trim" && timed.kind !== "hold") followErr.current[id] = null; // a jump: start over
+          if (timed.kind !== "trim" && timed.kind !== "hold") {
+            followErr.current[id] = null; // a jump: start over
+            if (timed.kind !== "seek") event("room.follow", { deck: id, kind: timed.kind, errMs: Math.round((deck.position() - timed.target) * 1000) });
+          }
           if (timed.kind === "start") {
             engine.resume(); // iOS starts suspended
             deck.setFollowTrim(0);
@@ -521,10 +549,11 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
             followSeekAt.current[id] = now;
             flipped = true;
           } else if (timed.kind === "seek") {
+            // The error is read BEFORE the seek: read after it, it was always ~0.
+            event("room.follow.seek", { deck: id, errMs: Math.round((deck.position() - timed.target) * 1000), rttMs: roomRef.current?.clockRtt() ?? null });
             deck.setFollowTrim(0);
             deck.seek(timed.target);
             followSeekAt.current[id] = now;
-            event("room.follow.seek", { deck: id, errMs: Math.round((deck.position() - timed.target) * 1000), rttMs: roomRef.current?.clockRtt() ?? null });
           } else if (timed.kind === "trim") {
             deck.setFollowTrim(timed.trim);
           } else if (timed.kind === "align") {
@@ -541,6 +570,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           masterPos: t.pos,
           sinceFollowSeekMs: now - followSeekAt.current[id],
         });
+        if (action.kind !== "hold") event("room.follow", { deck: id, kind: action.kind, untimed: true, errMs: Math.round((deck.position() - t.pos) * 1000) });
         if (action.kind === "start") {
           engine.resume(); // iOS starts suspended
           if (action.seek) deck.seek(t.pos); // catch up cleanly BEFORE the source starts

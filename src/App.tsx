@@ -1824,6 +1824,15 @@ function AppBody() {
       loadAbort.current[id] = ctrl;
       const seq = (loadSeq.current[id] += 1);
       const stale = () => seq !== loadSeq.current[id];
+      // ★ "IS THIS LOAD STUCK?" IS ASKED OF ITS LAST SIGN OF LIFE, NOT ITS START. The tick resync
+      // force-restarts a load in flight for RESYNC_STUCK_MS, and measured from the claim that killed
+      // loads that were merely SLOW: a phone fetching two tracks at once on a thin link crossed 15 s
+      // while still receiving, was restarted from byte zero, and did it again 15 s later (measured
+      // headless at 1 MB/s: the guest never played). Every chunk, the decode and the analysis renew
+      // the claim's clock while this load still owns it.
+      const alive = () => {
+        if (loadingSeq.current[id] === seq) loadingSince.current[id] = performance.now();
+      };
       let landed = false; // set once the track is on the deck → keep the loadingVid claim
       let claimedVid = ""; // the id this load claimed in loadingVid (try-scoped vid isn't visible in finally)
       // ★ EXACTLY ONE `load.end` PER LOAD, AND ONE FOR EVERY LOAD. Both halves were wrong when this
@@ -1949,6 +1958,7 @@ function AppBody() {
               vid,
               (p) => {
                 if (stale()) return;
+                alive();
                 const pct = p.totalBytes != null ? Math.round((p.receivedBytes / p.totalBytes) * 100) : undefined;
                 const label = pct != null ? `${pct}%` : `${Math.round(p.receivedBytes / 1024)}kb`;
                 setStatusFor(id, { phase: "downloading", of: "track", pct, detail: `Downloading… ${label}` });
@@ -1958,6 +1968,7 @@ function AppBody() {
             void putAudio(vid, data.slice(0)); // cache for next refresh
           }
           if (stale()) return;
+          alive();
           setStatusFor(id, { phase: "downloading", of: "track", detail: "Decoding…" });
           const buffer = await decodeAudio(engine.ctx, data);
           if (stale()) return;
@@ -2003,6 +2014,7 @@ function AppBody() {
             storedPaletteStr = stored?.palette ?? null;
           }
           reusedGrid = suppliedGrid != null;
+          alive();
           const analysis = await analyzeTrackAsync(buffer, suppliedGrid);
           if (stale()) return;
           cached = { buffer, analysis };
@@ -2014,7 +2026,10 @@ function AppBody() {
         // has a measured number before it rather than arithmetic after it.
         engine.reportAudioResident(`deck ${id} load`);
         engine.deck(id).key = cached.analysis.key;
-        if (restore) applyDeckControls(engine.deck(id), restore);
+        if (restore) {
+          applyDeckControls(engine.deck(id), restore);
+          event("load.restore", { deck: id, playing: !!restore.playing, pos: +restore.position.toFixed(2) });
+        }
         engine.reassertSync(id); // re-lock if this deck is in a sync pair
         engine.reassertKey(id);
         landed = true; // the track is on the deck — keep the loadingVid claim as the dedupe key
@@ -3631,6 +3646,7 @@ function AppBody() {
     // Only a genuine leave drops `enabled` while still ONLINE; a reconnect blip drops the
     // status too (and self-heals on the next tick) so we skip it.
     if (was && !room.enabled && room.status === "online") {
+      event("room.leave", { pausedA: engine.deckA.playing, pausedB: engine.deckB.playing });
       engine.deckA.pause();
       engine.deckB.pause();
       // Clear all the session load guards so a later re-join can't mis-dedupe its first
@@ -3715,14 +3731,24 @@ function AppBody() {
     didSeed.current = true;
     const snap = loadSession();
     if (snap?.decks.A.videoId || snap?.decks.B.videoId || library.collection.length > 0) return;
+    // ★ NOT FOR A VISITOR. A first-run anonymous device is exactly who opens an invite link, and the
+    // seed raced the session for the same decks: the room's load aborted seed A, the seed (awaiting
+    // A) then loaded B and aborted the ROOM's load of B, the tick resync reloaded it from scratch
+    // (measured: the host's deck reached the guest ~4.5 s later, after two wasted downloads); and
+    // had the room's track already been playing, the seed's setBuffer would have stopped it, the
+    // resync swapped it back and the tick restarted it — a play, a stop and a jump on join. A
+    // device that arrived to visit (invite, listen link) is about to be given the host's board.
+    const visiting = () => roomRef.current?.attachment.to === "rig" || !!roomRef.current?.enabled || new URLSearchParams(location.search).has("join");
+    if (visiting()) return;
     fetchCommunity(120)
       .then(async (tracks) => {
         if (tracks.length === 0) return;
         const pick = [...tracks].sort(() => Math.random() - 0.5).slice(0, 2);
         // Serialize the two loads — running both decodes concurrently can race on the
-        // shared fetch/decode pipeline and drop one deck.
-        if (pick[0]) await loadTrackToDeck("A", pick[0]);
-        if (pick[1]) await loadTrackToDeck("B", pick[1]);
+        // shared fetch/decode pipeline and drop one deck. Re-checked before each one: a session
+        // joined meanwhile owns the decks now.
+        if (pick[0] && !visiting()) await loadTrackToDeck("A", pick[0]);
+        if (pick[1] && !visiting()) await loadTrackToDeck("B", pick[1]);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps

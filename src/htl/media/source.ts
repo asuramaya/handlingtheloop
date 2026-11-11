@@ -144,6 +144,25 @@ async function fetchYouTubeAudioOnce(
   );
   const forwardAbort = () => openCtl.abort(signal?.reason);
   signal?.addEventListener("abort", forwardAbort, { once: true });
+  // ★ THE ABORT MUST REACH THE BODY TOO. The listener used to be removed as soon as the HEADERS
+  // arrived, so a load superseded mid-download (a guest's room load replacing its first-run seed,
+  // a resync replacing a slow load) went on downloading the whole track to the end, unseen, and a
+  // phone joining a session split its bandwidth with up to three dead transfers (measured: an
+  // aborted seed download still running 18 s after its abort). Removed only once the body is read.
+  try {
+    return await fetchBody(videoId, openCtl, openTimer, signal, onProgress);
+  } finally {
+    signal?.removeEventListener("abort", forwardAbort);
+  }
+}
+
+async function fetchBody(
+  videoId: string,
+  openCtl: AbortController,
+  openTimer: ReturnType<typeof setTimeout>,
+  signal: AbortSignal | undefined,
+  onProgress?: (p: FetchProgress) => void,
+): Promise<ArrayBuffer> {
   let res: Response;
   try {
     res = await fetch(`/api/audio?v=${encodeURIComponent(videoId)}`, {
@@ -157,7 +176,6 @@ async function fetchYouTubeAudioOnce(
     throw openCtl.signal.reason instanceof TransientAudioError ? openCtl.signal.reason : e;
   } finally {
     clearTimeout(openTimer);
-    signal?.removeEventListener("abort", forwardAbort);
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");

@@ -104,8 +104,9 @@ export const RESYNC_RETRY_MS = 3000;
 export const RESYNC_BACKOFF_CAP_MS = 30000;
 // How long to tolerate an in-flight load of the anchor's track before assuming a stuck load-guard
 // and forcing a fresh attempt — long enough that a genuine slow-link (4G) load completes first. Ms.
-// Measured from the LOAD's own start, never from the last resync: the question is whether THIS load
-// is stuck, and the resync clock cannot answer it.
+// Measured from the LOAD's own last sign of life (its claim, then every chunk, the decode and the
+// analysis), never from the last resync: the question is whether THIS load is stuck, and the resync
+// clock cannot answer it. A slow load that keeps receiving is not stuck, however long it takes.
 export const RESYNC_STUCK_MS = 15000;
 
 /** How long to wait before the Nth consecutive resync attempt on one deck: 3 s, 6 s, 12 s, 24 s,
@@ -158,6 +159,37 @@ export function decideTickResync(p: TickResyncInput): TickResync {
   if (p.inFlightForMs != null) return p.inFlightForMs >= RESYNC_STUCK_MS ? "force-load" : "wait";
   if (p.sinceResyncMs == null) return "load"; // never tried on this deck → first attempt is immediate
   return p.sinceResyncMs >= resyncBackoffMs(p.attempts) ? "load" : "wait";
+}
+
+// ── A deck that holds the wrong track (join window, lost load) ───────────────────────────────────
+// ★ A FOLLOWER MUST NOT SOUND A TRACK THE SESSION IS NOT PLAYING. decideTickResync stops the TICK
+// from driving a diverged deck, but nothing stopped the deck itself: a guest who pressed play on its
+// own board while knocking kept playing it, inside the session, until the host's track replaced it
+// (setBuffer stops it, then the tick starts the right one: a song, a stop and a start on join). And
+// a host's play / seek / hot-cue intent arriving while the host's track is still downloading was
+// applied to whatever buffer the deck held, sounding the guest's old track. Both are the same fact:
+// the deck's buffer is not the session's.
+export interface DeckIdentityInput {
+  loadedId: string | null; //         what the deck holds
+  tickVid: string | null | undefined; // what the anchor last said it holds on this deck (absent on old anchors)
+  roomLoadTarget: string | null; //   a room-driven (or our own shared) load in flight / landed for this deck
+}
+
+/** The deck holds a track other than the session's: the anchor names another one, or a room load is
+ *  replacing it. Our OWN shared load (roomLoadTarget === loadedId, a co-DJ who just picked a track
+ *  the anchor has not landed yet) is not foreign. */
+export function holdsForeignTrack(p: DeckIdentityInput): boolean {
+  if (p.roomLoadTarget != null && p.roomLoadTarget === p.loadedId) return false;
+  if (p.roomLoadTarget != null && p.roomLoadTarget !== p.loadedId) return true;
+  return p.tickVid != null && p.tickVid !== p.loadedId;
+}
+
+/** Intents that make a deck SOUND or move its playhead. Applied to a foreign buffer they play the
+ *  wrong song; the tick follower starts the right one at the live position once it lands. */
+export function isAudibleDeckIntent(kind: string, action?: string): boolean {
+  if (kind === "transport") return true;
+  if (kind === "hotcue") return action === "press";
+  return false;
 }
 
 // ── Half-open socket detection (the 4G stall) ─────────────────────────────────────────────────────

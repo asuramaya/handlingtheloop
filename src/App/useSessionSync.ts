@@ -14,7 +14,7 @@ import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
-import { decideFollowTick, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
+import { TIMED_ERR_ALPHA, decideFollowTick, decideTimedFollow, decideSnapshotDeck, decideStemConverge, decideTickResync, shouldStartOnDecode } from "@htl/room/sessionFollow";
 import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
 import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
@@ -407,6 +407,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
   // tight threshold would seek every tick (the "skipping / drops" bug). So only correct a
   // LARGE desync while playing; align tightly only when paused (silent → no skip) and do a
   // clean catch-up seek on a play/pause flip.
+  const followErr = useRef<Record<DeckId, number | null>>({ A: null, B: null }); // smoothed timed-follow error (s)
   const onRoomTick = useCallback(
     (decks: TickDecks) => {
       if (!followRef.current) return; // not following → our playhead is our own
@@ -481,6 +482,58 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // so a steady-playing follower is only ever pulled FORWARD (a lead is just latency, or a
         // momentarily-frozen suspended-mobile master clock; seeking BACK to it then replaying it
         // every grace window was the "loops a ~second forever, never catches up" bug).
+        // ★ TIMED FOLLOW: a tick stamped with the room clock (DeckTick.at) and our own clock synced
+        // → the host's AUDIBLE position now, our own latency, an error in both directions, glided
+        // out with a speed trim or seeked when large. Otherwise (older host, clock not synced yet)
+        // the untimed rules below.
+        const sNow = roomRef.current?.serverNow() ?? null;
+        if (t.at != null && sNow != null) {
+          const rate = t.rate && t.rate > 0 ? t.rate : deck.effectiveRate;
+          const age = Math.max(0, Math.min(5, (sNow - t.at) / 1000));
+          const masterNow = t.playing ? t.pos + age * rate : t.pos;
+          const lat = engine.audibleLatency() * rate;
+          // The trim acts on the error smoothed over ~1 s (TIMED_ERR_ALPHA): one tick's reading of
+          // the audio clock jitters by a render quantum, and a trim chasing that wobbles the pitch.
+          const rawErr = deck.position() - (t.playing ? masterNow + lat : masterNow);
+          const prevErr = followErr.current[id];
+          followErr.current[id] = prevErr == null || !deck.playing ? rawErr : prevErr * (1 - TIMED_ERR_ALPHA) + rawErr * TIMED_ERR_ALPHA;
+          const timed = decideTimedFollow({
+            masterPlaying: t.playing,
+            deckPlaying: deck.playing,
+            masterNow,
+            deckPos: deck.position(),
+            deckLatency: lat,
+            sinceFollowSeekMs: now - followSeekAt.current[id],
+            smoothErr: followErr.current[id] ?? undefined,
+          });
+          if (timed.kind !== "trim" && timed.kind !== "hold") followErr.current[id] = null; // a jump: start over
+          if (timed.kind === "start") {
+            engine.resume(); // iOS starts suspended
+            deck.setFollowTrim(0);
+            deck.seek(timed.target);
+            deck.play();
+            followSeekAt.current[id] = now;
+            flipped = true;
+          } else if (timed.kind === "stop") {
+            deck.pause();
+            deck.setFollowTrim(0);
+            if (Math.abs(deck.position() - timed.target) > 0.05) deck.seek(timed.target);
+            followSeekAt.current[id] = now;
+            flipped = true;
+          } else if (timed.kind === "seek") {
+            deck.setFollowTrim(0);
+            deck.seek(timed.target);
+            followSeekAt.current[id] = now;
+            event("room.follow.seek", { deck: id, errMs: Math.round((deck.position() - timed.target) * 1000), rttMs: roomRef.current?.clockRtt() ?? null });
+          } else if (timed.kind === "trim") {
+            deck.setFollowTrim(timed.trim);
+          } else if (timed.kind === "align") {
+            deck.seek(timed.target);
+          }
+          deck.followTick(t.playing ? masterNow + lat : t.pos, t.playing, t.rate);
+          convergeStems();
+          return;
+        }
         const action = decideFollowTick({
           masterPlaying: t.playing,
           deckPlaying: deck.playing,
@@ -505,10 +558,17 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         } else if (action.kind === "align") {
           deck.seek(t.pos); // both paused → tight align is silent, no skip
         }
+        convergeStems();
+        // Feed the follower visual clock + the anchor's effective RATE: the waveform glides at
+        // the display rate off a wall-clock extrapolation of this tick, and a listener's own
+        // audio re-speeds to the host's rate so it stops drifting (the host's jog-bend /
+        // sync-trim never cross as intents). See Deck.visualPosition / followTick.
+        deck.followTick(t.pos, t.playing, t.rate);
         // Reliable stem-state convergence: apply the anchor's authoritative per-stem mute/
         // gain when present, but SKIP a stem we ourselves touched in the last 400 ms so our
         // own in-flight change isn't briefly stomped by a slightly-stale echo. Idempotent —
         // only repaint when a value actually moved.
+        function convergeStems() {
         if (t.stems) {
           const touched = stemTouch.current[id];
           STEM_KEYS.forEach((n, i) => {
@@ -536,11 +596,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           // diverged (idle session stays mix-only → the OOM fix).
           ensureGuestStemsRef.current(id);
         }
-        // Feed the follower visual clock + the anchor's effective RATE: the waveform glides at
-        // the display rate off a wall-clock extrapolation of this tick, and a listener's own
-        // audio re-speeds to the host's rate so it stops drifting (the host's jog-bend /
-        // sync-trim never cross as intents). See Deck.visualPosition / followTick.
-        deck.followTick(t.pos, t.playing, t.rate);
+        }
       });
       if (flipped) refresh();
     },

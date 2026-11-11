@@ -3529,6 +3529,22 @@ function AppBody() {
     if (room.enabled && !room.isAnchor && room.status === "online") room.requestState();
   }, [room.enabled, room.isAnchor, room.status, room.requestState]);
 
+  // ★ A READ-ONLY SYNC PROBE, like window.__htlRing: each deck's AUDIBLE position (playhead minus
+  // output + buffer latency) against the wall clock, so two devices on one machine (or a host and a
+  // guest compared by a test harness) can measure how far apart they actually sound. Nothing is
+  // sent anywhere and nothing can be changed through it.
+  useEffect(() => {
+    const w = window as unknown as { __htlProbe?: () => unknown };
+    w.__htlProbe = () => {
+      const lat = engine.audibleLatency();
+      const d = (x: Deck) => ({ audible: x.position() - (x.playing ? lat * x.effectiveRate : 0), playing: x.playing, rate: x.effectiveRate, trim: x.followTrim });
+      return { wall: performance.timeOrigin + performance.now(), latencyMs: Math.round(lat * 1000), rttMs: room.clockRtt(), A: d(engine.deckA), B: d(engine.deckB) };
+    };
+    return () => {
+      delete w.__htlProbe;
+    };
+  }, [engine, room.clockRtt]);
+
   // The anchor streams its real playhead (~12 Hz) so every participant's waveforms +
   // own audio stream stay locked to one reference clock (even with shared control).
   useEffect(() => {
@@ -3543,7 +3559,14 @@ function AppBody() {
       lastStemKey.current[id] = key;
       // Stamp the loaded videoId every tick (cheap) so a follower can detect a diverged deck and
       // refuse to drive the wrong track — the "shared board, wrong song" guard. See decideTickResync.
-      const tick: DeckTick = { pos: deck.position(), playing: deck.playing, rate: deck.effectiveRate, vid: latest.current.loaded[id] };
+      // ★ TIMED: `pos` is what this device is HEARING (playhead minus output + buffer latency), and
+      // `at` is the room-clock moment it was true, so a follower can compute where we are audibly
+      // NOW (sessionFollow.decideTimedFollow). No `at` until our clock has synced.
+      const at = room.serverNow();
+      const rate = deck.effectiveRate;
+      const pos = deck.playing ? deck.position() - engine.audibleLatency() * rate : deck.position();
+      const tick: DeckTick = { pos, playing: deck.playing, rate, vid: latest.current.loaded[id] };
+      if (at != null) tick.at = Math.round(at);
       if (include) tick.stems = { g, m };
       return tick;
     };
@@ -3558,7 +3581,7 @@ function AppBody() {
       room.sendTick({ A: buildTick(engine.deckA, "A"), B: buildTick(engine.deckB, "B") });
     }, 250);
     return () => clearInterval(iv);
-  }, [engine, room.isAnchor, room.status, room.sendTick]);
+  }, [engine, room.isAnchor, room.status, room.sendTick, room.serverNow]);
 
   // Only a non-anchor co-DJ mirrors the anchor's clock for drawing. When this device
   // is solo, or it IS the anchor (its own real playhead is the reference), drop the

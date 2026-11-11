@@ -109,6 +109,10 @@ export interface RoomState {
   createInvite: () => Promise<Invite | null>;
   sendIntent: (intent: Intent) => void;
   sendTick: (decks: TickDecks) => void;
+  /** Room-server time (ms) now, or null until the clock has synced (clockSync.ts). */
+  serverNow: () => number | null;
+  /** The best clock sample's round trip (ms), for diagnostics; null before the first pong. */
+  clockRtt: () => number | null;
   publishState: (snapshot: unknown) => void;
   sendStemView: (deck: DeckId, view: unknown) => void;
   sendAutomix: (state: unknown) => void;
@@ -348,6 +352,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const kick = useCallback((to: string) => clientRef.current?.kick(to), []);
   const sendIntent = useCallback((intent: Intent) => clientRef.current?.sendIntent(intent), []);
   const sendTick = useCallback((decks: TickDecks) => clientRef.current?.sendTick(decks), []);
+  const serverNow = useCallback(() => clientRef.current?.serverNow() ?? null, []);
+  const clockRtt = useCallback(() => clientRef.current?.clock.best()?.rtt ?? null, []);
   const publishState = useCallback((snapshot: unknown) => clientRef.current?.publishState(snapshot), []);
   const sendStemView = useCallback((deck: DeckId, view: unknown) => clientRef.current?.sendStemView(deck, view), []);
   const sendAutomix = useCallback((state: unknown) => clientRef.current?.sendAutomix(state), []);
@@ -586,6 +592,8 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     createInvite,
     sendIntent,
     sendTick,
+    serverNow,
+    clockRtt,
     publishState,
     sendStemView,
     sendAutomix,

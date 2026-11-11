@@ -466,6 +466,9 @@ export class Deck {
   // locally-computed effRate so our clock + (listener) audio run at the host's exact rate —
   // the host's bend/sync-trim never cross as intents, so self-computing the rate drifts.
   private _followRate: number | null = null;
+  // The session follower's speed trim (sessionFollow.decideTimedFollow): a fraction (±1.5 % max)
+  // folded into the followed rate so a small timing error glides out instead of seeking.
+  private _followTrim = 0;
 
   onEnded?: () => void;
 
@@ -1552,7 +1555,7 @@ export class Deck {
   private effRate(): number {
     // A follower runs at the ANCHOR's streamed rate (folds in the host's bend + sync-trim,
     // which never cross as intents) so audio + clock stay in lockstep instead of drifting.
-    if (this._followRate != null && this._followRate > 0) return clampEngineRate(this._followRate);
+    if (this._followRate != null && this._followRate > 0) return clampEngineRate(this._followRate * (1 + this._followTrim));
     return clampEngineRate(this._rate * (1 + this._bend) * (1 + this._syncTrim));
   }
   /** The effective sounding rate (tempo·bend·sync-trim) — the anchor publishes this in its tick
@@ -1638,10 +1641,22 @@ export class Deck {
     this.followAt = now;
     this.followOn = true;
   }
+  /** The follower's speed trim (fraction). Re-speeds the voice only when it moved. */
+  setFollowTrim(trim: number): void {
+    const t = Math.max(-0.05, Math.min(0.05, trim));
+    if (Math.abs(t - this._followTrim) < 1e-4) return;
+    this.reanchorClock(); // freeze position() at the OLD rate before it changes
+    this._followTrim = t;
+    this.pushRate();
+  }
+  get followTrim(): number {
+    return this._followTrim;
+  }
   /** Stop following — the local clock drives the drawn playhead again. */
   endFollow(): void {
     this.followOn = false;
     this.followBias = 0;
+    this._followTrim = 0;
     if (this._followRate != null) {
       this._followRate = null; // back to our own tempo/pitch
       this.pushRate();

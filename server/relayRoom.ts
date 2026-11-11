@@ -103,7 +103,18 @@ export class RelayRoom {
   }
   // Read-only shard: a sharded listener's react/request/chat would need forwarding to the master
   // (TODO). For the broadcast fan-out PoC, relay listeners receive only.
-  webSocketMessage(): void {}
+  // ★ EXCEPT the clock ping (src/htl/room/clockSync.ts): a sharded listener follows the host's
+  // ticks like any other, and needs the room clock to tell lag from latency. Answered here, from
+  // this shard's own clock (Cloudflare's are NTP-synced), so it costs the master nothing.
+  webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): void {
+    if (typeof data !== "string" || data.length > 64 || !data.includes('"ping"')) return;
+    try {
+      const msg = JSON.parse(data) as { t?: string; c?: unknown };
+      if (msg.t === "ping" && typeof msg.c === "number") ws.send(JSON.stringify({ t: "pong", c: msg.c, s: Date.now() } satisfies ServerMsg));
+    } catch {
+      /* not JSON — ignore */
+    }
+  }
 
   private fanout(json: string): void {
     for (const ws of this.state.getWebSockets()) {

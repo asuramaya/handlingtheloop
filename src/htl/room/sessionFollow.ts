@@ -204,3 +204,58 @@ export function decideStemConverge(p: StemConvergeInput): { setGain: boolean; se
   const setMute = p.localActive === p.masterMuted;
   return { setGain, setMute };
 }
+
+// ── Timed follow (a tick stamped with the room clock) ────────────────────────────────────────────
+// ★ Operator, 2026-11-10: "maintaining the best possible alignment in audio between host and
+// clients". Once a tick says WHEN its position was true (DeckTick.at, room-server ms) and both
+// sides report what they actually HEAR (playhead minus output + buffer latency), the follower knows
+// its real error in both directions, not a stale snapshot's. Small errors glide out with a
+// speed trim the ear does not notice (DJ sync's own method); large ones seek, ahead or behind.
+/** Beyond this error (s) a playing follower seeks instead of gliding. */
+export const TIMED_SEEK_ERR = 0.12;
+/** Within this (smoothed) error (s) nothing is done: below what an ear hears between two speakers,
+ *  and above the audio clock's own read jitter (a render quantum, ~3 ms, more on some devices). A
+ *  4 ms band had the trim flipping ±0.3 % every second chasing that jitter (measured, two headless
+ *  devices): a faint pitch wobble with key lock off. */
+export const TIMED_DEADBAND = 0.008;
+/** The follower's speed trim: fraction of rate per second of error, and its ceiling. */
+export const TIMED_TRIM_GAIN = 0.3;
+/** Smoothing of the error the trim acts on: new = old·(1−a) + err·a per tick (4/s → ~1 s memory). */
+export const TIMED_ERR_ALPHA = 0.3;
+export const TIMED_TRIM_MAX = 0.015;
+
+export type TimedFollowAction =
+  | { kind: "start"; target: number } //  master plays, we're paused → seek to target, play
+  | { kind: "stop"; target: number } //   master paused, we play → pause, land on target
+  | { kind: "seek"; target: number } //   both playing, off by more than TIMED_SEEK_ERR → seek
+  | { kind: "trim"; trim: number } //     both playing, small error → glide (0 = on time)
+  | { kind: "align"; target: number } //  both paused and apart → silent reposition
+  | { kind: "hold" };
+
+export interface TimedFollowInput {
+  masterPlaying: boolean;
+  deckPlaying: boolean;
+  /** Where the host is AUDIBLY now (track s): tick pos + elapsed room time × rate. */
+  masterNow: number;
+  /** Our engine playhead (track s). */
+  deckPos: number;
+  /** Our own audible latency in track seconds (latency × rate): what we hear trails deckPos by it. */
+  deckLatency: number;
+  sinceFollowSeekMs: number;
+  /** The error smoothed over recent ticks (s, + = ahead), for the trim; absent = this tick's own. */
+  smoothErr?: number;
+}
+
+export function decideTimedFollow(p: TimedFollowInput): TimedFollowAction {
+  // The engine position at which we would HEAR exactly what the host is heard playing now.
+  const target = p.masterPlaying ? p.masterNow + p.deckLatency : p.masterNow;
+  if (p.masterPlaying && !p.deckPlaying) return { kind: "start", target };
+  if (!p.masterPlaying && p.deckPlaying) return { kind: "stop", target };
+  if (!p.deckPlaying) return Math.abs(p.deckPos - target) > PAUSED_ALIGN_DRIFT ? { kind: "align", target } : { kind: "hold" };
+  const err = p.deckPos - target; // > 0: we are AHEAD of the host
+  if (Math.abs(err) > TIMED_SEEK_ERR) return p.sinceFollowSeekMs > SEEK_GRACE_MS ? { kind: "seek", target } : { kind: "hold" };
+  const e = p.smoothErr ?? err; // the trim acts on the smoothed error; the seek on the raw one
+  if (Math.abs(e) <= TIMED_DEADBAND) return { kind: "trim", trim: 0 };
+  const trim = Math.max(-TIMED_TRIM_MAX, Math.min(TIMED_TRIM_MAX, -e * TIMED_TRIM_GAIN));
+  return { kind: "trim", trim };
+}

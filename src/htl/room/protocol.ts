@@ -104,6 +104,12 @@ export interface DeckTick {
   // anchor that doesn't stamp (→ the follower can't detect and behaves as before). See
   // sessionFollow.decideTickResync.
   vid?: string | null;
+  // WHEN `pos` was true, in room-server ms (ClockSync): the anchor's estimate of the server clock at
+  // the moment it read the playhead. `pos` is then what the anchor was HEARING (its playhead minus
+  // its own output + buffer latency), so a follower can compute where the host is audibly NOW and
+  // correct in both directions (sessionFollow.decideTimedFollow). Absent = an older anchor, or one
+  // whose clock has not synced yet → the follower uses the untimed rules.
+  at?: number;
 }
 export type TickDecks = Record<DeckId, DeckTick>;
 
@@ -311,6 +317,7 @@ export type ClientMsg =
   | { t: "ban"; to: string } // HOST: ban a device — evict + block re-entry for the session (L1)
   | { t: "intent"; intent: Intent }
   | { t: "tick"; decks: TickDecks }
+  | { t: "ping"; c: number } // clock sync: our send time (ms); the server answers `pong` at once
   | { t: "state"; snapshot: unknown }
   | { t: "automix"; state: unknown } // host streams the auto-DJ queue + status → guests (opaque)
   | { t: "stemview"; deck: DeckId; view: unknown } // per-deck stem waveform envelopes (opaque; for remote display)
@@ -356,6 +363,7 @@ export type ServerMsg =
   | { t: "role"; anchorId: string | null } // the anchor (clock) moved
   | { t: "intent"; from: string; seq: number; intent: Intent }
   | { t: "tick"; decks: TickDecks }
+  | { t: "pong"; c: number; s: number } // clock sync: the ping's send time echoed + the server clock (ms)
   | { t: "state"; snapshot: unknown }
   | { t: "automix"; state: unknown } // host's auto-DJ queue + status, relayed to remotes
   | { t: "stemview"; deck: DeckId; view: unknown } // host's per-deck stem envelopes, relayed to remotes

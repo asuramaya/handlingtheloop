@@ -674,6 +674,28 @@ export class AudioEngine {
     state: string;
     playing: boolean;
   } {
+    return this.audioHealthNow();
+  }
+  /** ★ WHAT YOU HEAR TRAILS THE PLAYHEAD BY THIS (seconds): the context's processing + output
+   *  latency (Bluetooth and USB interfaces report most of theirs here) and the stretch worklet's
+   *  pre-roll cushion (stretchCfg.reserve, the wireless/separation guards). A session follower and
+   *  its host each subtract their own, so they line up what they PLAY OUT, not what they compute. */
+  audibleLatency(): number {
+    const c = this.ctx as unknown as { baseLatency?: number; outputLatency?: number };
+    const reserve = (this.stretchCfg.reserve ?? 0) / this.ctx.sampleRate;
+    return (c.baseLatency ?? 0) + (c.outputLatency ?? 0) + reserve;
+  }
+  private audioHealthNow(): {
+    underruns: number;
+    reserveMs: number;
+    sepMs: number;
+    wirelessMs: number;
+    adaptiveMs: number;
+    sampleRate: number;
+    outputLatencyMs: number;
+    state: string;
+    playing: boolean;
+  } {
     const toMs = (samples: number) => Math.round((samples / this.ctx.sampleRate) * 1000);
     const ol = (this.ctx as unknown as { outputLatency?: number }).outputLatency ?? 0;
     return {

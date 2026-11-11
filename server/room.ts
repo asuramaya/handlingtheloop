@@ -82,6 +82,7 @@ const CACHE_KIND: Record<ServerMsg["t"], CacheKind> = {
   role: "live",
   intent: "live",
   tick: "live",
+  pong: "live", // one socket's clock reading
   settings: "live",
   kicked: "live",
   error: "live",
@@ -817,6 +818,12 @@ export class DjRoom {
         if (DjRoom.LISTENER_DROP_KINDS.has(kind)) break;
         if (DjRoom.COALESCE_KINDS.has(kind)) this.queueDigest(msg.intent, out);
         else this.relayToListeners(out);
+        break;
+      }
+      case "ping": {
+        // Clock sync (src/htl/room/clockSync.ts): answer at once with the server clock, to this
+        // socket only. Any device may ask; it costs one small message per ask.
+        if (typeof msg.c === "number") ws.send(JSON.stringify({ t: "pong", c: msg.c, s: Date.now() } satisfies ServerMsg));
         break;
       }
       case "tick": {

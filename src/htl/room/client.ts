@@ -3,6 +3,7 @@
 // authenticate the upgrade + resolve which session to join), tracks the participant
 // list + the control baton, and reconnects with backoff. Pure transport: it exposes
 // send helpers + an `on` handler bag; the React layer (useRoom) wires the behavior.
+import { ClockSync } from "./clockSync";
 import type { ClientMsg, ServerMsg, Peer, Intent, TickDecks, DeckId, StageReq, StageGate, SongRequest, ChatMsg } from "./protocol";
 import { ENGINE_VERSION } from "./protocol";
 import { isSocketStale } from "./sessionFollow";
@@ -165,6 +166,26 @@ export class RoomClient {
   private static STALE_MS = 6000;
   private static WATCHDOG_MS = 2000;
   private lastRecvAt = 0; // wall-clock of the last inbound message (0 = none yet this connection)
+  // ★ THE ROOM CLOCK (clockSync.ts): pings on connect in a quick burst, then every PING_MS, so a
+  // tick can say WHEN its playhead was true and a follower can tell lag from latency.
+  readonly clock = new ClockSync();
+  private pingTimer: ReturnType<typeof setTimeout> | null = null;
+  static readonly PING_MS = 5_000;
+  static readonly PING_BURST = 8;
+  /** Room-server time (ms) now, or null until the first pong. */
+  serverNow(): number | null {
+    return this.clock.toServer(performance.now());
+  }
+  private schedulePing(delay: number): void {
+    if (this.pingTimer) clearTimeout(this.pingTimer);
+    this.pingTimer = setTimeout(() => {
+      this.pingTimer = null;
+      const ws = this.ws;
+      if (!ws || ws.readyState !== WebSocket.OPEN || this.closed) return;
+      ws.send(JSON.stringify({ t: "ping", c: performance.now() } satisfies ClientMsg)); // not captured: not set data
+      this.schedulePing(this.clock.count < RoomClient.PING_BURST ? 300 : RoomClient.PING_MS);
+    }, delay);
+  }
   private watchdog: ReturnType<typeof setInterval> | null = null;
   // Desired state (persisted), so a transient reconnect OR a page refresh re-engages
   // where we left off.
@@ -412,6 +433,8 @@ export class RoomClient {
       this.retry = 0;
       this.lastRecvAt = Date.now(); // give the fresh connection a full STALE_MS window for `welcome`
       this.setStatus("online");
+      this.clock.reset(); // a new route may have a new delay
+      this.schedulePing(50);
     };
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onclose = (ev) => {
@@ -480,6 +503,9 @@ export class RoomClient {
       return;
     }
     switch (msg.t) {
+      case "pong":
+        this.clock.add(msg.c, msg.s, performance.now());
+        break;
       case "welcome":
         this.anchorId = msg.anchorId;
         this.peers = msg.peers;

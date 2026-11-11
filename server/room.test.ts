@@ -215,6 +215,9 @@ describe("DjRoom membership", () => {
     expect(laptop.got("self-set")).toBe(false);
     await h.send(laptop, { t: "device-set", to: "g1", listen: false });
     expect(guest.got("self-set")).toBe(false);
+    // and "disconnect that device of mine" rides the same path
+    await h.send(laptop, { t: "device-set", to: "ph", leave: true });
+    expect(phone.last("self-set")).toMatchObject({ t: "self-set", leave: true });
   });
 
   // #48: /internal/ismember authorizes a session GUEST fetching the HOST's global sample clip.

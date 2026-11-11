@@ -359,7 +359,7 @@ export type ClientMsg =
   // Flip Decks / Sound on ANOTHER device of my own account (operator, 2026-11-11). The room checks
   // the two sockets share an account and asks the target to switch itself (`self-set`), so every
   // rule a device's own switch obeys still applies.
-  | { t: "device-set"; to: string; control?: boolean; listen?: boolean }
+  | { t: "device-set"; to: string; control?: boolean; listen?: boolean; leave?: boolean }
   | { t: "mute"; to: string; on: boolean } // HOST: mute/unmute a device's chat (L1)
   | { t: "ban"; to: string } // HOST: ban a device — evict + block re-entry for the session (L1)
   // `at` = the sender's room-clock ms when it performed the gesture (ClockSync), so a receiver can
@@ -401,7 +401,7 @@ export type ServerMsg =
   // publish sequence itself — the client answers with the snapshot it already holds.
   | { t: "republish" }
   // "Switch yourself": another device of this account asked (device-set). Applied like a local press.
-  | { t: "self-set"; control?: boolean; listen?: boolean }
+  | { t: "self-set"; control?: boolean; listen?: boolean; leave?: boolean }
   // Chat (F5): a live line to everyone, the recent backlog on join, and a private "you were
   // muted/unmuted" signal to the affected device.
   | { t: "chat"; msg: ChatMsg }

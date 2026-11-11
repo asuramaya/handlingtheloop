@@ -3994,3 +3994,41 @@ button.peer-pill:hover {
   background: color-mix(in srgb, var(--rel) 15%, var(--panel-2));
   border-color: color-mix(in srgb, var(--rel) 70%, var(--line));
 }
+
+/* ── v9 (operator, 2026-11-11): one click for options on every width ── */
+.social-roster .social-card,
+.social-roster .social-card.has-kick {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.social-roster .social-card .social-card-pills,
+.social-roster .social-card .social-card-kick,
+.social-roster .social-card .social-card-glance {
+  display: none;
+}
+.social-roster .social-card.can-open .social-card-main {
+  cursor: pointer;
+}
+.social-roster .social-card.can-open:not(.open):hover {
+  border-color: color-mix(in srgb, var(--rel) 55%, var(--line));
+}
+.social-roster .social-card-drop {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--rel) 30%, var(--line));
+  animation: panel-in 0.14s ease-out;
+}
+.social-card-drop-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.social-roster .social-card-drop .peer-pill.kick {
+  width: auto;
+  margin-left: auto;
+  padding: 0 12px;
+  border-color: color-mix(in srgb, #e0617a 45%, var(--line));
+}

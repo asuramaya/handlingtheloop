@@ -120,14 +120,18 @@ export function SocialCard({
       )}
     </>
   );
-  // ★ TWO LAYOUTS, ONE ROW (operator, 2026-11-11). WIDE: the pills and a remove ✕ sit inline at the
-  // right. NARROW: the row shows only a glance of its state; tapping it drops down a strip holding
-  // Sound, Decks and Remove. The container query on the roster picks which; the markup has both.
-  const openable = p.joined && (deckBtn || soundBtn || canModerate);
+  // ★ ONE CLICK FOR OPTIONS, EVERYWHERE (operator, 2026-11-11: inline controls crammed the narrow
+  // row, the ✕ sat too close to them on the wide one, and a desktop click lit the row with nothing
+  // to show). A row is just who it is; clicking it opens a strip with Decks and Sound on the left
+  // and the removal on the right, well apart: Remove for a guest (host), Disconnect for another
+  // device of mine (it is told to leave, room.setDevice → self-set leave).
+  const openable = p.joined;
+  const removeLabel = canModerate ? "✕ Remove" : myOther ? "Disconnect" : null;
+  const onRemove = () => (canModerate ? room.kick(p.id) : room.setDevice(p.id, { leave: true }));
   const toggle = () => openable && setOpen((o) => !o);
 
   return (
-    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${openable ? "can-open" : ""} ${open ? "open" : ""} ${canModerate ? "has-kick" : ""}`}>
+    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${openable ? "can-open" : ""} ${open ? "open" : ""} `}>
       <span className="social-card-ico" aria-hidden="true">
         {deviceIcon(p.kind)}
       </span>
@@ -160,41 +164,19 @@ export function SocialCard({
         </div>
         {meta && <div className="social-card-meta">{meta}</div>}
       </div>
-      {p.joined && (
-        <>
-          {/* WIDE */}
-          <div className="social-card-pills">
+      {openable && open && (
+        <div className="social-card-drop">
+          <span className="social-card-drop-main">
             {pills}
             {canModerate && p.stage && (
-              <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="Send them back to the crowd (they keep listening)">
+              <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="They keep listening">
                 ⬇ Crowd
               </button>
             )}
-          </div>
-          {canModerate && (
-            <button className="social-card-kick" onClick={() => room.kick(p.id)} title="Remove from the session" aria-label="Remove from the session">
-              ✕
-            </button>
-          )}
-          {/* NARROW: a read-only glance while folded */}
-          <span className="social-card-glance" aria-hidden="true" onClick={toggle}>
-            <span className={p.listening ? "on" : ""}>{p.listening ? "🔊" : "🔇"}</span>
-            <span className={p.controlling ? "on" : ""}>🎛️</span>
           </span>
-        </>
-      )}
-      {/* NARROW: the drop-down */}
-      {openable && open && (
-        <div className="social-card-drop">
-          {pills}
-          {canModerate && p.stage && (
-            <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="They keep listening">
-              ⬇ Crowd
-            </button>
-          )}
-          {canModerate && (
-            <button className="peer-pill kick" onClick={() => room.kick(p.id)} title="Remove from the session">
-              ✕ Remove
+          {removeLabel && (
+            <button className="peer-pill kick" onClick={onRemove} title={canModerate ? "Remove from the session" : "Take that device out of the session"}>
+              {removeLabel}
             </button>
           )}
         </div>

@@ -104,7 +104,7 @@ export interface RoomState {
   /** HOST: let guests pass the invite link on (code = the host's own invite code, "" = stop). */
   setGuestInvite: (code: string) => void;
   /** Flip Decks / Sound on another device of MY account. */
-  setDevice: (to: string, s: { control?: boolean; listen?: boolean }) => void;
+  setDevice: (to: string, s: { control?: boolean; listen?: boolean; leave?: boolean }) => void;
   muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
   banDevice: (to: string) => void; // HOST: ban a device (evict + block re-entry)
   error: string | null;
@@ -490,7 +490,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const setChatSlow = useCallback((seconds: number) => clientRef.current?.setChatSlow(seconds), []);
   const setChatFollowers = useCallback((on: boolean) => clientRef.current?.setChatFollowers(on), []);
   const setGuestInvite = useCallback((code: string) => clientRef.current?.setGuestInvite(code), []);
-  const setDevice = useCallback((to: string, s: { control?: boolean; listen?: boolean }) => clientRef.current?.setDevice(to, s), []);
+  const setDevice = useCallback((to: string, s: { control?: boolean; listen?: boolean; leave?: boolean }) => clientRef.current?.setDevice(to, s), []);
   const muteDevice = useCallback((to: string, on: boolean) => clientRef.current?.muteDevice(to, on), []);
   const banDevice = useCallback((to: string) => clientRef.current?.banDevice(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the

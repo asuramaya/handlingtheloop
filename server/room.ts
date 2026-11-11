@@ -915,10 +915,11 @@ export class DjRoom {
         const a = ws.deserializeAttachment() as Attachment | null;
         const target = (msg.to || "").slice(0, 64);
         if (!a?.acct || !target || target === self) break;
-        const out: { t: "self-set"; control?: boolean; listen?: boolean } = { t: "self-set" };
+        const out: { t: "self-set"; control?: boolean; listen?: boolean; leave?: boolean } = { t: "self-set" };
         if (typeof msg.control === "boolean") out.control = msg.control;
         if (typeof msg.listen === "boolean") out.listen = msg.listen;
-        if (out.control === undefined && out.listen === undefined) break;
+        if (msg.leave === true) out.leave = true; // "take this device out of the session"
+        if (out.control === undefined && out.listen === undefined && !out.leave) break;
         for (const t of this.sockets(target)) {
           const ta = t.deserializeAttachment() as Attachment | null;
           if (ta?.acct !== a.acct) continue; // never another account's device

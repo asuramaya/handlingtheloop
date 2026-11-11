@@ -465,7 +465,7 @@ export class RoomClient {
     this.send({ t: "chat-followers", on });
   }
   /** Flip Decks / Sound on another device of my own account (the room checks the account). */
-  setDevice(to: string, s: { control?: boolean; listen?: boolean }): void {
+  setDevice(to: string, s: { control?: boolean; listen?: boolean; leave?: boolean }): void {
     this.send({ t: "device-set", to, ...s });
   }
   /** HOST: let guests pass the session's invite link on (`code` = the host's code, "" = stop). */
@@ -825,6 +825,10 @@ export class RoomClient {
         break;
       case "self-set":
         // Another device of this account switched us: exactly what our own press would do.
+        if (msg.leave === true) {
+          this.leave();
+          break;
+        }
         if (typeof msg.control === "boolean") this.control(msg.control);
         if (typeof msg.listen === "boolean") {
           this.listen(msg.listen);

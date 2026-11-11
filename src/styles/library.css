@@ -1178,7 +1178,7 @@ td.col-num {
 
 /* ★ THE TOOLBAR IN THE TITLE ROW (lib/toolbarHost.ts): the filter / search field and its chips sit
    between the library's title and Rows −/＋, so there is no separate toolbar row of dead space. */
-.settings-head.lib-head-row { container-type: inline-size; }
+.settings-head.lib-head-row { container-type: inline-size; flex-wrap: wrap; row-gap: 8px; } /* wraps only on a phone, where the field takes its own rows */
 .lib-head-tools {
   flex: 1 1 auto;
   display: flex;
@@ -1400,8 +1400,12 @@ td.col-num {
     bottom: 0;
     left: 0;
     z-index: 30;
-    width: min(80%, 320px);
-    box-shadow: 10px 0 28px rgba(0, 0, 0, 0.55);
+    /* ★ THE WHOLE LIBRARY, NOT A FOLD (operator, 2026-11-10: "the burger menu would work better if
+       it covered the entire mobile view instead of it being a fold from the left like it is on
+       desktop"). At 80 % the list's BPM/KEY/TIME columns stuck out beside the menu as if they
+       belonged to it. A pick closes it (LibraryPanel), and so does the ☰ in the title row. */
+    width: 100%;
+    box-shadow: none;
   }
   .library .lib-scrim {
     display: block;
@@ -1444,6 +1448,83 @@ td.col-num {
   .settings-head.lib-head-row.nav-open .lib-head-tools {
     margin-left: 0;
   }
+  /* ★ THREE ROWS ON A PHONE (operator, 2026-11-10: the search field squeezed the title to "Se…" and
+     there was no room; "search bar has to be a third row under the filter buttons and the burger
+     menu"). Row 1: ☰, WHERE YOU ARE in full, Rows −/＋ when the view has no field. Row 2: the
+     field's trail (count, Cached / Stemmed, −/＋). Row 3: the search / filter field, full width. */
+  .settings-head.lib-head-row .lib-head-toggle,
+  .settings-head.lib-head-row.nav-open .lib-head-toggle {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .settings-head.lib-head-row .lib-head-tools {
+    flex: 1 0 100%;
+    order: 2;
+    margin: 0;
+  }
+  .lib-head-tools .tt-filter {
+    position: relative;
+    flex-wrap: wrap;
+    height: auto;
+    padding: 0;
+    gap: 8px;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+  .lib-head-tools .tt-filter-trail {
+    order: -1;
+    flex: 1 0 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+  .lib-head-tools .tt-filter-trail .tt-filter-count {
+    margin-right: auto;
+  }
+  /* room for the labels again: "Cached" / "Stemmed", not two unexplained dots */
+  .lib-head-tools .tt-chip .tt-chip-label {
+    display: inline;
+  }
+  .lib-head-tools .tt-filter-input {
+    flex: 1 0 100%;
+    height: 38px;
+    box-sizing: border-box;
+    padding: 0 34px 0 34px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: color-mix(in srgb, var(--text) 5%, var(--panel));
+    font-size: 15px; /* 16px-ish: iOS does not zoom into a field this size */
+  }
+  .lib-head-tools .tt-filter-input:focus {
+    border-color: color-mix(in srgb, var(--accent, var(--text)) 45%, transparent);
+  }
+  .lib-head-tools .tt-filter-ico {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    pointer-events: none;
+  }
+  .lib-head-tools .tt-filter-clear {
+    position: absolute;
+    right: 8px;
+    bottom: 10px;
+  }
+}
+/* An empty list's way forward ("Search for tracks", "Search everywhere for …"). */
+.lib-empty-action {
+  display: block;
+  margin: 12px auto 0;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--text)) 40%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--text)) 12%, var(--panel));
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lib-empty-action:hover {
+  background: color-mix(in srgb, var(--accent, var(--text)) 20%, var(--panel));
 }
 
 /* ★ RESIZE BY TOUCH (operator, 2026-11-10: "resize the columns in mobile like in desktop"). The

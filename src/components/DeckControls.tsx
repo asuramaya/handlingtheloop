@@ -1020,6 +1020,7 @@ export function DeckControls({ id, deck, accent, otherDeck, otherAccent, focused
           gainDb={levelGainDb}
           label={id}
           mirror={id === "A"}
+          playing={deck.playing}
           onLevel={(v) => { if (locked) return; deck.setLevel(v); refresh(); emit({ kind: "control", deck: id, param: "level", value: v }); }}
         />
       </div>

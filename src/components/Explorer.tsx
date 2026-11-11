@@ -6,6 +6,9 @@ import { TrackTable, type TrackTableHandle } from "./TrackTable";
 import type { Ref } from "react";
 
 interface ExplorerProps {
+  /** Run this query once on mount (LibraryPanel's "Search everywhere for …"). */
+  autoRun?: string | null;
+  onAutoRan?: () => void;
   /** The library's handle on the visible table: the board's browse encoder and LOAD buttons reach
    *  search results through it (without it they did nothing in Search). */
   tableRef?: Ref<TrackTableHandle>;
@@ -28,7 +31,7 @@ interface ExplorerProps {
 // there's no arbitrary-URL import, so nothing untrusted gets fetched. Results render
 // through the shared TrackTable (same look/sort/columns as the library + queue); this
 // component just owns the search request + the persisted dig session.
-export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors, tableRef }: ExplorerProps) {
+export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, onIngestPlaylist, playlists, onAddToPlaylist, onCreatePlaylistWith, deckLoaded, deckColors, tableRef, autoRun, onAutoRan }: ExplorerProps) {
   const saved = useRef(loadSearchState()).current;
   const [results, setResults] = useState<TrackMeta[]>(saved.results);
   const [searching, setSearching] = useState(false);
@@ -74,6 +77,15 @@ export function Explorer({ onLoad, onQueue, onQueueNext, onAdd, inCollection, on
       if (!ctrl.signal.aborted) setSearching(false);
     }
   }
+
+  // "Search everywhere for …" from another view: the query is already in the saved state (so the
+  // field shows it), run it once.
+  useEffect(() => {
+    if (!autoRun) return;
+    void run(autoRun);
+    onAutoRan?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun]);
 
   const emptyHint =
     searched && !searching

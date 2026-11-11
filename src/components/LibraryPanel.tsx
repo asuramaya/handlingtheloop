@@ -3,6 +3,7 @@ import { RowsStepper } from "./lib/RowsStepper";
 import { ToolbarHostContext } from "./lib/toolbarHost";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
 import { fetchMyPlaylists, type MyPlaylist } from "@htl/media";
+import { loadSearchState, saveSearchState } from "@htl/state";
 import {
   fetchMe,
   fetchSpotifyPlaylists,
@@ -163,7 +164,18 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   });
   // Search is baked into the library now (no separate dock): selecting it shows the
   // Explorer (its own search bar + results) in the main content area, like Sync.
-  const [searchView, setSearchView] = useState(persistedView?.search === true);
+  // ★ A FIRST VISIT WITH NOTHING SAVED OPENS ON SEARCH (operator, 2026-11-10: a stranger's first
+  // move was the Library, which landed on an empty Collection with no hint of where they were or
+  // why nothing was there). Once a view has been chosen it is remembered as before.
+  const [searchView, setSearchView] = useState(persistedView ? persistedView.search === true : library.collection.length === 0);
+  // "Search everywhere for …" (TrackTable's no-match state): the query the Search view runs on open.
+  const [searchSeed, setSearchSeed] = useState<string | null>(null);
+  const searchEverywhere = (q: string) => {
+    saveSearchState({ ...loadSearchState(), query: q });
+    setSearchSeed(q);
+    setSearchView(true);
+  };
+  const openSearch = () => setSearchView(true);
   // Sidebar (nav) collapse — toggled by the ☰ hamburger. Persisted; defaults open on
   // desktop and collapsed on a phone so the track table fills the full-screen panel.
   const [navOpen, setNavOpen] = useState(() => {
@@ -978,6 +990,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             playlists={playlistRefs}
             onAddToPlaylist={library.addToPlaylist}
             onCreatePlaylistWith={createPlaylistWith}
+            autoRun={searchSeed}
+            onAutoRan={() => setSearchSeed(null)}
           />
         ) : syncOpen && me?.user ? (
           // Sync is a SUBSECTION of the library — it takes over this content area
@@ -995,7 +1009,9 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             onQueueNext={queueNext}
             onRemove={library.removeTrack}
             removeTitle="Remove from collection"
-            emptyHint="Your collection is empty. Open Search to find tracks, then add them with +."
+            emptyHint="Your collection is empty. Find tracks in Search, then add them with +."
+            emptyAction={{ label: "Search for tracks", onClick: openSearch }}
+            onSearchEverywhere={searchEverywhere}
             loadedIds={loadedIds}
             deckLoaded={deckLoaded}
             deckColors={deckColors}
@@ -1026,6 +1042,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             inCollection={inCollection}
             cacheFilter
             searchPlaceholder="Filter community…"
+            onSearchEverywhere={searchEverywhere}
             stateKey="community"
             // The shared pool is where one song piles up as a Topic, a video and three lyric uploads.
             collapseVersions
@@ -1053,6 +1070,8 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                 onRemove={(t) => library.removeFromPlaylist(pl.id, trackKey(t))}
                 removeTitle="Remove from playlist"
                 emptyHint="Empty playlist. Add tracks from Search or your Collection."
+                emptyAction={{ label: "Search for tracks", onClick: openSearch }}
+                onSearchEverywhere={searchEverywhere}
                 loadedIds={loadedIds}
                 deckLoaded={deckLoaded}
                 deckColors={deckColors}

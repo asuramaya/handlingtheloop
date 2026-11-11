@@ -1052,14 +1052,14 @@
    ON it). Same 38px width so the grab zone + the pill's `left` math still line up. */
 .lfader-input::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 38px;
+  width: 64px;
   height: 20px;
   background: transparent;
   border: none;
   cursor: ew-resize;
 }
 .lfader-input::-moz-range-thumb {
-  width: 38px;
+  width: 64px;
   height: 20px;
   background: transparent;
   border: none;
@@ -1071,7 +1071,8 @@
 .lfader-val {
   position: absolute;
   top: 50%;
-  width: 38px;
+  width: 64px;
+  gap: 5px;
   height: 20px;
   transform: translate(-50%, -50%);
   display: flex;
@@ -1093,6 +1094,17 @@
   text-shadow: 0 1px 3px color-mix(in srgb, var(--bg) 92%, transparent), 0 0 2px var(--bg);
   white-space: nowrap;
 }
+/* The play glyphs either side of the level: lit while the deck plays, dim while paused. */
+.lfader-val .lfader-play {
+  font-size: 8px;
+  letter-spacing: -1px;
+  opacity: 0.32;
+  transition: opacity 0.15s, text-shadow 0.15s;
+}
+.lfader-val.is-playing .lfader-play {
+  opacity: 1;
+  text-shadow: 0 0 6px color-mix(in srgb, #fff 70%, transparent), 0 0 2px var(--bg);
+}
 .lfader.mirror .lfader-val span {
   display: inline-block;
   transform: scaleX(-1); /* counter deck A's mirrored track so the text reads normally */
@@ -1100,6 +1112,7 @@
 /* The crossfader handle is a touch taller (24px); its pill carries the A↔B blend colour of the side
    it landed on (--xpct snaps 0%→A, 100%→B), set inline on the value div. */
 .xbar-val {
+  width: 38px; /* the deck level handle grew to 64px for its play glyphs; the crossfader keeps its own thumb */
   height: 24px;
   background: color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%));
   box-shadow: 0 0 6px color-mix(in srgb, color-mix(in srgb, var(--xa, #fff), var(--xb, #fff) var(--xpct, 50%)) 75%, transparent);

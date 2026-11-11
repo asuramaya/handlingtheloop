@@ -54,6 +54,11 @@ interface TrackTableProps {
   onSubmitSearch?: (q: string) => void;
   searching?: boolean;
   searchPlaceholder?: string;
+  /** ★ A FILTER THAT FINDS NOTHING OFFERS THE REAL SEARCH (operator, 2026-11-10: a first-time user
+   *  typed into Collection's filter, got nothing, and never learned that Search is elsewhere). */
+  onSearchEverywhere?: (query: string) => void;
+  /** A button under the empty hint (an empty list's way forward, e.g. "Search for tracks"). */
+  emptyAction?: { label: string; onClick: () => void };
   initialQuery?: string;
   extraCol?: { header: string; render: (t: TrackMeta, i: number) => ReactNode }; // one trailing column (Queue: transition badge)
   topSlot?: ReactNode; // above the table (Queue now-playing + seed; search states)
@@ -107,6 +112,8 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   onSubmitSearch,
   searching,
   searchPlaceholder,
+  onSearchEverywhere,
+  emptyAction,
   initialQuery,
   extraCol,
   topSlot,
@@ -681,7 +688,14 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       </div>
 
       {tracks.length === 0 ? (
-        <div className="lib-empty">{emptyHint}</div>
+        <div className="lib-empty">
+          {emptyHint}
+          {emptyAction && (
+            <button className="lib-empty-action" onClick={emptyAction.onClick}>
+              {emptyAction.label}
+            </button>
+          )}
+        </div>
       ) : (
         <table
           ref={tableRef}
@@ -912,12 +926,17 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
       {tracks.length > 0 && view.length === 0 && !searchMode && (
         <div className="lib-empty">
           {query.trim()
-            ? `No tracks match “${query.trim()}”.`
+            ? `No tracks here match “${query.trim()}”.`
             : stemOnly && cacheOnly
               ? "No cached tracks with stems here yet."
               : stemOnly
                 ? "No tracks with cached stems here yet."
                 : "No cached tracks here yet."}
+          {query.trim() && onSearchEverywhere && (
+            <button className="lib-empty-action" onClick={() => onSearchEverywhere(query.trim())}>
+              Search everywhere for “{query.trim()}”
+            </button>
+          )}
         </div>
       )}
 

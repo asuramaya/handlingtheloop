@@ -201,6 +201,22 @@ describe("DjRoom membership", () => {
     }
   });
 
+  it("device-set: one of my devices switches another of MINE (self-set), never another account's", async () => {
+    const laptop = (await h.connect({ device: "lap", host: true, acct: "u-host" })).ws!;
+    await h.send(laptop, { t: "join" });
+    const phone = (await h.connect({ device: "ph", host: true, acct: "u-host" })).ws!;
+    await h.send(phone, { t: "join" });
+    const guest = (await h.connect({ device: "g1", host: false, invited: true, acct: "u-guest" })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(laptop, { t: "device-set", to: "ph", listen: true, control: false });
+    expect(phone.last("self-set")).toMatchObject({ t: "self-set", listen: true, control: false });
+    // a guest cannot switch the host's devices, and the host cannot switch a guest's
+    await h.send(guest, { t: "device-set", to: "lap", listen: false });
+    expect(laptop.got("self-set")).toBe(false);
+    await h.send(laptop, { t: "device-set", to: "g1", listen: false });
+    expect(guest.got("self-set")).toBe(false);
+  });
+
   // #48: /internal/ismember authorizes a session GUEST fetching the HOST's global sample clip.
   // Only a JOINED participant (by un-forgeable account) matches — never a stranger or empty acct.
   const askMember = async (h: ReturnType<typeof makeRoom>, acct: string) =>

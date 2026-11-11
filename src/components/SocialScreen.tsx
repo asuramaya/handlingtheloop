@@ -48,7 +48,7 @@ import { deviceIcon } from "./social/util";
 //     host, and the Room | Chat tabs.
 //   • BODY (the only thing that scrolls): the chosen tab.
 //   • FOOT (fixed): THIS device: its Decks / Sound switches and Leave / Join.
-type SessionTab = "room" | "chat";
+type SessionTab = "room" | "chat" | "settings";
 let lastTab: SessionTab = "room"; // survives closing and reopening the panel
 let lastInviteUrl: string | null = null; // one link per session: reopen shows it, never re-creates
 
@@ -78,7 +78,7 @@ export function SocialScreen({
   // ★ SESSION SETTINGS, a view of its own (operator, 2026-11-11: "a dedicated settings panel for
   // social"): names, who can chat, and whether guests may pass the invite on. The chat controls
   // under the composer and the names button in the footer both read as clutter where they were.
-  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // The invite sheet's drag-to-dismiss.
   const [sheetDrag, setSheetDrag] = useState(0);
   const sheetStart = useRef<number | null>(null);
@@ -191,6 +191,9 @@ export function SocialScreen({
 
   // ── Tabs + unread chat ─────────────────────────────────────────────────────────────────────
   const [tab, setTabState] = useState<SessionTab>(lastTab);
+  // ★ SETTINGS IS A TAB (operator, 2026-11-11: the gear "looks awkward dead in the middle… make it
+  // behave and look more like the room/chat tabs"): a narrow third tab on the same strip.
+  const settingsOpen = tab === "settings";
   const setTab = (t: SessionTab) => {
     lastTab = t;
     setTabState(t);
@@ -242,20 +245,6 @@ export function SocialScreen({
                 title={`Open @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks.`}
               >
                 ● Go live
-              </button>
-            )}
-            {inSession && online && !room.listeningTo && (
-              <button
-                className={`session-gear ${settingsOpen ? "on" : ""}`}
-                onClick={() => {
-                  setInviteOpen(false);
-                  setSettingsOpen((o) => !o);
-                }}
-                aria-pressed={settingsOpen}
-                aria-label="Session settings"
-                title="Session settings"
-              >
-                ⚙
               </button>
             )}
             {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
@@ -356,13 +345,6 @@ export function SocialScreen({
 
               {!room.isGuest && room.signedIn && <SetSavedPrompt setsRev={room.setsRev} />}
 
-              {settingsOpen ? (
-                <div className="session-settings-head">
-                  <button className="people-back" onClick={() => setSettingsOpen(false)}>
-                    <span aria-hidden="true">‹</span> Session settings
-                  </button>
-                </div>
-              ) : (
               <div className="settings-tabs session-tabs" role="tablist" aria-label="Session">
                 <button role="tab" aria-selected={tab === "room"} className={`settings-tab ${tab === "room" ? "on" : ""}`} onClick={() => setTab("room")}>
                   Room
@@ -372,8 +354,20 @@ export function SocialScreen({
                   {crowdLive ? "Crowd" : "Chat"}
                   {unreadChat > 0 && <span className="tab-badge">{unreadChat > 9 ? "9+" : unreadChat}</span>}
                 </button>
+                <button
+                  role="tab"
+                  aria-selected={settingsOpen}
+                  aria-label="Session settings"
+                  title="Session settings"
+                  className={`settings-tab session-tab-gear ${settingsOpen ? "on" : ""}`}
+                  onClick={() => {
+                    setInviteOpen(false);
+                    setTab("settings");
+                  }}
+                >
+                  ⚙
+                </button>
               </div>
-              )}
             </>
           )}
         </div>
@@ -479,7 +473,7 @@ export function SocialScreen({
         {room.error && <p className="settings-note bad session-error">{room.error}</p>}
 
         {/* ═════════════ INVITE SHEET — slides up from the bottom; drag it down (or tap outside) to close ═════════════ */}
-        {inviteOpen && inSession && (
+        {inviteOpen && inSession && canInvite && online && (
           <>
             <div className="session-sheet-scrim" onPointerDown={() => setInviteOpen(false)} />
             <div

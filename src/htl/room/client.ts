@@ -48,6 +48,7 @@ export interface RoomHandlers {
   hostColor?: (color: string) => void; // the room vibe (host accent) — applies for crowd listeners too (no roster)
   setCaptured?: (set: CapturedSet) => void; // G1a HOST: a broadcast ended → here's the captured recipe to persist
   kicked?: (reason?: string) => void;
+  selfListen?: (on: boolean) => void; // another of my devices switched my sound (the app may need to wake audio)
   /** The room refused an intent this device sent (session sync audit): its move was NOT shared. */
   refused?: (kind: string, reason: string) => void;
   /** This tab's socket was replaced by a newer socket of the SAME device id (another tab): it stops. */
@@ -463,6 +464,10 @@ export class RoomClient {
   setChatFollowers(on: boolean): void {
     this.send({ t: "chat-followers", on });
   }
+  /** Flip Decks / Sound on another device of my own account (the room checks the account). */
+  setDevice(to: string, s: { control?: boolean; listen?: boolean }): void {
+    this.send({ t: "device-set", to, ...s });
+  }
   /** HOST: let guests pass the session's invite link on (`code` = the host's code, "" = stop). */
   setGuestInvite(code: string): void {
     this.send({ t: "guest-invite", code });
@@ -817,6 +822,14 @@ export class RoomClient {
         break;
       case "muted":
         this.h.muted?.(msg.on);
+        break;
+      case "self-set":
+        // Another device of this account switched us: exactly what our own press would do.
+        if (typeof msg.control === "boolean") this.control(msg.control);
+        if (typeof msg.listen === "boolean") {
+          this.listen(msg.listen);
+          this.h.selfListen?.(msg.listen);
+        }
         break;
       case "kicked":
         // Denied entry or removed by the host. Forget our intent to be in (and the invite

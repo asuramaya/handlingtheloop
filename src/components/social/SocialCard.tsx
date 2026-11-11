@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { RoomState } from "@htl/room";
 import { maskName } from "@htl/privacy";
 import { ago, deviceIcon } from "./util";
@@ -37,24 +38,37 @@ export function SocialCard({
   const label = rel === "you" ? "You" : isGuest || revealed ? p.name : maskName(p.name);
 
   // Who may change what on this row.
+  // ★ MY OTHER DEVICES ARE MINE TO SWITCH (operator, 2026-11-11: "I should be able to control
+  // deck/sound on my devices, right now only from the device itself"). A device on my account is
+  // switched by asking it to press its own switch (room.setDevice → self-set), so its own rules hold.
+  const myOther = rel === "you" && !isSelf;
   const canSelfDrive = isSelf && (room.host || p.controlling);
+  const canDriveMine = myOther && room.host; // the host's devices may all drive; a guest's need a grant
   const canModerate = room.host && !isSelf && isGuest; // host over OTHER guests
-  const deckBtn = p.joined && (canSelfDrive || (canModerate && !p.stage));
-  const soundBtn = p.joined && isSelf;
+  const deckBtn = p.joined && (canSelfDrive || canDriveMine || (canModerate && !p.stage));
+  const soundBtn = p.joined && (isSelf || myOther);
+  // A guest's row unfolds (tap it) to show what the host can do to them, instead of an inline ✕.
+  const [open, setOpen] = useState(false);
 
   const deckLabel = p.stage && (p.decks === "A" || p.decks === "B") ? `Deck ${p.decks}` : "Decks";
   const onDecks = () => {
     if (isSelf) room.setControl(!p.controlling);
+    else if (myOther) room.setDevice(p.id, { control: !p.controlling });
     else room.grantControl(p.id, !p.controlling);
   };
   const onSound = () => {
+    if (myOther) return room.setDevice(p.id, { listen: !p.listening });
     if (!p.listening) onActivate?.();
     room.setListening(!p.listening);
   };
 
   const meta = [p.kind || null, isSelf && rel === "you" && room.peers.some((x) => x.id !== p.id && relationOf(x, me, room.you, friends) === "you") ? "this device" : null, p.joined ? (p.joinedAt > 0 ? ago(p.joinedAt) : null) : "not in the session"].filter(Boolean).join(" · ");
 
-  const deckTitle = isSelf
+  const deckTitle = myOther
+    ? p.controlling
+      ? "Stop this device driving the decks"
+      : "Let this device drive the decks"
+    : isSelf
     ? canSelfDrive
       ? p.controlling
         ? "Stop driving the decks from this device"
@@ -67,14 +81,41 @@ export function SocialCard({
       : p.controlling
         ? "Drives the decks"
         : "Follows the decks, cannot drive them";
-  const soundTitle = isSelf ? (p.listening ? "Mute the mix on this device" : "Hear the mix on this device") : p.listening ? "Plays the mix out loud" : "Follows silently";
+  const soundTitle = isSelf
+    ? p.listening
+      ? "Mute the mix on this device"
+      : "Hear the mix on this device"
+    : myOther
+      ? p.listening
+        ? "Mute the mix on that device"
+        : "Play the mix on that device"
+      : p.listening
+        ? "Plays the mix out loud"
+        : "Follows silently";
 
   return (
-    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${canModerate ? "has-kick" : ""}`}>
+    <li className={`social-card rel-${rel} ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${canModerate ? "can-open" : ""} ${open ? "open" : ""}`}>
       <span className="social-card-ico" aria-hidden="true">
         {deviceIcon(p.kind)}
       </span>
-      <div className="social-card-main">
+      <div
+        className="social-card-main"
+        {...(canModerate
+          ? {
+              role: "button",
+              tabIndex: 0,
+              "aria-expanded": open,
+              title: open ? "Hide actions" : "Actions",
+              onClick: () => setOpen((o) => !o),
+              onKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpen((o) => !o);
+                }
+              },
+            }
+          : {})}
+      >
         <div className="social-card-top">
           <span className="social-card-name">{label}</span>
           <span className={`rel-tag ${rel}`}>{RELATION_LABEL[rel]}</span>
@@ -111,17 +152,19 @@ export function SocialCard({
               {p.listening ? "Sound" : "Muted"}
             </span>
           )}
-          {canModerate && p.stage && (
-            <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="Send them back to the crowd (they keep listening)">
-              ⬇ Floor
-            </button>
-          )}
         </div>
       )}
-      {canModerate && (
-        <button className="social-card-kick" onClick={() => room.kick(p.id)} title="Remove from the session" aria-label="Remove from the session">
-          ✕
-        </button>
+      {canModerate && open && (
+        <div className="social-card-actions">
+          {p.stage && (
+            <button className="hw-btn small" onClick={() => room.denyStage(p.id)} title="They keep listening">
+              Send back to the crowd
+            </button>
+          )}
+          <button className="hw-btn small danger" onClick={() => room.kick(p.id)}>
+            Remove from session
+          </button>
+        </div>
       )}
     </li>
   );

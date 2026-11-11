@@ -75,6 +75,7 @@ const CACHE_KIND: Record<ServerMsg["t"], CacheKind> = {
   // A per-socket ASK, addressed to one device at one instant — replaying it to a late joiner on a
   // relay shard would ask the wrong device for a board it does not own.
   republish: "live",
+  "self-set": "live", // a per-socket ask from another device of the same account
   chat: "live",
   "chat-history": "live",
   muted: "live",
@@ -906,6 +907,27 @@ export class DjRoom {
         this.chatSlow = s;
         await this.state.storage.put("chatSlow", s);
         this.broadcastPresence();
+        break;
+      }
+      case "device-set": {
+        // One of my devices flips another of MY devices (same account, un-forgeable acct ids). The
+        // target applies it through its own control/listen path, so grants and joins still gate it.
+        const a = ws.deserializeAttachment() as Attachment | null;
+        const target = (msg.to || "").slice(0, 64);
+        if (!a?.acct || !target || target === self) break;
+        const out: { t: "self-set"; control?: boolean; listen?: boolean } = { t: "self-set" };
+        if (typeof msg.control === "boolean") out.control = msg.control;
+        if (typeof msg.listen === "boolean") out.listen = msg.listen;
+        if (out.control === undefined && out.listen === undefined) break;
+        for (const t of this.sockets(target)) {
+          const ta = t.deserializeAttachment() as Attachment | null;
+          if (ta?.acct !== a.acct) continue; // never another account's device
+          try {
+            t.send(JSON.stringify(out satisfies ServerMsg));
+          } catch {
+            /* gone */
+          }
+        }
         break;
       }
       case "guest-invite": {

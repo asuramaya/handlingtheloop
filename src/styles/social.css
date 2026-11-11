@@ -3834,3 +3834,36 @@ button.peer-pill:hover {
     opacity: 1;
   }
 }
+
+/* ── v7 (operator, 2026-11-11) ── */
+/* Settings is a narrow third tab on the Room / Chat strip. */
+.session-tabs .session-tab-gear {
+  flex: 0 0 52px;
+  font-size: 15px;
+}
+/* A guest's row unfolds to show the host's actions (no inline ✕). The name area is the toggle,
+   marked by a small chevron that turns when open. */
+.social-card.can-open .social-card-main {
+  cursor: pointer;
+}
+.social-card.can-open .social-card-name::after {
+  content: "▾";
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.social-card.can-open.open .social-card-name::after {
+  transform: rotate(180deg);
+}
+.social-card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  margin-top: 2px;
+  border-top: 1px solid var(--line);
+  animation: panel-in 0.14s ease-out;
+}

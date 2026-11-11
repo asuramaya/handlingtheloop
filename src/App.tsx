@@ -2594,6 +2594,16 @@ function AppBody() {
       onLyrics: onRoomLyrics,
       onSettings: onRoomSettings,
       onKicked: (reason) => setKickedNotice(reason || "You left the session."),
+      // Another of my devices turned this one's sound on: wake the audio (a phone may still need a tap).
+      onSelfListen: (on) => {
+        if (on) {
+          try {
+            engine.resume();
+          } catch {
+            /* needs a gesture on this device */
+          }
+        }
+      },
     },
     settings.accentA, // our account accent → synced so the room can take the host's vibe
     nowPlaying,

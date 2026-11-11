@@ -22,6 +22,7 @@ export interface RoomCallbacks {
   onLyrics?: (deck: DeckId, videoId: string, lines: unknown, source: string) => void;
   onSettings?: (settings: unknown, updatedAt: number) => void; // a same-account device's settings → adopt (LWW)
   onKicked?: (reason?: string) => void;
+  onSelfListen?: (on: boolean) => void; // another device of mine switched this device's sound
   /** The room refused one of this device's intents (session sync audit): the move was not shared. */
   onRefused?: (kind: string, reason: string) => void;
 }
@@ -102,6 +103,8 @@ export interface RoomState {
   guestInvite: string;
   /** HOST: let guests pass the invite link on (code = the host's own invite code, "" = stop). */
   setGuestInvite: (code: string) => void;
+  /** Flip Decks / Sound on another device of MY account. */
+  setDevice: (to: string, s: { control?: boolean; listen?: boolean }) => void;
   muteDevice: (to: string, on: boolean) => void; // HOST: mute/unmute a device's chat
   banDevice: (to: string) => void; // HOST: ban a device (evict + block re-entry)
   error: string | null;
@@ -158,7 +161,9 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   // Capture any invite code ONCE at mount. Kept stable (not re-read from the URL) so that
   // stripping the code from the URL below — to stop a stale invite from pinning a signed-in
   // user away from their own session forever — doesn't flip `isGuest` and tear the socket down.
-  const [joinCode] = useState(() => joinCodeFromUrl());
+  // Settable: a guest who is REMOVED goes home (the code is dropped and the socket reopens on
+  // this account's own session) instead of sitting on a frozen copy of the room it left.
+  const [joinCode, setJoinCode] = useState(() => joinCodeFromUrl());
   const isGuest = !!joinCode;
   const [user, setUser] = useState<AccountUser | null>(null);
   const userId = user?.id ?? null; // socket lifecycle keys on this, not the object ref
@@ -297,7 +302,28 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
       guestInvite: (code) => setGuestInviteState(code),
       muted: (on) => setIAmMuted(on),
       mutedList: (ids) => setMutedDevices(new Set(ids)),
-      kicked: (reason) => cbRef.current.onKicked?.(reason),
+      kicked: (reason) => {
+        cbRef.current.onKicked?.(reason);
+        // ★ LEAVE THE ROOM THAT REMOVED YOU (operator, 2026-11-11: a kicked guest saw the room
+        // unchanged until a refresh). The socket closes as terminal, so nothing else would ever
+        // clear the roster. Drop the invite code (and the ?join= in the address bar, or a refresh
+        // re-knocks): isGuest flips, the socket effect tears down, resets every piece of room
+        // state, and a signed-in device reopens on its own home session.
+        try {
+          const u = new URL(location.href);
+          if (u.searchParams.has("join")) {
+            u.searchParams.delete("join");
+            history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+          }
+        } catch {
+          /* no URL API: the reset below still runs */
+        }
+        setJoinCode(null);
+        setPeers([]);
+        setAnchorId(null);
+        setChatLog([]);
+      },
+      selfListen: (on) => cbRef.current.onSelfListen?.(on),
       // ★ A refused intent shows where room errors already show (operator, 2026-11-11: session sync
       // audit), and reaches the app in case it wants to undo the local move.
       // Another tab of this device took the socket: the client stopped; keep its notice up (below).
@@ -464,6 +490,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
   const setChatSlow = useCallback((seconds: number) => clientRef.current?.setChatSlow(seconds), []);
   const setChatFollowers = useCallback((on: boolean) => clientRef.current?.setChatFollowers(on), []);
   const setGuestInvite = useCallback((code: string) => clientRef.current?.setGuestInvite(code), []);
+  const setDevice = useCallback((to: string, s: { control?: boolean; listen?: boolean }) => clientRef.current?.setDevice(to, s), []);
   const muteDevice = useCallback((to: string, on: boolean) => clientRef.current?.muteDevice(to, on), []);
   const banDevice = useCallback((to: string) => clientRef.current?.banDevice(to), []);
   // While public, heartbeat the directory (~30s) so `last_seen` stays fresh and the
@@ -602,6 +629,7 @@ export function useRoom(cb: RoomCallbacks = {}, color?: string, nowPlaying?: Now
     setChatFollowers,
     guestInvite,
     setGuestInvite,
+    setDevice,
     muteDevice,
     banDevice,
     error,

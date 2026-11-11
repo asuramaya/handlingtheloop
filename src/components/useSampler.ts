@@ -18,6 +18,7 @@ import {
   type SampleDto,
 } from "@htl/media";
 import type { Me } from "@htl/account";
+import type { GlobalPadSnapshot, PadsSnapshot, RegionPadSnapshot } from "@htl/state/session";
 
 // The sampler's state engine. The 24 pads split into one GLOBAL bank + two per-deck
 // REGION banks, addressed by a flat index:
@@ -118,6 +119,42 @@ const emptyGlobals = (meta: GlobalMeta): GlobalPad[] =>
 
 type SampleIntent = Extract<Intent, { kind: "sample" }>;
 
+/** The pad board as the session snapshot carries it: the region pads of the tracks on the decks (by
+ *  videoId) and the global pads that have a stored clip. Pure, so the round trip is testable. */
+export function padsSnapshotOf(
+  rs: Record<string, (RegionDesc | null)[]>,
+  gs: readonly { sampleId?: string; name: string; mode: SampleMode; gain: number; pitch?: number }[],
+  ld: { A: string | null; B: string | null },
+): PadsSnapshot {
+  const deckPads = (vid: string | null) => {
+    if (!vid) return undefined;
+    const arr = rs[vid];
+    if (!arr || arr.every((r) => r == null)) return undefined;
+    return {
+      vid,
+      pads: arr.map((r) => {
+        if (!r) return null;
+        const stems = regionStems(r);
+        return { start: r.start, end: r.end, name: r.name, mode: r.mode, gain: r.gain, ...(r.pitch ? { pitch: r.pitch } : {}), ...(stems ? { stems } : {}) };
+      }),
+    };
+  };
+  const A = deckPads(ld.A);
+  const B = deckPads(ld.B);
+  return {
+    regions: { ...(A ? { A } : {}), ...(B ? { B } : {}) },
+    globals: gs.map((g) => (g.sampleId ? { sampleId: g.sampleId, name: g.name, mode: g.mode, gain: g.gain, pitch: g.pitch ?? 0 } : null)),
+  };
+}
+
+/** A snapshot's region pads back into the per-track store's shape (always DECK_REGION_COUNT slots). */
+export function regionArrFromSnapshot(pads: readonly (RegionPadSnapshot | null | undefined)[]): (RegionDesc | null)[] {
+  return emptyRegionArr().map((_, s) => {
+    const x = pads[s];
+    return x ? { start: x.start, end: x.end, name: x.name, mode: x.mode, gain: x.gain, ...(x.pitch ? { pitch: x.pitch } : {}), ...(x.stems ? { stems: [...x.stems] } : {}) } : null;
+  });
+}
+
 export function useSampler(
   engine: AudioEngine,
   loaded: { A: string | null; B: string | null },
@@ -133,10 +170,13 @@ export function useSampler(
   // Keyed by vid:start:end:stem so it survives re-slices; shared by local trigger + remote play.
   const regionBufCache = useRef<Map<string, AudioBuffer>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  // In a session: the ANCHOR's global pads, mirrored over our own (see applyPadsSnapshot). null = ours.
+  const [mirror, setMirror] = useState<(GlobalPadSnapshot | null)[] | null>(null);
   const [playTick, bumpPlaying] = useReducer((n: number) => n + 1, 0); // re-render when voices start/stop
   // When applyRemote re-runs a mutator to apply an inbound config change, suppress its emit so
   // it can't echo back into the session (the local board fired directly; the wire carried it once).
   const muteEmit = useRef(false);
+  const applyRemoteRef = useRef<(intent: SampleIntent) => void>(() => {}); // set once applyRemote exists
   const doEmit = (intent: SampleIntent) => {
     if (!muteEmit.current) emit?.(intent);
   };
@@ -218,7 +258,10 @@ export function useSampler(
     for (let i = 0; i < PAD_COUNT; i++) {
       const route = routeOf(i);
       const playing = engine.sampler.isPlaying(i);
-      if (route === "master") {
+      if (route === "master" && mirror) {
+        const m = mirror[globalSlot(i)] ?? null;
+        out.push({ index: i, route, kind: m ? "file" : "empty", name: m?.name ?? "", mode: m?.mode ?? "oneshot", gain: m?.gain ?? 1, pitch: m?.pitch ?? 0, playing, ready: !!m?.sampleId });
+      } else if (route === "master") {
         const g = globals[globalSlot(i)];
         const has = !!(g.sampleId || g.uploading || g.ready);
         out.push({
@@ -256,7 +299,7 @@ export function useSampler(
     }
     return out;
     // playTick forces this to recompute when a voice starts/stops (isPlaying is read fresh).
-  }, [regions, globals, loaded.A, loaded.B, engine, playTick]);
+  }, [regions, globals, mirror, loaded.A, loaded.B, engine, playTick]);
 
   // ---- actions ----
 
@@ -299,7 +342,15 @@ export function useSampler(
     (i: number) => {
       engine.resume();
       const route = routeOf(i);
-      if (route === "master") {
+      if (route === "master" && mirror) {
+        // A mirrored anchor pad: play its clip by id (as a remote trigger does) and send the same
+        // self-contained trigger, so every board plays the anchor's clip.
+        const m = mirror[globalSlot(i)];
+        if (!m?.sampleId) return;
+        const intent: SampleIntent = { kind: "sample", pad: i, route, action: "trigger", sampleId: m.sampleId, name: m.name, mode: m.mode, gain: m.gain, pitch: m.pitch };
+        applyRemoteRef.current(intent);
+        emit?.(intent);
+      } else if (route === "master") {
         const buf = fileBuffers.current[globalSlot(i)];
         const g = globals[globalSlot(i)];
         if (!buf) return;
@@ -319,7 +370,7 @@ export function useSampler(
         emit?.({ kind: "sample", pad: i, route, action: "trigger", region: { start: r.start, end: r.end, mode: r.mode, gain: r.gain, rate, stems: regionStems(r) } });
       }
     },
-    [engine, globals, regions, loaded.A, loaded.B, emit, playRegion],
+    [engine, globals, mirror, regions, loaded.A, loaded.B, emit, playRegion],
   );
 
   const release = useCallback(
@@ -643,6 +694,63 @@ export function useSampler(
   // Apply a remote pad fire (a co-DJ's `sample` intent). Reconstructs locally — NEVER
   // re-emits (that path is `trigger`). Region pads play off the guest's own deck buffer;
   // global pads fetch the host's clip by id (cached after the first fetch).
+  // ── The pads as part of the shared board (operator, 2026-11-11: session sync audit) ─────────────
+  // A pad assignment only ever crossed as a one-shot `sample` intent (and `assign` re-derives the
+  // region from the WATCHER's own playhead), so a device that joined after the host grabbed its pads
+  // never had them. The anchor's snapshot now carries them; a follower adopts them here.
+  // Region pads are written into the per-track store (they only ever play on the track they slice).
+  // Global pads are account clips: a follower MIRRORS the anchor's set for display and trigger
+  // (fetched by sampleId, like a remote trigger) without touching its own stored pads, and the mirror
+  // is dropped on leave (applyPadsSnapshot(null)).
+  const boardRef = useRef({ regions, globals, loaded, mirror });
+  boardRef.current = { regions, globals, loaded, mirror };
+  const snapshotPads = useCallback((): PadsSnapshot => {
+    const { regions: rs, globals: gs, loaded: ld } = boardRef.current;
+    return padsSnapshotOf(rs, gs, ld);
+  }, []);
+  const applyPadsSnapshot = useCallback(
+    (p: PadsSnapshot | null) => {
+      if (!p) {
+        setMirror((m) => (m == null ? m : null));
+        return;
+      }
+      const regionsIn = p.regions ?? {};
+      setRegions((prev) => {
+        let next: RegionStore | null = null;
+        for (const dk of ["A", "B"] as const) {
+          const r = regionsIn[dk];
+          if (!r?.vid || !Array.isArray(r.pads)) continue;
+          const arr = regionArrFromSnapshot(r.pads);
+          // Idempotent: an unchanged set writes nothing (no re-render, no localStorage write).
+          if (JSON.stringify(arr) === JSON.stringify((next ?? prev)[r.vid] ?? emptyRegionArr())) continue;
+          next = { ...(next ?? prev), [r.vid]: arr };
+        }
+        if (!next) return prev;
+        saveJson(REGION_KEY, next);
+        return next;
+      });
+      if (Array.isArray(p.globals)) {
+        const g = p.globals.map((x) => (x ? { ...x } : null));
+        setMirror((m) => (JSON.stringify(m) === JSON.stringify(g) ? m : g));
+        // Warm the clips so the first tap on a mirrored pad is not a fetch.
+        for (const x of g) {
+          const id = x?.sampleId;
+          if (!id || remoteGlobalBuf.current.has(id)) continue;
+          void (async () => {
+            try {
+              const res = await fetch(sampleAudioUrl(id), { credentials: "same-origin" });
+              if (!res.ok) return;
+              remoteGlobalBuf.current.set(id, await decodeAudio(engine.ctx, await res.arrayBuffer()));
+            } catch {
+              /* unfetchable — the pad still shows; a trigger retries */
+            }
+          })();
+        }
+      }
+    },
+    [engine],
+  );
+
   const applyRemote = useCallback(
     (intent: SampleIntent) => {
       const { pad, route, action } = intent;
@@ -693,8 +801,9 @@ export function useSampler(
     },
     [engine, assignRegion, clearPad, setMode, setGain, setStems, setPitch, playRegion],
   );
+  applyRemoteRef.current = applyRemote;
 
-  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStems, setPitch };
+  return { pads, error, clearError: () => setError(null), trigger, release, stop, applyRemote, snapshotPads, applyPadsSnapshot, assignRegion, assignFile, captureToGlobal, clearPad, setMode, setGain, setStems, setPitch };
 }
 
 export type SamplerApi = ReturnType<typeof useSampler>;

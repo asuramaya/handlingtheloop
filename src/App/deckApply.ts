@@ -37,6 +37,9 @@
 // precedent, not clearing a prerequisite for something we had yet to invent.
 
 import type { DeckSnapshot } from "../htl/state/session";
+import type { Beatgrid } from "../htl/analysis/analyze";
+import { decodeGrid, encodeGrid, gridMatches } from "../htl/room/gridWire";
+import type { SnapField } from "../htl/room/snapshotRepair";
 
 /** Pad a saved cue/loop slot array out to `n` (the deck's own slot count) with empty slots: a save
  *  from before the second cue bank carries only 8. */
@@ -50,6 +53,8 @@ import { isMobileDevice } from "../htl/stems/models";
 /** The deck surface a snapshot READS. Derived from DeckSnapshot's own field types wherever one
  *  exists, so this interface cannot drift from the shape it is converting to. */
 export interface SnapshotDeck {
+  /** The loop engine's verbatim apply (audio included, no broadcast); optional so a fake deck can omit it. */
+  applyLoopState?(loop: { start: number; end: number; active: boolean; beats?: number } | null, inPoint?: number | null, seek?: number): void;
   readonly tempo: number;
   readonly trim: number;
   readonly level: number;
@@ -78,7 +83,10 @@ export interface SnapshotDeck {
   readonly quantizing: boolean;
   readonly playing: boolean;
   readonly ownStems: boolean;
+  readonly remoteStems: boolean;
   readonly stemsNeural: boolean;
+  /** The track's beat grid: read into the snapshot, and ADOPTED from the anchor's by a follower. */
+  beatgrid: Beatgrid | null;
   fxSnapshot(): DeckSnapshot["fx"];
   fxChainSnapshot(): DeckSnapshot["fxChains"];
   position(): number;
@@ -181,7 +189,164 @@ export function deckSnapshot(deck: SnapshotDeck, meta: DeckMeta, videoId: string
     // advertise REMOTE-only stems back out — only this device's OWN stems count.
     hasStems: deck.ownStems,
     stemsNeural: deck.stemsNeural && deck.ownStems,
+    // The grid only describes a track that is on the deck; an empty deck has none to send.
+    ...(videoId && deck.beatgrid ? { grid: encodeGrid(deck.beatgrid) } : {}),
   };
+}
+
+// ── The follower's REPAIR (operator, 2026-11-11: session sync audit) ──────────────────────────────
+// reconcileDeck replaces "apply the whole snapshot once per videoId": it runs on EVERY newer snapshot,
+// so it has to be safe to run over a live deck, which is two rules —
+//   IDEMPOTENT: a setter is called only when the value actually differs. Re-writing an equal loop
+//     re-anchors it, an equal EQ ramps for nothing, an equal stem mute clicks; none of that may happen
+//     on a heartbeat that changes nothing.
+//   NOT OVER OUR OWN EDIT: a field this device changed in the last second is `held` and left alone;
+//     the snapshot is a round trip old and cannot contain our gesture yet.
+// The FX rack and chains are compared here (fxDiffers) but applied by the caller, which must wait
+// for the FX worklets on a cold boot. Returns the fields it actually wrote, for the trace and tests.
+const EPS = 1e-6;
+const same = (a: number | null | undefined, b: number | null | undefined) => (a == null || b == null ? a == b : Math.abs(a - b) <= EPS);
+const sameLoop = (a: { active: boolean; start: number; end: number; beats: number } | null | undefined, b: typeof a) =>
+  !a || !b ? !a === !b : a.active === b.active && same(a.start, b.start) && same(a.end, b.end) && same(a.beats, b.beats);
+const sameSlots = <T>(a: readonly (T | null)[], b: readonly (T | null)[], eq: (x: T, y: T) => boolean) => {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a[i] ?? null;
+    const y = b[i] ?? null;
+    if (x === null || y === null ? x !== y : !eq(x, y)) return false;
+  }
+  return true;
+};
+
+export function fxDiffers(deck: Pick<SnapshotDeck, "fxSnapshot" | "fxChainSnapshot">, d: DeckSnapshot): boolean {
+  if (d.fx !== undefined && JSON.stringify(deck.fxSnapshot()) !== JSON.stringify(d.fx)) return true;
+  if (d.fxChains !== undefined && JSON.stringify(deck.fxChainSnapshot()) !== JSON.stringify(d.fxChains)) return true;
+  return false;
+}
+
+export function reconcileDeck(deck: SnapshotDeck, d: DeckSnapshot, held: (f: SnapField) => boolean, mobile = isMobileDevice()): string[] {
+  const wrote: string[] = [];
+  const num = (field: SnapField, name: string, want: number | null | undefined, have: number, set: (v: number) => void) => {
+    if (want == null || !Number.isFinite(want) || held(field) || same(have, want)) return;
+    set(want);
+    wrote.push(name);
+  };
+  num("tempo", "tempo", d.tempo, deck.tempo, (v) => deck.setTempo(v));
+  num("trim", "trim", d.trim, deck.trim, (v) => deck.setTrim(v));
+  num("level", "level", d.level, deck.level, (v) => deck.setLevel(v));
+  num("eq", "eqLow", d.eqLow, deck.eqLow, (v) => deck.setEqLow(v));
+  num("eq", "eqMid", d.eqMid, deck.eqMid, (v) => deck.setEqMid(v));
+  num("eq", "eqHigh", d.eqHigh, deck.eqHigh, (v) => deck.setEqHigh(v));
+  num("eq", "eqLowFreq", d.eqLowFreq, deck.eqLowFreq, (v) => deck.setEqLowFreq(v));
+  num("eq", "eqMidFreq", d.eqMidFreq, deck.eqMidFreq, (v) => deck.setEqMidFreq(v));
+  num("eq", "eqHighFreq", d.eqHighFreq, deck.eqHighFreq, (v) => deck.setEqHighFreq(v));
+  num("eq", "eqMidQ", d.eqMidQ, deck.eqMidQ, (v) => deck.setEqMidQ(v));
+  num("eq", "eqLowShape", d.eqLowShape, deck.eqLowShape, (v) => deck.setEqLowShape(v));
+  num("eq", "eqMidShape", d.eqMidShape, deck.eqMidShape, (v) => deck.setEqMidShape(v));
+  num("eq", "eqHighShape", d.eqHighShape, deck.eqHighShape, (v) => deck.setEqHighShape(v));
+  num("eq", "eqLowQ", d.eqLowQ, deck.eqLowQ, (v) => deck.setEqLowQ(v));
+  num("eq", "eqHighQ", d.eqHighQ, deck.eqHighQ, (v) => deck.setEqHighQ(v));
+  // The filter drives the EQ's HP/LP nodes, so it goes BEFORE the explicit cut positions (as in
+  // applyDeckRack) — otherwise a centred filter would reset manually-dragged cut handles.
+  num("filter", "filter", d.filter ?? 0, deck.filterValue, (v) => deck.setFilter(v));
+  num("eq", "eqHpFreq", d.eqHpFreq, deck.eqHpFreq, (v) => deck.setEqHpFreq(v));
+  num("eq", "eqHpQ", d.eqHpQ, deck.eqHpQ, (v) => deck.setEqHpQ(v));
+  num("eq", "eqLpFreq", d.eqLpFreq, deck.eqLpFreq, (v) => deck.setEqLpFreq(v));
+  num("eq", "eqLpQ", d.eqLpQ, deck.eqLpQ, (v) => deck.setEqLpQ(v));
+  num("eq", "eqMix", d.eqMix, deck.eqMix, (v) => deck.setEqMix(v));
+  num("eq", "eqOut", d.eqOut, deck.eqOut, (v) => deck.setEqOut(v));
+  if (!held("eq") && deck.eqBypassed !== !!d.eqBypass) {
+    deck.setEqBypass(!!d.eqBypass);
+    wrote.push("eqBypass");
+  }
+  num("pitch", "pitch", d.pitchSemis ?? 0, deck.pitch, (v) => deck.setPitch(v));
+  if (!held("keylock") && deck.keylock !== d.keylock) {
+    deck.setKeylock(d.keylock);
+    wrote.push("keylock");
+  }
+  if (!held("quantize") && deck.quantizing !== d.quantize) {
+    deck.setQuantize(d.quantize);
+    wrote.push("quantize");
+  }
+  // ★ skipBeats WAS CARRIED AND NEVER APPLIED: the snapshot has always written it, only the local
+  // session restore read it back, so a follower's beat jump used its own resolution.
+  if (d.skipBeats != null && !held("skipBeats") && deck.skipBeats !== d.skipBeats) {
+    deck.skipBeats = d.skipBeats;
+    wrote.push("skipBeats");
+  }
+  // Discrete state — absolute, so exact regardless of our own playhead.
+  if (!held("cue") && !same(deck.cuePoint, d.cuePoint)) {
+    deck.cuePoint = d.cuePoint;
+    wrote.push("cuePoint");
+  }
+  if (!held("hotCues")) {
+    const slots = deck.hotCues.length;
+    const cues = padSlots([...d.hotCues], slots);
+    if (!sameSlots(deck.hotCues, cues, (x, y) => same(x, y))) {
+      deck.hotCues = cues;
+      wrote.push("hotCues");
+    }
+    const loops = padSlots((d.hotLoops ?? []).map((l) => (l ? { ...l } : null)), slots);
+    if (!sameSlots(deck.hotLoops, loops, (x, y) => sameLoop(x, y))) {
+      deck.hotLoops = loops;
+      wrote.push("hotLoops");
+    }
+  }
+  if (!held("loop")) {
+    const loopDiffers = !sameLoop(deck.loop, d.loop);
+    const inDiffers = !same(deck.loopInPoint, d.loopInPoint);
+    // ★ THROUGH THE LOOP ENGINE, NOT ONTO THE FIELD (integration of the session sync audit). Writing
+    // deck.loop only changed what the deck SHOWS; the audio kept its old loop points until something
+    // else called applyLoop. applyLoopState applies the region to the audio, never broadcasts, and
+    // leaves the pending in-point alone when it is not given.
+    if ((loopDiffers || inDiffers) && deck.applyLoopState) {
+      deck.applyLoopState(d.loop ? { ...d.loop } : null, inDiffers ? d.loopInPoint : undefined);
+      if (loopDiffers) wrote.push("loop");
+      if (inDiffers) wrote.push("loopInPoint");
+    } else {
+      if (loopDiffers) {
+        deck.loop = d.loop ? { ...d.loop } : null;
+        wrote.push("loop");
+      }
+      if (inDiffers) {
+        deck.loopInPoint = d.loopInPoint;
+        wrote.push("loopInPoint");
+      }
+    }
+  }
+  if (!held("stems")) {
+    // Same rule as applyDeckStems, written only where it differs: a stem-less phone mirrors the
+    // source's stems as a REMOTE display (never over a real local set).
+    if (mobile && !deck.ownStems && (deck.remoteStems !== !!d.hasStems || (deck.stemsNeural !== (!!d.hasStems && !!d.stemsNeural)))) {
+      deck.markRemoteStems(!!d.hasStems, !!d.stemsNeural);
+      wrote.push("remoteStems");
+    }
+    for (const name of STEM_KEYS) {
+      const g = d.stemGains?.[name];
+      if (g != null && !same(deck.stemLevel(name), g)) {
+        deck.setStemGain(name, g);
+        wrote.push(`stemGain.${name}`);
+      }
+      if (d.stemMutes) {
+        const muted = !!d.stemMutes[name];
+        if (deck.stemActive(name) === muted) {
+          deck.setStemMute(name, muted);
+          wrote.push(`stemMute.${name}`);
+        }
+      }
+    }
+  }
+  // The anchor's grid for this track. Never held (no gesture of ours edits a grid) and never
+  // replaced by our own analysis afterwards: the grid only changes in setBuffer, i.e. on a reload,
+  // and the next snapshot re-adopts it then.
+  if (d.grid && !gridMatches(deck.beatgrid, d.grid)) {
+    const g = decodeGrid(d.grid);
+    if (g) {
+      deck.beatgrid = g;
+      wrote.push("grid");
+    }
+  }
+  return wrote;
 }
 
 // Apply per-stem mixer state from a snapshot. The deck stores gain/mute even

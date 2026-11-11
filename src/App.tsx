@@ -41,6 +41,9 @@ import { INITIAL_PEOPLE_VIEW, clearGraphCache, viewForPane, type PeopleView, typ
 import { useNotifications } from "./components/social/useNotifications";
 import { type FriendPresence, type Me, fetchFriendsOnline, fetchMe, logPlay, trimSet } from "@htl/account";
 import { useRoom, type Intent, type DeckTick, type QueuedTrack, type NowPlaying } from "@htl/room";
+import { deviceId } from "@htl/room/client";
+import type { PadsSnapshot } from "@htl/state/session";
+import { boardFingerprint, decideRepublish, nextRev, touchField, type OwnLoad, type TouchMap } from "@htl/room/snapshotRepair";
 import { ReplayBar } from "./components/ReplayBar";
 import { useMidi, type DeckFeedback } from "@htl/midi";
 import { useGamepad } from "@htl/gamepad";
@@ -866,6 +869,16 @@ function AppBody() {
   // dedupes so we reconcile a given videoId once (live edits after that flow via intents).
   const lastSnapshotRef = useRef<SessionSnapshot | null>(null);
   const reconciledTarget = useRef<Record<DeckId, string | null>>({ A: null, B: null });
+  // ★ Snapshot repair (operator, 2026-11-11: session sync audit) — see htl/room/snapshotRepair.ts.
+  // localTouch: when THIS device last changed each board field (stamped in emit), so a snapshot never
+  // stomps our own in-flight edit. ownLoad: a track we shared that the anchor has not landed yet.
+  // samplerPadsRef: the pad board, bridged from useSampler (assigned far below). publishRev: our
+  // own publish counter while anchor.
+  const localTouch = useRef<TouchMap>({ A: {}, B: {}, board: {} });
+  const ownLoad = useRef<Record<DeckId, OwnLoad | null>>({ A: null, B: null });
+  const samplerPadsRef = useRef<{ snapshot: () => PadsSnapshot; apply: (p: PadsSnapshot | null) => void } | null>(null);
+  const replayActiveRef = useRef(false);
+  const publishRev = useRef(0);
   // P2 (snapshot/restore across a rig visit): `homeAdoptAt` = when applyRoomSnapshot last
   // adopted a real board (so the return-home logic can tell "the rig's live state already
   // restored me" from "I'm solo → replay preVisit"). `preVisitRef` = my own board, captured
@@ -1773,8 +1786,14 @@ function AppBody() {
       tempoRange,
       syncSlave: engine.syncSlave,
       keySlave: engine.keySlave,
+      ...(samplerPadsRef.current ? { pads: samplerPadsRef.current.snapshot() } : {}),
     };
   }, [engine]);
+  // Stamp a board for the ROOM: a growing rev and our device id, so followers order it (snapshotRepair).
+  const stampSnapshot = useCallback((s: SessionSnapshot): SessionSnapshot => {
+    publishRev.current = nextRev(publishRev.current, Date.now());
+    return { ...s, rev: publishRev.current, by: deviceId() };
+  }, []);
 
   const persistPending = useRef(false);
   const lastPersist = useRef<string>("");
@@ -2430,6 +2449,10 @@ function AppBody() {
     mixQueueRef,
     autoIsRemoteRef,
     samplerApplyRef,
+    localTouch,
+    ownLoad,
+    replayActiveRef,
+    samplerPadsRef,
   });
 
   // G1c recorded-set replay lives in ./App/useReplay (replayDispatch + useSetReplay + the play/
@@ -2509,7 +2532,7 @@ function AppBody() {
       onState: applyRoomSnapshot,
       // The room asks a device what is on its board the moment it takes the anchor slot; answer with
       // the CURRENT one rather than whatever was last published (a fresh page has published nothing).
-      snapshotNow: () => buildSnapshot(),
+      snapshotNow: () => stampSnapshot(buildSnapshot()),
       onIntent: onRoomIntent,
       onAutomix: (s) => setRemoteAutomix(s as AutoMixMirror | null),
       onTick: onRoomTick,
@@ -2724,6 +2747,8 @@ function AppBody() {
       // …and when WE last moved a deck's transport or loop, so the tick follower holds off for a
       // moment instead of undoing it with a tick that predates it (htl/room/localGestures).
       noteLocalIntent(intent);
+      // …and every other board field, for the snapshot repair's touch grace (snapshotRepair.ts).
+      touchField(localTouch.current, intent, performance.now());
       if (room.controlling) room.sendIntent(intent);
     },
     [room.controlling, room.sendIntent],
@@ -2773,6 +2798,7 @@ function AppBody() {
   // songs; gating on !controlling left it driving a blank board (deck songs never synced).
   // Re-stomping a controller's live edits is prevented by the per-videoId reconcile dedupe.
   snapFollowRef.current = (room.enabled && !room.isAnchor) || replay.active;
+  replayActiveRef.current = replay.active; // a replay's snapshots are exempt from rev ordering
   // Locked out of driving (a watch-only listener, OR replay is driving the decks) → block the
   // keys + show the overlay. During replay the user must not fight the recipe.
   lockedRef.current = (room.enabled && !room.controlling) || replay.active;
@@ -2854,6 +2880,8 @@ function AppBody() {
   useEffect(() => {
     samplerApplyRef.current = sampler.applyRemote;
   }, [sampler.applyRemote]);
+  // The pad board rides the snapshot (built into buildSnapshot, applied by useSessionSync).
+  samplerPadsRef.current = { snapshot: sampler.snapshotPads, apply: sampler.applyPadsSnapshot };
   // Bridge to the sampler's trigger/release (set by BoardBar) so MIDI-learned + 1-8
   // keyboard pads fire the sampler without threading the api through the keymap effect.
   const samplerCtl = useRef<{ trigger: (i: number) => void; release: (i: number) => void } | null>(null);
@@ -3050,11 +3078,16 @@ function AppBody() {
       if (room.enabled && !room.controlling) return;
       if (track.videoId) {
         roomLoadTarget.current[id] = track.videoId; // so the master's echo snapshot doesn't reload it
+        // ★ AND SO THE ANCHOR'S TICK DOESN'T EITHER (operator, 2026-11-11: session sync audit): until
+        // the anchor lands this track its ticks and board still name the old one, which the resync
+        // read as a divergence and "repaired" by reloading the OLD track over our pick. A follower
+        // holds its own pick for up to 30 s (decideOwnLoad). The anchor itself has nothing to hold.
+        ownLoad.current[id] = room.enabled && !room.isAnchor ? { vid: track.videoId, at: performance.now() } : null;
         emit({ kind: "load", deck: id, videoId: track.videoId, name: track.title, artist: track.artist });
       }
       void loadTrackToDeck(id, track);
     },
-    [emit, loadTrackToDeck, room.enabled, room.controlling],
+    [emit, loadTrackToDeck, room.enabled, room.controlling, room.isAnchor],
   );
 
   // ---- Auto-mix (auto-DJ) ------------------------------------------------------
@@ -3500,9 +3533,26 @@ function AppBody() {
     .map((p) => p.id)
     .sort()
     .join(",");
+  // Every board publish goes through here: stamped (rev + our id) and remembered, so the repair loop
+  // below knows what the room last heard from us.
+  const pubState = useRef<{ fp: string; at: number; changedAt: number | null; lastFp: string; lastChangeAt: number | null }>({
+    fp: "",
+    at: 0,
+    changedAt: null,
+    lastFp: "",
+    lastChangeAt: null,
+  });
+  const publishBoard = useCallback(() => {
+    const snap = buildSnapshot();
+    const ps = pubState.current;
+    ps.fp = boardFingerprint(snap as unknown as { decks: Record<string, unknown> } & Record<string, unknown>);
+    ps.at = performance.now();
+    ps.changedAt = null;
+    room.publishState(stampSnapshot(snap));
+  }, [buildSnapshot, stampSnapshot, room.publishState]);
   useEffect(() => {
     if (room.isAnchor && room.status === "online") {
-      room.publishState(buildSnapshot());
+      publishBoard();
       // Re-publish stem envelopes too (covers session start / a track load / a peer
       // joining) so a remote's 4-lane display fills in alongside the board snapshot.
       sendHostStemView("A");
@@ -3521,7 +3571,7 @@ function AppBody() {
   // FX-pad throws would replay into an empty rack). The capture is already running by now.
   useEffect(() => {
     if (room.roomPublic && room.isAnchor && room.status === "online") {
-      room.publishState(buildSnapshot());
+      publishBoard();
       sendHostStemView("A");
       sendHostStemView("B");
     }
@@ -3536,12 +3586,55 @@ function AppBody() {
   useEffect(() => {
     if (!room.isAnchor || room.status !== "online") return;
     if (autoStatus.phase === "mixing" || autoStatus.phase === "armed") {
-      room.publishState(buildSnapshot());
+      publishBoard();
       sendHostStemView("A");
       sendHostStemView("B");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStatus.phase, autoStatus.liveDeck, room.isAnchor, room.status]);
+
+  // ★ THE BOARD REPAIRS ITSELF (operator, 2026-11-11: session sync audit). The publishes above are
+  // event-driven only, and the follower used to apply a deck's state once per track, so anything that
+  // was not an intent — every auto-DJ EQ kill, filter sweep, tempo reset, loop roll — and any intent
+  // lost in a reconnect blip never reached a guest. Now the anchor watches its own board (a
+  // fingerprint without the playheads, every 250 ms) and republishes after any change — trailing
+  // debounce, with a ceiling so a continuous sweep still goes out — plus a slow heartbeat while peers
+  // are joined. Followers apply each newer one idempotently (useSessionSync / reconcileDeck), so a
+  // republish that changes nothing changes nothing. Held while a deck is mid-load: that board still
+  // names the OLD track (publishedDeckId), which a follower that already landed the new one would
+  // read as "load the old one". Cost: a ~5–10 KB message per change burst and per 8 s heartbeat; the
+  // room persists at most one per 10 s (server/room.ts PERSIST_MIN_MS) and the board stays far under
+  // its 128 KiB value cap.
+  const peersJoined = joinedSig.length > 0;
+  useEffect(() => {
+    if (!room.isAnchor || room.status !== "online") return;
+    const iv = setInterval(() => {
+      const now = performance.now();
+      const ps = pubState.current;
+      const fp = boardFingerprint(buildSnapshot() as unknown as { decks: Record<string, unknown> } & Record<string, unknown>);
+      if (fp !== ps.lastFp) {
+        ps.lastFp = fp;
+        ps.lastChangeAt = now;
+        if (fp !== ps.fp && ps.changedAt == null) ps.changedAt = now;
+      }
+      if (fp === ps.fp) ps.changedAt = null;
+      const loadingA = loadingNow.current.A ? now - (loadingSince.current.A || now) : null;
+      const loadingB = loadingNow.current.B ? now - (loadingSince.current.B || now) : null;
+      const loadingForMs = loadingA == null ? loadingB : loadingB == null ? loadingA : Math.max(loadingA, loadingB);
+      const go = decideRepublish({
+        fp,
+        publishedFp: ps.fp,
+        changedAt: ps.changedAt,
+        lastChangeAt: ps.lastChangeAt,
+        lastPublishAt: ps.at,
+        peersJoined,
+        loadingForMs,
+        now,
+      });
+      if (go === "publish") publishBoard();
+    }, 250);
+    return () => clearInterval(iv);
+  }, [room.isAnchor, room.status, peersJoined, buildSnapshot, publishBoard]);
 
   // The MOMENT we join an existing session (and we're not the clock), pull the current
   // set so decks/waveforms/transport snap into place immediately. followRef is already
@@ -3664,7 +3757,9 @@ function AppBody() {
       roomLoadTarget.current = { A: null, B: null };
       reconciledTarget.current = { A: null, B: null };
       pendingRoomLoad.current = { A: null, B: null };
-      lastSnapshotRef.current = null;
+      lastSnapshotRef.current = null; // also forgets the snapshot ordering (useSessionSync)
+      ownLoad.current = { A: null, B: null };
+      samplerPadsRef.current?.apply(null); // back to our own global pads
       refresh();
     }
   }, [room.enabled, room.status, engine, refresh]);

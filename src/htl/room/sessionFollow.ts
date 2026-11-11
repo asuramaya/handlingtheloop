@@ -68,6 +68,11 @@ export interface SnapshotDeckInput {
   roomLoadTarget: string | null; // a room-driven load already in flight for this deck
   loadingVid: string; //         the id currently decoding ("" = none)
   reconciledTarget: string | null; // the id whose discrete state we've already reconciled
+  /** ★ The snapshot is NEWER than the last one applied (rev-ordered, see snapshotRepair) → repair the
+   *  loaded deck again, not just once per videoId (operator, 2026-11-11: session sync audit). The
+   *  reconcile itself is idempotent and skips our own in-flight edits, which is what makes this safe.
+   *  Absent/false = the old once-per-videoId rule (an older anchor's unversioned snapshot). */
+  repair?: boolean;
 }
 
 export function decideSnapshotDeck(p: SnapshotDeckInput): SnapshotDeckAction {
@@ -75,8 +80,9 @@ export function decideSnapshotDeck(p: SnapshotDeckInput): SnapshotDeckAction {
   if (!v) return "skip";
   // A genuinely new track for this deck that isn't already loaded / loading / targeted → load once.
   if (v !== p.loadedId && v !== p.roomLoadTarget && v !== p.loadingVid) return "load";
-  // Already showing it but not yet reconciled → mirror its cue/loop/stem/fx state once.
-  if (v === p.loadedId && p.reconciledTarget !== v) return "reconcile";
+  // Already showing it but not yet reconciled → mirror its cue/loop/stem/fx state; again whenever a
+  // newer snapshot arrives.
+  if (v === p.loadedId && (p.reconciledTarget !== v || p.repair === true)) return "reconcile";
   return "skip";
 }
 

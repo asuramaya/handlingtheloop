@@ -4,7 +4,35 @@
 // decks without re-downloading. Pure data + a Store — the app builds snapshots
 // from the engine and applies them back, so this module stays audio-agnostic.
 import { Store } from "../persistence";
-import type { FxSlot, FxChainSlot } from "../room/protocol";
+import type { FxSlot, FxChainSlot, SampleMode, StemName } from "../room/protocol";
+import type { WireGrid } from "../room/gridWire";
+
+/** One REGION sampler pad (a slice of the track on its deck), as the board describes it. */
+export interface RegionPadSnapshot {
+  start: number;
+  end: number;
+  name: string;
+  mode: SampleMode;
+  gain: number;
+  pitch?: number;
+  stems?: StemName[];
+}
+/** One GLOBAL sampler pad (an account-stored clip, fetched by id). */
+export interface GlobalPadSnapshot {
+  sampleId?: string;
+  name: string;
+  mode: SampleMode;
+  gain: number;
+  pitch: number;
+}
+/** ★ The sampler pads ride the board (operator, 2026-11-11: session sync audit): a pad assignment
+ *  crossed only as a one-shot `sample` intent, so a device that joined after the host grabbed its
+ *  pads never had them. Region pads are keyed by the videoId they slice, so they only ever land on
+ *  the track they describe. */
+export interface PadsSnapshot {
+  regions?: { A?: { vid: string; pads: (RegionPadSnapshot | null)[] }; B?: { vid: string; pads: (RegionPadSnapshot | null)[] } };
+  globals?: (GlobalPadSnapshot | null)[];
+}
 
 export interface LoopSnapshot {
   active: boolean;
@@ -72,6 +100,11 @@ export interface DeckSnapshot {
   // waveforms ride a separate envelope channel (the host streams them).
   hasStems?: boolean;
   stemsNeural?: boolean; // neural split (4 real lanes) vs DSP/none
+  // ★ THE ANCHOR'S BEAT GRID for this track (operator, 2026-11-11: session sync audit). Every device
+  // used to analyse the track itself, so two devices could disagree on where the beats are and
+  // quantize / beat loops / beat jump / sync phase landed in different places. A follower adopts
+  // this one for the videoId it describes. Optional: absent on older peers (each keeps its own).
+  grid?: WireGrid;
 }
 
 export interface SessionSnapshot {
@@ -83,6 +116,14 @@ export interface SessionSnapshot {
   // joining mid-session sees the SYNC/KEY buttons already lit, not just on next toggle.
   syncSlave?: "A" | "B" | null;
   keySlave?: "A" | "B" | null;
+  // ★ ORDERING (operator, 2026-11-11: session sync audit). `rev` grows with every publish from one
+  // anchor and `by` names that anchor, so a follower can tell a newer board from a stale catch-up
+  // (a reconnect's request-state, a cold room's persisted copy) and never apply the older one. A
+  // different `by` is a new anchor, whose counter is not compared with the old one's. Both optional:
+  // an older anchor omits them and its snapshots apply exactly as before.
+  rev?: number;
+  by?: string;
+  pads?: PadsSnapshot;
 }
 
 const store = new Store<SessionSnapshot | null>("session", null, 1);

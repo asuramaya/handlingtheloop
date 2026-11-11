@@ -8,10 +8,12 @@ import type { StemAckState } from "../htl/room/protocol";
 // (assigned by the far-below mixer) and passed in. The type-only `../App` import is erased at build
 // (no runtime cycle). See htl-refactor-monoliths.
 import { useCallback, useEffect, useRef } from "react";
-import { padSlots } from "./deckApply";
+import { fxDiffers, reconcileDeck } from "./deckApply";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { applyBoardAction } from "@htl/board/boardActions";
 import { isMobileDevice, type Deck, type TrackMeta, type DeckSnapshot, type SessionSnapshot, type MixQueue } from "@htl";
+import type { PadsSnapshot } from "@htl/state/session";
+import { decideOwnLoad, drainAudible, fieldHeld, queueAudible, snapshotOrder, type OwnLoad, type PendingAudible, type SnapField, type TouchMap } from "@htl/room/snapshotRepair";
 import type { DeckId } from "@htl/audio";
 import type { Intent, TickDecks } from "@htl/room";
 import {
@@ -90,6 +92,17 @@ export interface SessionSyncDeps {
   mixQueueRef: MutableRefObject<MixQueue | null>;
   autoIsRemoteRef: MutableRefObject<boolean>;
   samplerApplyRef: MutableRefObject<((intent: Extract<Intent, { kind: "sample" }>) => void) | null>;
+  // ★ The snapshot-repair bridges (operator, 2026-11-11: session sync audit). OPTIONAL so this hook
+  // still builds against an App that has not wired them; without them the repair runs with no
+  // touch grace, no own-load exemption and no pad sync.
+  /** When THIS device last changed each snapshot field (stamped by App's emit). */
+  localTouch?: MutableRefObject<TouchMap>;
+  /** A track this device shared (loadAndShare) that the anchor has not landed yet. */
+  ownLoad?: MutableRefObject<Record<DeckId, OwnLoad | null>>;
+  /** A recorded set replays its snapshots out of order (seek back) — ordering does not apply. */
+  replayActiveRef?: MutableRefObject<boolean>;
+  /** The sampler's pad-board bridge (assigned once useSampler exists). */
+  samplerPadsRef?: MutableRefObject<{ apply: (p: PadsSnapshot | null) => void } | null>;
 }
 
 export interface SessionSync {
@@ -108,7 +121,6 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     loaded,
     setCrossfade,
     setSettings,
-    applyDeckStems,
     latest,
     stemViewWaitTimers,
     roomLoadTarget,
@@ -134,22 +146,40 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     mixQueueRef,
     autoIsRemoteRef,
     samplerApplyRef,
+    localTouch,
+    ownLoad,
+    replayActiveRef,
+    samplerPadsRef,
   } = deps;
+
+  // May a snapshot overwrite `field` on deck `id` now? (our own recent edit / own shared load → no)
+  const heldFor = (id: DeckId, snapVid: string | null) => {
+    const now = performance.now();
+    const touch = localTouch?.current[id] ?? {};
+    const own = ownLoad?.current[id] ?? null;
+    return (f: SnapField) => fieldHeld({ touchedAt: touch[f], now, own, snapVid });
+  };
 
   // A received snapshot mirrors the master's set: (re)load decks whose track
   // changed (with all controls), and for an already-loaded deck mirror the master's
   // loop / cue / hot-cue STATE (absolute positions, so exact regardless of our own
   // playhead). Crossfade + zoom always track; faders + playhead arrive via intents
   // + ticks, so we don't reset them here.
-  // Mirror a deck's full state from a snapshot — the INITIAL alignment for a pure follower.
-  // Deduped per videoId by the caller, so it runs once per (re)load, NOT on every republished
-  // snapshot. Adopts CONTINUOUS controls too (tempo / pitch / levels / EQ / filter): a guest
+  // Mirror a deck's full state from a snapshot — the initial alignment AND, since the audit of
+  // 2026-11-11, the repair on every newer (rev-ordered) snapshot; an older anchor's unversioned
+  // snapshot still reconciles once per videoId. Adopts CONTINUOUS controls too (tempo / pitch / levels / EQ / filter): a guest
   // must never keep a stale local tempo (e.g. +8%) that desyncs its own playback from the host
   // on join. Safe because applyRoomSnapshot only runs for non-driving followers, which have no
   // live drag of their own to fight; ongoing host changes still cross as intents. Playhead is
   // left to ticks/transport (no seek here — that would skip).
   // Per-deck token for the FX restore deferred until the worklets exist (see reconcileDeckState).
   const fxApplySeq = useRef<Partial<Record<DeckId, number>>>({});
+  // The stamp of the newest snapshot applied (see snapshotOrder); meaningful only while
+  // lastSnapshotRef holds one.
+  const lastApplied = useRef<{ rev: number; by: string } | null>(null);
+  // ANCHOR: audible intents addressed to a track still decoding here (see queueAudible).
+  const pendingAudible = useRef<Record<DeckId, PendingAudible[]>>({ A: [], B: [] });
+  const applyIntentRef = useRef<(intent: Intent) => void>(() => {}); // set once applyIntent exists (below)
   const reconcileDeckState = useCallback(
     (id: DeckId, d: DeckSnapshot) => {
       const deck = engine.deck(id);
@@ -158,38 +188,13 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // nameless — the tick-resync loads from a bare videoId — stayed nameless for the whole
       // session while its duration, BPM and key were all correct (thread 47468bb9).
       nameDeckFromSnapshot(id, d);
-      deck.setTempo(d.tempo);
-      deck.setTrim(d.trim);
-      deck.setLevel(d.level);
-      deck.setEqLow(d.eqLow);
-      deck.setEqMid(d.eqMid);
-      deck.setEqHigh(d.eqHigh);
-      if (d.eqLowFreq != null) deck.setEqLowFreq(d.eqLowFreq);
-      if (d.eqMidFreq != null) deck.setEqMidFreq(d.eqMidFreq);
-      if (d.eqHighFreq != null) deck.setEqHighFreq(d.eqHighFreq);
-      if (d.eqMidQ != null) deck.setEqMidQ(d.eqMidQ);
-      if (d.eqLowShape != null) deck.setEqLowShape(d.eqLowShape);
-      if (d.eqMidShape != null) deck.setEqMidShape(d.eqMidShape);
-      if (d.eqHighShape != null) deck.setEqHighShape(d.eqHighShape);
-      if (d.eqLowQ != null) deck.setEqLowQ(d.eqLowQ);
-      if (d.eqHighQ != null) deck.setEqHighQ(d.eqHighQ);
-      deck.setFilter(d.filter ?? 0);
-      if (d.eqHpFreq != null) deck.setEqHpFreq(d.eqHpFreq);
-      if (d.eqHpQ != null) deck.setEqHpQ(d.eqHpQ);
-      if (d.eqLpFreq != null) deck.setEqLpFreq(d.eqLpFreq);
-      if (d.eqLpQ != null) deck.setEqLpQ(d.eqLpQ);
-      if (d.eqMix != null) deck.setEqMix(d.eqMix);
-      if (d.eqOut != null) deck.setEqOut(d.eqOut);
-      deck.setEqBypass(!!d.eqBypass);
-      deck.setPitch(d.pitchSemis ?? 0);
-      // Discrete state — absolute, so exact regardless of our own playhead.
-      deck.cuePoint = d.cuePoint;
-      const slots = deck.hotCues.length;
-      deck.hotCues = padSlots([...d.hotCues], slots);
-      deck.hotLoops = padSlots((d.hotLoops ?? []).map((l) => (l ? { ...l } : null)), slots);
-      deck.loop = d.loop ? { ...d.loop } : null;
-      deck.loopInPoint = d.loopInPoint;
-      applyDeckStems(deck, d);
+      // ★ FIELD BY FIELD, ONLY WHERE IT DIFFERS, NEVER OVER OUR OWN EDIT (operator, 2026-11-11:
+      // session sync audit). This now runs on every NEWER snapshot, not once per videoId, so it is
+      // the repair for any intent lost in a blip and for the auto-DJ's direct deck moves; see
+      // reconcileDeck in App/deckApply.ts for the two rules that make that safe over a live deck.
+      const held = heldFor(id, d.videoId);
+      const wrote = reconcileDeck(deck, d, held);
+      if (wrote.length) event("room.repair", { deck: id, fields: wrote.join(",") });
       // #3 self-heal: the snapshot may have lit this deck's stem cells (markRemoteStems)
       // without the host's 4-lane envelopes yet present. stemControlsReady already gates
       // the cells so they can't drive nothing, but don't leave them silently waiting —
@@ -204,8 +209,6 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           setStatusFor(id, { phase: "downloading", detail: "Waiting for the host's stems…" });
         }, 7000);
       }
-      if (deck.keylock !== d.keylock) deck.setKeylock(d.keylock);
-      if (deck.quantizing !== d.quantize) deck.setQuantize(d.quantize);
       // The FX RACK (Delay/Reverb/Saturator…) — reconcile it too, so a track loaded via a `load`
       // intent (no restore snapshot) gets its backing effects. Without this the ECHO/VERB/SAT
       // throws fire into an empty rack (silent) on replay AND for a guest who loaded by intent.
@@ -217,6 +220,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       // repair — two warnings and a repair line per boot, and effects that were briefly not there.
       // Wait for the modules when they are not in yet; a per-deck token makes sure a NEWER snapshot
       // applied meanwhile is never overwritten by this older, delayed one.
+      // Idempotent like the rest: an equal rack is not touched at all, and our own FX edit inside the
+      // touch grace is not overwritten.
+      if (held("fx") || !fxDiffers(deck, d)) return;
       const tok = (fxApplySeq.current[id] = (fxApplySeq.current[id] ?? 0) + 1);
       if (engine.fxWorkletsReady) applyDeckFxSnapshot(deck, d);
       else
@@ -286,16 +292,46 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         event("room.snapshot", { applied: false, why: snap ? "no decks" : "empty" });
         return;
       }
-      lastSnapshotRef.current = snap; // keep for the post-decode reconcile (effect below)
-      setCrossfade(snap.crossfade);
-      engine.setCrossfade(snap.crossfade);
-      if (snap.tempoRange != null) setSettings((s) => (s.tempoRange === snap.tempoRange ? s : { ...s, tempoRange: snap.tempoRange! }));
-      // Mirror the SYNC/KEY button state (display only — tempo/pitch arrive as intents).
-      if (snap.syncSlave !== undefined) engine.mirrorSyncDisplay(snap.syncSlave);
-      if (snap.keySlave !== undefined) engine.mirrorKeyDisplay(snap.keySlave);
+      // ★ NEVER AN OLDER BOARD OVER A NEWER ONE (operator, 2026-11-11: session sync audit). A
+      // reconnect's request-state answers with the room's LAST STORED snapshot, and a cold room's is
+      // the persisted copy from up to 10 s before; both used to re-apply crossfade, tempo range and
+      // the SYNC/KEY display unconditionally. The anchor's rev orders them; a recorded set replays
+      // out of order on purpose and is exempt. (lastSnapshotRef is cleared on leave, which also
+      // forgets the ordering — a new session starts fresh.)
+      const prevStamp = lastSnapshotRef.current ? lastApplied.current : null;
+      const order = replayActiveRef?.current ? "unversioned" : snapshotOrder(snap, prevStamp);
+      if (order === "stale") {
+        event("room.snapshot", { applied: false, why: "stale", rev: snap.rev ?? null, lastRev: prevStamp?.rev ?? null });
+        return;
+      }
+      if (order === "newer") lastApplied.current = { rev: snap.rev!, by: snap.by! };
+      lastSnapshotRef.current = snap; // keep for the post-decode reconcile (effect below) — always the newest
+      // "same" = the very board we already applied (a catch-up echo): only first-time per-deck work.
+      if (order !== "same") {
+        const bt = localTouch?.current.board ?? {};
+        const now = performance.now();
+        const heldB = (f: SnapField) => fieldHeld({ touchedAt: bt[f], now, own: null, snapVid: null });
+        if (!heldB("crossfade")) {
+          setCrossfade(snap.crossfade);
+          engine.setCrossfade(snap.crossfade);
+        }
+        if (snap.tempoRange != null && !heldB("tempoRange")) setSettings((s) => (s.tempoRange === snap.tempoRange ? s : { ...s, tempoRange: snap.tempoRange! }));
+        // Mirror the SYNC/KEY button state (display only — tempo/pitch arrive as intents).
+        if (snap.syncSlave !== undefined) engine.mirrorSyncDisplay(snap.syncSlave);
+        if (snap.keySlave !== undefined) engine.mirrorKeyDisplay(snap.keySlave);
+        // The sampler pads (a joiner never got the ones assigned before it arrived).
+        if (snap.pads && !replayActiveRef?.current && !heldB("pads")) samplerPadsRef?.current?.apply(snap.pads);
+      }
       (["A", "B"] as DeckId[]).forEach((id) => {
         const d = snap.decks[id];
         if (!d) return;
+        // ★ OUR OWN SHARED TRACK IS NOT A DIVERGENCE. Until the anchor lands the track this device
+        // shared, its board still names the old one; reading that as "load the old track" reverted
+        // our own pick (see decideOwnLoad). Hold this deck until the anchor catches up.
+        if (decideOwnLoad({ own: ownLoad?.current[id] ?? null, tickVid: d.videoId, loadedId: latest.current.loaded[id], now: performance.now() }) === "hold") {
+          event("room.snapshot", { deck: id, action: "own-load-hold", snapVid: d.videoId ?? null });
+          return;
+        }
         // Load-once / reconcile-once / skip — the pure dedupe decision (see sessionFollow).
         const action = decideSnapshotDeck({
           snapVideoId: d.videoId,
@@ -303,8 +339,9 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           roomLoadTarget: roomLoadTarget.current[id],
           loadingVid: loadingVid.current[id],
           reconciledTarget: reconciledTarget.current[id],
+          repair: order === "newer",
         });
-        event("room.snapshot", { deck: id, action, snapVid: d.videoId ?? null, loadedVid: latest.current.loaded[id] || null });
+        event("room.snapshot", { deck: id, action, snapVid: d.videoId ?? null, loadedVid: latest.current.loaded[id] || null, rev: snap.rev ?? null });
         if (action === "load" && d.videoId) {
           // New track for this deck → load it ONCE (self-healing dedupe). Both decks load
           // concurrently so neither waits on the other; each is guarded so a failed decode
@@ -324,9 +361,8 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
           };
           runRoomLoad(id, d.videoId, track, d);
         } else if (action === "reconcile") {
-          // Reconcile a loaded track's discrete state ONCE (deduped per videoId) — so a
-          // republished snapshot can't stomp a non-anchor controller's live cue/loop/stem
-          // edits; ongoing changes cross as intents.
+          // Reconcile a loaded track's state: once per videoId for an unversioned snapshot, and again
+          // on every newer one (the repair). Our own live edits are protected by the touch grace.
           reconcileDeckState(id, d);
           reconciledTarget.current[id] = d.videoId;
         }
@@ -369,8 +405,32 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         any = true;
       }
     });
-    if (any) refresh();
+    if (any) {
+      refresh();
+      // ★ AND ASK FOR THE BOARD AS IT IS NOW (operator, 2026-11-11: session sync audit). Intents
+      // that arrived during the decode were applied to the OLD buffer and then wiped by setBuffer's
+      // loops.reset(); the snapshot used above is the newest we hold, but one may be in flight.
+      // A newer answer repairs the deck; the same one is ignored (snapshotOrder "same").
+      roomRef.current?.requestState();
+    }
   }, [engine, loaded, reconcileDeckState, refresh]);
+
+  // ANCHOR: the incoming track landed → apply the audible intents that were waiting for it.
+  useEffect(() => {
+    const now = performance.now();
+    let any = false;
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      if (!pendingAudible.current[id].length) return;
+      const { apply, keep } = drainAudible(pendingAudible.current[id], loaded[id], now);
+      pendingAudible.current[id] = keep;
+      for (const intent of apply) {
+        event("room.intent", { deck: id, kind: intent.kind, action: "action" in intent ? intent.action : null, applied: true, queued: true });
+        applyIntentRef.current(intent);
+        any = true;
+      }
+    });
+    if (any) refresh();
+  }, [loaded, refresh]);
 
   // Apply ONE control intent to the local engine — used for both inbound remote intents and our
   // own actions. Pure local effect, no network. The SWITCH lives in src/htl/room/applyIntent.ts
@@ -418,6 +478,7 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [engine, runRoomLoad, refresh],
   );
+  applyIntentRef.current = applyIntent;
 
   // The videoId the anchor last stamped on each deck's tick (null: none yet / an older anchor).
   const tickVid = useRef<Record<DeckId, string | null>>({ A: null, B: null });
@@ -468,7 +529,17 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         event("room.intent", { deck: d, kind: intent.kind, action: "action" in intent ? intent.action : null, applied: !foreign });
         // The host's play/seek/hot-cue on a deck still holding another track would sound THAT track;
         // the tick follower starts the session's track at the live position once it lands.
-        if (foreign) return;
+        if (foreign) {
+          // ★ BUT THE ANCHOR HAS NO TICK TO FOLLOW (operator, 2026-11-11: session sync audit): a
+          // guest's play / seek / hot-cue press for the track the anchor is still decoding was
+          // dropped here in silence. Queue it for that track; the drain effect applies it on landing.
+          const target = roomLoadTarget.current[d];
+          if (!snapFollowRef.current && target && target !== latest.current.loaded[d]) {
+            pendingAudible.current[d] = queueAudible(pendingAudible.current[d], intent, target, performance.now());
+            event("room.intent", { deck: d, kind: intent.kind, queued: true, vid: target });
+          }
+          return;
+        }
       }
       // A peer's jog move is proof its scrub is alive (the watchdog's clock), and starts one whose
       // start was lost.
@@ -508,6 +579,19 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
         // snapshot so the new track's cue/loop/fx land. See sessionFollow.decideTickResync.
         const vid = t.vid;
         tickVid.current[id] = vid ?? null;
+        // ★ OUR OWN SHARED LOAD FIRST (operator, 2026-11-11: session sync audit) — a separate early
+        // clause, so decideTickResync's own rules are untouched. See decideOwnLoad.
+        if (ownLoad) {
+          const own = ownLoad.current[id];
+          const ownDec = decideOwnLoad({ own, tickVid: vid, loadedId: latest.current.loaded[id], now });
+          if (ownDec === "confirm" && own) {
+            own.confirmedAt = now;
+            event("room.resync", { deck: id, action: "own-load-confirmed", vid: own.vid });
+          } else if (ownDec === "expire") {
+            ownLoad.current[id] = null;
+            event("room.resync", { deck: id, action: "own-load-expired", vid: own?.vid ?? null });
+          } else if (ownDec === "hold") return; // our pick, not yet the anchor's → don't drive, don't reload
+        }
         const loadingThis = vid != null && (roomLoadTarget.current[id] === vid || loadingVid.current[id] === vid);
         const lastResync = resyncAt.current[id];
         const resync = decideTickResync({

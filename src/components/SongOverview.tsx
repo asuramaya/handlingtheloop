@@ -643,7 +643,13 @@ export function SongOverview(props: SongOverviewProps) {
       // label would put the "you are in the zone" cue a few px off the thing it belongs to.
       const ko = Math.max(1, p.markerStyle?.overview ?? 1);
       const hoverH = Math.max(2.4, m.thickness * 2) * ko * dpr;
-      const hbox = (m.label ? LABEL_BOX_PX * ko + 2 : Math.max(2.4, m.thickness * 2) * ko) * dpr;
+      // ★ THE HIGHLIGHT SITS EXACTLY ON THE RESTING LABEL (operator, 2026-11-10, a phone: "the markers
+      // do this weird overlap thing instead of highlighting or enlarging the existing marker" — a "CC").
+      // On a narrow rail the resting letter is centred across the WHOLE rail (labelsShareColumn) at the
+      // resting box's centre line; the highlight drew its own letter at its lane's centre, a few px
+      // lower, so both showed. Same centre, same line, and a dark plate under the enlarged letter.
+      const hShare = labelsShareColumn(w / dpr, ko);
+      const hbox = (m.label ? LABEL_BOX_PX * ko : Math.max(2.4, m.thickness * 2) * ko) * dpr;
       const cy = insetMark(y, hbox, h) + hbox / 2;
       const top = cy - hoverH / 2;
       // A soft band the height of the SNAP ZONE itself — the answer to "am I in the right place
@@ -653,20 +659,26 @@ export function SongOverview(props: SongOverviewProps) {
       ctx.fillRect(lx, Math.max(0, Math.min(h - zoneH, cy - zoneH / 2)), lw, zoneH);
       ctx.fillStyle = m.color;
       if (m.label) {
-        ctx.font = `bold ${10 * ko * dpr}px ui-monospace, monospace`;
+        ctx.font = `bold ${10.5 * ko * dpr}px ui-monospace, monospace`;
         ctx.textBaseline = "middle";
+        const bx = hShare ? 0 : lx;
+        const bw = hShare ? w : lw;
+        const lcx = bx + bw / 2;
         const gap = (m.label.length * 7 + 8) * ko * dpr;
-        const gx = lx + (lw - gap) / 2;
-        ctx.fillRect(lx, top, Math.max(0, gx - lx), hoverH);
-        ctx.fillRect(gx + gap, top, Math.max(0, lx + lw - gx - gap), hoverH);
+        const gx = lcx - gap / 2;
+        ctx.fillRect(lx, top, Math.max(0, Math.min(gx, lx + lw) - lx), hoverH);
+        ctx.fillRect(Math.max(gx + gap, lx), top, Math.max(0, lx + lw - Math.max(gx + gap, lx)), hoverH);
+        // the plate: covers the resting glyph so one letter shows, larger
+        ctx.fillStyle = "rgba(4,6,10,0.92)";
+        ctx.fillRect(gx + dpr, cy - hbox / 2 - dpr, gap - 2 * dpr, hbox + 2 * dpr);
         ctx.textAlign = "center";
         ctx.lineJoin = "round";
         ctx.miterLimit = 2;
         ctx.lineWidth = 3.5 * ko * dpr;
         ctx.strokeStyle = "rgba(4,6,10,0.92)";
-        ctx.strokeText(m.label, lx + lw / 2, cy);
+        ctx.strokeText(m.label, lcx, cy);
         ctx.fillStyle = opaque(m.color);
-        ctx.fillText(m.label, lx + lw / 2, cy);
+        ctx.fillText(m.label, lcx, cy);
       } else {
         ctx.fillRect(lx, top, lw, hoverH);
       }

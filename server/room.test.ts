@@ -1479,3 +1479,389 @@ describe("automix is HOST ONLY (operator ruling 34075fae)", () => {
     expect(relayed).toEqual([]);
   });
 });
+
+// ★ SESSION SYNC AUDIT, TRANSPORT SLICE (operator, 2026-11-11). Each block below pins one defect the
+// audit found in the room server: the anchor's liveness and handover, admission that survives a
+// reconnect, refusals that answer, listener ordering, and the persist/stemview throttles that used
+// to drop the newest value.
+describe("DjRoom anchor handover (session sync audit)", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(5_000_000);
+    h = makeRoom();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const anchorOf = () => (h.room as unknown as { anchorId: string | null }).anchorId;
+  // Advance the clock while `ws` ticks like a live anchor (4/s) — silence is now a verdict.
+  async function tickFor(ws: FakeWs, ms: number) {
+    for (let t = 0; t < ms; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      await h.send(ws, { t: "tick", decks: { A: { pos: t / 1000, playing: true }, B: { pos: 0, playing: false } } });
+    }
+  }
+  // A host anchor + a GRANTED (controlling) guest, both joined.
+  async function hostAndDrivingGuest() {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "grant", to: "g1", on: true });
+    return { host, guest };
+  }
+
+  it("a HOST anchor that drops is held for a grace, even with a driving guest eligible", async () => {
+    const { host } = await hostAndDrivingGuest();
+    expect(anchorOf()).toBe("host1");
+    await h.close(host);
+    expect(anchorOf(), "the slot must not move the instant the host blips").toBe("host1");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(anchorOf(), "past the grace the stand-in takes it").toBe("g1");
+  });
+
+  it("a host back inside the grace keeps the slot — the guest never takes it", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    await h.close(host);
+    const back = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(back, { t: "join" });
+    await tickFor(back, 10_000); // a live anchor ticks 4/s
+    expect(anchorOf()).toBe("host1");
+    expect(guest.msgs().filter((m) => m.t === "role" && m.anchorId === "g1")).toEqual([]);
+  });
+
+  it("a guest's settle during the grace does not take a held host slot", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    await h.close(host);
+    await h.send(guest, { t: "listen", on: true }); // settle(g1) while the host is away
+    expect(anchorOf()).toBe("host1");
+  });
+
+  it("the returning host RECLAIMS from a driving guest that stood in", async () => {
+    const { host } = await hostAndDrivingGuest();
+    await h.close(host);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(anchorOf()).toBe("g1");
+    const back = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(back, { t: "join" });
+    expect(anchorOf(), "a guest anchor is only a stand-in").toBe("host1");
+  });
+
+  it("a GUEST anchor that drops hands over at once (no grace for a stand-in)", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    await h.send(host, { t: "leave" }); // the host steps out → the driving guest holds the clock
+    expect(anchorOf()).toBe("g1");
+    const g2 = (await h.connect({ device: "g2", invited: true })).ws!;
+    await h.send(g2, { t: "join" });
+    await h.close(guest);
+    expect(anchorOf()).toBe("g2");
+  });
+
+  it("an anchor between its replaced socket and its join keeps the slot", async () => {
+    const { guest } = await hostAndDrivingGuest();
+    const fresh = (await h.connect({ device: "host1", host: true })).ws!; // reconnect: new socket, not yet joined
+    await h.send(guest, { t: "listen", on: true }); // somebody else's settle in the gap
+    expect(anchorOf(), "the gap is not a vacancy").toBe("host1");
+    await h.send(fresh, { t: "join" });
+    await tickFor(fresh, 10_000); // a live anchor ticks 4/s
+    expect(anchorOf()).toBe("host1");
+  });
+
+  it("the replaced socket is closed with 4004 — terminal for the client, so duplicate tabs stop kicking", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.connect({ device: "host1", host: true });
+    expect(host.closeCode).toBe(4004);
+  });
+
+  it("a SILENT anchor is treated as gone: closed, held for the host grace, then handed over", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    // The guest keeps talking (pings), the host says nothing at all — a half-open link.
+    for (let t = 0; t < 4; t++) {
+      await vi.advanceTimersByTimeAsync(1_500);
+      await h.send(guest, { t: "ping", c: t });
+    }
+    expect(host.closed, "the silent socket is given up on").toBe(true);
+    expect(host.closeCode, "not terminal: a live client reconnects").toBe(1001);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(anchorOf()).toBe("g1");
+  });
+
+  it("control: a TICKING anchor is never evicted", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    for (let t = 0; t < 40; t++) {
+      await vi.advanceTimersByTimeAsync(250);
+      await h.send(host, { t: "tick", decks: { A: { pos: t, playing: true }, B: { pos: 0, playing: false } } });
+      if (t % 20 === 0) await h.send(guest, { t: "ping", c: t });
+    }
+    expect(host.closed).toBe(false);
+    expect(anchorOf()).toBe("host1");
+  });
+
+  it("presence after a close never lists the closing socket (grace branch included)", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    await vi.advanceTimersByTimeAsync(2_000); // let the presence coalescer drain
+    const mark = guest.sent.length;
+    await h.close(host);
+    await vi.advanceTimersByTimeAsync(1_500);
+    const pres = guest.sent.slice(mark).map((m) => JSON.parse(m)).filter((m) => m.t === "presence");
+    expect(pres.length, "the grace branch broadcasts presence").toBeGreaterThan(0);
+    expect(pres.at(-1).peers.map((p: { id: string }) => p.id)).toEqual(["g1"]);
+  });
+
+  it("a later close of the NEW socket is not mistaken for a stale duplicate of a half-open old one", async () => {
+    const { host } = await hostAndDrivingGuest();
+    // Production can keep listing a closing socket; model that by refusing the close.
+    host.close = () => {};
+    const fresh = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(fresh, { t: "join" });
+    expect(anchorOf()).toBe("host1");
+    await h.close(fresh); // the new socket really goes
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(anchorOf(), "the close was handled, not skipped for the half-open old socket").toBe("g1");
+  });
+});
+
+describe("DjRoom admission + grants survive a reconnect (session sync audit)", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("an INVITED friend stays admitted after a reconnect (the grant was one-shot)", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const friend = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(friend, { t: "join" });
+    expect(h.state.store.get("approved")).toEqual(["g1"]);
+    const again = (await h.connect({ device: "g1" })).ws!; // the Worker consumed the invite: no flag now
+    await h.send(again, { t: "join" });
+    expect(again.a.pending).toBe(false);
+    expect(again.a.joined).toBe(true);
+  });
+
+  it("a join is acknowledged to that socket; a knock is not", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    expect(host.got("joined")).toBe(true);
+    const knocker = (await h.connect({ device: "g2" })).ws!;
+    await h.send(knocker, { t: "join" });
+    expect(knocker.got("joined")).toBe(false);
+    await h.send(host, { t: "approve", to: "g2" });
+    expect(knocker.got("joined"), "approval turns the knock into a join").toBe(true);
+  });
+
+  it("a granted guest re-asserting control(true) is a quiet success, not an error", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "grant", to: "g1", on: true });
+    const again = (await h.connect({ device: "g1" })).ws!;
+    await h.send(again, { t: "join" });
+    await h.send(again, { t: "control", on: true });
+    expect(again.got("error")).toBe(false);
+    expect(again.a.decks).toBe("AB");
+  });
+
+  it("control: an UNGRANTED guest's control(true) is still refused", async () => {
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(guest, { t: "control", on: true });
+    expect(guest.got("error")).toBe(true);
+    expect(guest.a.decks).toBe("");
+  });
+
+  it("a grant aimed at a device mid-reconnect is kept and applied when it arrives", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "grant", to: "g1", on: true }); // g1 is not here at all right now
+    expect(h.state.store.get("grants")).toEqual(["g1"]);
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    expect(drivesAnything(guest.a)).toBe(true);
+  });
+});
+
+describe("DjRoom answers refused intents (session sync audit)", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    h = makeRoom();
+  });
+
+  it("an ungranted guest's intent comes back as `refused`, to that socket only", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(guest, { t: "intent", intent: { kind: "crossfade", value: 0.5 } });
+    const r = guest.last("refused");
+    expect(r).toMatchObject({ t: "refused", kind: "crossfade" });
+    expect(typeof r?.reason).toBe("string");
+    expect(host.got("refused")).toBe(false);
+  });
+
+  it("a refused SWEEP answers once a second, not at input rate", async () => {
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    for (let i = 0; i < 30; i++) await h.send(guest, { t: "intent", intent: { kind: "crossfade", value: i / 30 } });
+    expect(guest.msgs().filter((m) => m.t === "refused").length).toBe(1);
+  });
+
+  it("control: a driving host is never refused", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "intent", intent: { kind: "crossfade", value: 0.5 } });
+    expect(host.got("refused")).toBe(false);
+  });
+});
+
+describe("DjRoom listener digest keeps order (session sync audit)", () => {
+  it("a held fxParam reaches the crowd BEFORE the fxRack reorder that followed it", async () => {
+    const h = makeRoom();
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "public", on: true });
+    const pub = (await h.connect({ device: "l1", pub: true })).ws!;
+    const mark = pub.sent.length;
+    await h.send(host, { t: "intent", intent: { kind: "fxParam", deck: "A", slot: 1, param: "mix", value: 0.7 } });
+    await h.send(host, { t: "intent", intent: { kind: "fxRack", deck: "A", rack: [] } });
+    const kinds = pub.sent
+      .slice(mark)
+      .map((m) => JSON.parse(m))
+      .filter((m) => m.t === "intent")
+      .map((m) => m.intent.kind);
+    expect(kinds).toEqual(["fxParam", "fxRack"]);
+  });
+});
+
+describe("DjRoom persistence keeps the LAST value (session sync audit)", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(7_000_000);
+    h = makeRoom();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const snapVid = () => (h.state.store.get("snapshot") as { decks: { A: { videoId: string } } } | undefined)?.decks.A.videoId;
+
+  it("a snapshot inside the throttle window lands at the window's end (trailing write)", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "ONE" }, B: {} } } });
+    expect(snapVid()).toBe("ONE");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "TWO" }, B: {} } } });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "THREE" }, B: {} } } });
+    expect(snapVid(), "still throttled: at most one write per window").toBe("ONE");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(snapVid(), "the newest board reached disk").toBe("THREE");
+  });
+
+  it("a cold restart after the trailing write serves the newest board", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "OLD" }, B: {} } } });
+    await h.send(host, { t: "state", snapshot: { decks: { A: { videoId: "NEW" }, B: {} } } });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const cold = new DjRoom(h.state as unknown as ConstructorParameters<typeof DjRoom>[0]);
+    await cold.fetch(new Request(`https://x/internal/count`)); // forces load()
+    expect((cold as unknown as { lastSnapshot: { decks: { A: { videoId: string } } } }).lastSnapshot.decks.A.videoId).toBe("NEW");
+  });
+
+  it("the auto-DJ state is persisted under the same rule", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "automix", state: { q: 1 } as never });
+    await h.send(host, { t: "automix", state: { q: 2 } as never });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.state.store.get("automix")).toEqual({ q: 2 });
+  });
+});
+
+describe("DjRoom stemview rate limit never keeps the old track (session sync audit)", () => {
+  let h: ReturnType<typeof makeRoom>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(9_000_000);
+    h = makeRoom();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const view = (videoId: string, n: number) => ({ videoId, n });
+
+  it("a NEW track's envelope inside the 2 s window is admitted at once", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "stemview", deck: "A", view: view("old", 1) });
+    await vi.advanceTimersByTimeAsync(300);
+    await h.send(host, { t: "stemview", deck: "A", view: view("new", 1) });
+    const got = guest.msgs().filter((m) => m.t === "stemview").map((m) => (m.view as { videoId: string }).videoId);
+    expect(got).toEqual(["old", "new"]);
+    const late = (await h.connect({ device: "g2", invited: true })).ws!;
+    await h.send(late, { t: "join" });
+    expect((late.last("stemview")?.view as { videoId: string }).videoId).toBe("new");
+  });
+
+  it("a same-track repeat inside the window is deferred, and the LATEST one lands", async () => {
+    const host = (await h.connect({ device: "host1", host: true })).ws!;
+    await h.send(host, { t: "join" });
+    await h.send(host, { t: "control", on: true });
+    const guest = (await h.connect({ device: "g1", invited: true })).ws!;
+    await h.send(guest, { t: "join" });
+    await h.send(host, { t: "stemview", deck: "A", view: view("t", 1) });
+    await h.send(host, { t: "stemview", deck: "A", view: view("t", 2) });
+    await h.send(host, { t: "stemview", deck: "A", view: view("t", 3) });
+    const ns = () => guest.msgs().filter((m) => m.t === "stemview").map((m) => (m.view as { n: number }).n);
+    expect(ns()).toEqual([1]);
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(ns()).toEqual([1, 3]);
+  });
+});
+
+describe("DjRoom relay shards learn of anchor moves, in order (session sync audit)", () => {
+  it("pushes `role` to every shard, and keeps one ordered push in flight per shard", async () => {
+    const bodies: { frames: { frame: { t: string } }[] }[] = [];
+    const pending: (() => void)[] = [];
+    const relay = {
+      idFromName: (name: string) => ({ name }),
+      get: () => ({
+        fetch: (_req: Request | string, init?: RequestInit) =>
+          new Promise<Response>((resolve) => {
+            bodies.push(JSON.parse(String(init?.body)) as { frames: { frame: { t: string } }[] });
+            pending.push(() => resolve(new Response(null, { status: 204 })));
+          }),
+      }),
+    };
+    const h = makeRoom({ RELAY: relay, RELAY_SHARDS: 1 });
+    const qs = new URLSearchParams({ device: "host1", name: "h", kind: "Mac", host: "1", rid: "acct1" });
+    try {
+      await h.room.fetch(new Request(`https://x/api/room?${qs}`, { headers: { Upgrade: "websocket" } }));
+    } catch {
+      /* Node's Response refuses 101 — the socket is accepted all the same */
+    }
+    const host = h.state.sockets[0];
+    await h.send(host, { t: "join" }); // takes the anchor → `role`
+    await h.send(host, { t: "control", on: true });
+    await h.send(host, { t: "intent", intent: { kind: "load", deck: "A", videoId: "v1" } });
+    await h.send(host, { t: "intent", intent: { kind: "transport", deck: "A", action: "play" } });
+    expect(bodies.length, "one push in flight per shard").toBe(1);
+    while (pending.length) {
+      pending.shift()!();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const frames = bodies.flatMap((b) => b.frames.map((f) => f.frame));
+    expect(frames.some((f) => f.t === "role")).toBe(true);
+    const intents = frames.filter((f) => f.t === "intent").map((f) => (f as unknown as { intent: { kind: string } }).intent.kind);
+    expect(intents).toEqual(["load", "transport"]);
+  });
+});

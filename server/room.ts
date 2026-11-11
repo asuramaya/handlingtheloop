@@ -85,6 +85,8 @@ const CACHE_KIND: Record<ServerMsg["t"], CacheKind> = {
   pong: "live", // one socket's clock reading
   settings: "live",
   kicked: "live",
+  joined: "live", // a per-socket ack
+  refused: "live", // a per-socket verdict
   error: "live",
 };
 function cacheKindOf(msg: ServerMsg): CacheKind {
@@ -128,7 +130,6 @@ export class DjRoom {
   // fallback (and a present host re-publishes everything on join), so a few seconds of on-disk lag
   // is fine. Throttle each cache to at most one write per PERSIST_MIN_MS.
   private static PERSIST_MIN_MS = 10_000;
-  private snapAt = 0;
   private snapTooBigAt = 0; // throttles the not-persisted warning; 0 = nothing wrong right now
   // ★ PER DECK, not per record. These throttle a write whose VALUE covers both decks, so a single
   // timestamp made deck B's publish collide with deck A's and vanish: leading-edge throttle, no
@@ -141,8 +142,12 @@ export class DjRoom {
   // have been the other fix and a worse one: the flush lands up to PERSIST_MIN_MS later, by which
   // time an idle DO may have been evicted, so the write that repairs the record is exactly the one
   // most likely never to run.
-  private stemAt: Record<string, number> = {};
-  private lyricAt: Record<string, number> = {};
+  // ★ AND NOW IT IS BOTH (operator, 2026-11-11: session sync audit): per-deck keys stay, and the
+  // leading-edge throttle gains a trailing write (throttledPersist). Measured against the worry
+  // above: a pending setTimeout keeps the DO resident (it is not eligible to hibernate while one is
+  // armed), and dropping was the CERTAIN loss where a deferred write is at worst the same loss.
+  private persistAt = new Map<string, number>();
+  private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** A legacy single-record `lyrics` value was loaded; the next successful per-deck write retires it. */
   private lyricsNeedSplit = false;
   // Public-room hardening. MAX_LISTENERS caps the anonymous crowd one DO admits (the
@@ -152,6 +157,28 @@ export class DjRoom {
   private static MAX_LISTENERS = 500;
   private static ANCHOR_GRACE_MS = 8000;
   private anchorGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  // ★ A HOST ANCHOR IS HELD THROUGH A BLIP EVEN WHEN SOMEONE ELSE COULD TAKE IT (operator,
+  // 2026-11-11: session sync audit). The clock used to move the instant the host's socket closed,
+  // to anyone joined — a listen-only guest included — and the blipped host came back to adopt the
+  // guest's board. A host anchor now gets this long to come back before the slot moves; a guest
+  // anchor still hands over at once (it is only ever a stand-in).
+  private static HOST_HANDOVER_GRACE_MS = 4000;
+  /** The anchor device the running grace timer is holding the slot for, and whether it is a host's. */
+  private graceFor: { device: string; host: boolean } | null = null;
+  // ★ SILENT-ANCHOR EVICTION. A half-open socket (or an iOS anchor locked mid-set) never closes, so
+  // the slot stayed on a device ticking into nothing and the whole room froze. The anchor ticks 4/s,
+  // so silence past this long while others are connected is treated exactly like a close.
+  private static ANCHOR_SILENT_MS = 4000;
+  /** Last inbound message per socket (in memory: a ticking anchor keeps the DO awake; after a wake a
+   *  socket with no entry is stamped "now" on first look, so eviction never fires on stale memory). */
+  private lastSeen = new WeakMap<Ws, number>();
+  private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Sockets this room has already given up on (replaced, evicted for silence, closing). Excluded from
+   *  every lookup: a closing socket can linger in getWebSockets, and a half-open replaced one made
+   *  hasOtherSocket skip the NEW socket's later close (no handover, no presence). */
+  private dead = new WeakSet<Ws>();
+  /** Per-socket·kind last refusal, so a refused sweep answers once a second, not at input rate. */
+  private refusedAt = new Map<string, number>();
   // Social presence: when a user's LAST socket here drops we don't declare them offline to their
   // friends immediately (a refresh would flap) — we arm the DO alarm and bridge "offline" up to
   // the Worker only if they're still gone after the grace. Separate concern from the 8s anchor
@@ -238,6 +265,7 @@ export class DjRoom {
     if (this.loaded) return;
     this.anchorId = (await this.state.storage.get<string>("anchor")) ?? null;
     this.lastSnapshot = await this.state.storage.get("snapshot");
+    this.lastAutomix = await this.state.storage.get("automix");
     this.lastStemView = (await this.state.storage.get<Record<string, unknown>>("stemviews")) ?? {};
     // ★ LYRICS ARE PER-DECK KEYS NOW, with a one-read migration from the old single record.
     // Both decks under one key coupled them: Deckard measured a real hip-hop track (Rap God, 1542
@@ -301,9 +329,49 @@ export class DjRoom {
   // carry the SAME envelope, so the dropped write is a duplicate — per-deck keying narrowed the
   // collision, content idempotence is what makes the remainder harmless. That distinction predicts
   // where this shape bites next: ANY throttled cache whose successive writes are not idempotent.
+  // ★ NOW DEFERRED (operator, 2026-11-11: session sync audit): the note above predicted it — a new
+  // track's envelope inside the window is NOT idempotent with the old one, and since a new track is
+  // admitted at once (see the stemview case) that collision became reachable. Trailing write per deck.
+  /** The track an (opaque) stem envelope belongs to — extractStemView stamps `videoId`; older peers don't. */
+  private static stemViewVid(view: unknown): string | undefined {
+    const v = (view as { videoId?: unknown } | null | undefined)?.videoId;
+    return typeof v === "string" ? v : undefined;
+  }
+  private stemViewPending = new Map<string, { from: string; deck: "A" | "B"; view: unknown; timer: ReturnType<typeof setTimeout> }>();
+  /** Drop every held frame for a deck (from any sender): a newer admitted frame supersedes them. */
+  private clearStemViewPending(deck: string): void {
+    for (const [k, p] of this.stemViewPending) {
+      if (p.deck !== deck) continue;
+      clearTimeout(p.timer);
+      this.stemViewPending.delete(k);
+    }
+  }
+  private admitStemView(from: string, deck: "A" | "B", view: unknown, rk: string, now: number): void {
+    this.stemViewRate[rk] = now;
+    this.lastStemView[deck] = view;
+    this.relay(from, { t: "stemview", deck, view });
+    void this.persistStemViews(deck);
+  }
+  // Hold the latest same-track frame inside the rate window; it lands when the window ends.
+  private deferStemView(from: string, deck: "A" | "B", view: unknown, rk: string, now: number): void {
+    const prev = this.stemViewPending.get(rk);
+    if (prev) {
+      prev.view = view; // trailing-LATEST: the armed timer carries the newest frame
+      return;
+    }
+    const wait = Math.max(0, (this.stemViewRate[rk] ?? 0) + 2000 - now);
+    const timer = setTimeout(() => {
+      const p = this.stemViewPending.get(rk);
+      this.stemViewPending.delete(rk);
+      if (p) this.admitStemView(p.from, p.deck, p.view, rk, Date.now());
+    }, wait);
+    this.stemViewPending.set(rk, { from, deck, view, timer });
+  }
+
   private async persistStemViews(deck: string): Promise<void> {
-    const now = Date.now();
-    if (now - (this.stemAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
+    await this.throttledPersist(`stemviews:${deck}`, () => this.writeStemViews());
+  }
+  private async writeStemViews(): Promise<void> {
     try {
       // Derived, not hand-written — and note the DENOMINATOR: this measures the WHOLE RECORD
       // (both decks under one key), where the admission gate above measures ONE deck. Those are
@@ -312,7 +380,6 @@ export class DjRoom {
       // this record budget, two admitted envelopes always fit — so this guard is defence in depth
       // rather than a live gate, and should never fire.
       if (JSON.stringify(this.lastStemView).length > MAX_STEMVIEW_RECORD_BYTES) return;
-      this.stemAt[deck] = now;
       await this.state.storage.put("stemviews", this.lastStemView);
     } catch {
       /* best-effort — a failed persist must never tear down a socket */
@@ -322,8 +389,12 @@ export class DjRoom {
   // Same best-effort contract as the stem envelopes: a long track's word list can be sizeable,
   // so cap it well under the 128 KiB per-value limit (oversized stays in memory + re-streams).
   private async persistLyrics(deck: string): Promise<void> {
+    // Same trailing rule as the snapshot (operator, 2026-11-11: session sync audit): a new track's
+    // captions inside the window used to be dropped from disk; they now land at the window's end.
+    await this.throttledPersist(`lyrics:${deck}`, () => this.writeLyrics(deck));
+  }
+  private async writeLyrics(deck: string): Promise<void> {
     const now = Date.now();
-    if (now - (this.lyricAt[deck] ?? 0) < DjRoom.PERSIST_MIN_MS) return; // this DECK was just written
     try {
       // Derived from the platform cap, not hand-written. NOTE WHAT IS DIFFERENT HERE: stemview has
       // a client-side clamp (Deck.ts caps the bucket COUNT), so its bound can be derived DOWN from
@@ -361,7 +432,6 @@ export class DjRoom {
         }
         return;
       }
-      this.lyricAt[deck] = now;
       await this.state.storage.put(`lyrics:${deck}`, entry);
       // The legacy record is retired only AFTER a split key has landed, so a migration interrupted
       // between the two leaves the old value intact and the next boot simply migrates again.
@@ -374,6 +444,65 @@ export class DjRoom {
       this.lyricTooBigAt = 0; // a write landed → the next failure is news, not a repeat
     } catch {
       /* best-effort — never tear down a socket over a persist */
+    }
+  }
+
+  // ★ LEADING WRITE NOW, TRAILING WRITE AT THE WINDOW'S END (operator, 2026-11-11: session sync
+  // audit). At most one write per key per PERSIST_MIN_MS, and the LAST value inside a window always
+  // reaches disk: `write` reads the in-memory record when it runs, so the trailing write carries the
+  // newest value whatever arrived in between. The leading write is awaited (callers and tests see it
+  // land in the same turn); the trailing one is fire-and-forget and best-effort like every persist.
+  private async throttledPersist(key: string, write: () => Promise<void>): Promise<void> {
+    const now = Date.now();
+    const last = this.persistAt.get(key) ?? 0;
+    if (this.persistTimers.has(key)) return; // a trailing write is armed and will carry this value
+    if (now - last >= DjRoom.PERSIST_MIN_MS) {
+      this.persistAt.set(key, now);
+      await write();
+      return;
+    }
+    this.persistTimers.set(
+      key,
+      setTimeout(() => {
+        this.persistTimers.delete(key);
+        this.persistAt.set(key, Date.now());
+        void write().catch(() => {});
+      }, last + DjRoom.PERSIST_MIN_MS - now),
+    );
+  }
+
+  private async writeSnapshot(): Promise<void> {
+    const snapshot = this.lastSnapshot;
+    try {
+      await this.state.storage.put("snapshot", snapshot);
+      this.snapTooBigAt = 0;
+    } catch (e) {
+      // ★ SAY SO. The catch is right — a persist must never cost a socket — but it was
+      // SILENT, and the failure it swallows is invisible from the outside: the board keeps
+      // relaying perfectly from memory while disk holds an older one, so the room looks
+      // healthy right up until a cold restart serves the stale board. Measured (ddf28822):
+      // a two-deck board is ~2.6 KB plus ~1.7 KB per stem chain per deck, so reaching the
+      // 128 KiB value cap takes about 39 chains on a deck — not normal use, and NOTHING in
+      // the client bounds chain count. Throttled to once a minute per room: the publish
+      // that fails will fail again in ten seconds and a log nobody can read is as useless
+      // as no log.
+      const now = Date.now();
+      const bytes = JSON.stringify(snapshot ?? null).length;
+      if (now - this.snapTooBigAt >= 60_000) {
+        this.snapTooBigAt = now;
+        console.warn(
+          `[htl-room] snapshot NOT persisted (${bytes} bytes, cap ${DO_VALUE_CAP}): the live board is served from memory and a cold restart will serve an OLDER one —`,
+          e,
+        );
+      }
+    }
+  }
+
+  private async writeAutomix(): Promise<void> {
+    try {
+      await this.state.storage.put("automix", this.lastAutomix);
+    } catch {
+      /* best-effort — an oversized queue stays in memory; never tear down a socket over a persist */
     }
   }
 
@@ -439,7 +568,7 @@ export class DjRoom {
     // Capacity valve: one DO can only fan out to so many sockets before the relay tier is
     // needed. Cap the anonymous CROWD (not participants — they're a small set). A reconnect
     // of an already-counted device is exempt (it owns a slot already).
-    if (pub && this.listenerCount() >= DjRoom.MAX_LISTENERS && this.state.getWebSockets(device).length === 0) {
+    if (pub && this.listenerCount() >= DjRoom.MAX_LISTENERS && this.sockets(device).length === 0) {
       // At capacity (E10). A rejected WS upgrade gives the browser no readable reason, so accept
       // the socket just long enough to TELL the listener why + close with a terminal code (4003)
       // the client won't reconnect into — instead of a silent retry storm.
@@ -455,7 +584,25 @@ export class DjRoom {
     }
 
     // A device reconnecting replaces its stale socket(s) — keep one per device.
-    for (const old of this.state.getWebSockets(device)) old.close(1000, "replaced");
+    // ★ 4004, NOT 1000 (operator, 2026-11-11: session sync audit). A duplicated browser tab shares
+    // its device id, and 'replaced' with a normal close made the two tabs kick each other forever. A
+    // 4xxx code is terminal to the client: the tab that was replaced stops and says so, instead of
+    // reconnecting into the other. The replaced socket is dead to this room from this moment, so a
+    // half-open one can never make the new socket's own close look like a stale duplicate.
+    let replacedAnchor: boolean | null = null; // null = not the anchor; else whether it is a host's
+    for (const old of this.sockets(device)) {
+      if (device === this.anchorId) replacedAnchor = !!(old.deserializeAttachment() as Attachment | null)?.host || !!replacedAnchor;
+      this.dead.add(old);
+      try {
+        old.close(4004, "replaced");
+      } catch {
+        /* already gone */
+      }
+    }
+    // ★ THE GAP BETWEEN A REPLACED SOCKET AND ITS JOIN. The new socket starts un-joined, and the next
+    // settle from anyone else read that as a vacant slot and took it. Hold the slot for the device
+    // while it rejoins; the grace timer hands it on only if the join never comes.
+    if (replacedAnchor !== null) this.scheduleAnchorGrace(device, DjRoom.HOST_HANDOVER_GRACE_MS, replacedAnchor);
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -498,6 +645,15 @@ export class DjRoom {
     }
     const self = this.deviceOf(ws);
     if (!self) return;
+    if (this.dead.has(ws)) return; // a replaced / evicted socket speaks for nobody any more
+    // ★ Liveness bookkeeping (operator, 2026-11-11: session sync audit): any inbound message proves
+    // this socket alive. The anchor's own ticks re-arm the silence check; anyone else's message is a
+    // free moment to audit the anchor (followers ping every 5 s, so a frozen anchor is noticed even
+    // after a wake from hibernation lost the timer).
+    const seenAt = Date.now();
+    this.lastSeen.set(ws, seenAt);
+    if (self === this.anchorId) this.armSilenceCheck();
+    else await this.auditAnchor(seenAt);
 
     // Public listeners are strictly READ-ONLY: they may only ask for catch-up, leave, or
     // RAISE A HAND to step up (`stage`). Drop any other writer-ish message so an anon socket
@@ -520,6 +676,16 @@ export class DjRoom {
         if (!aj) break;
         if (aj.host || this.approved.has(self) || aj.invited) {
           this.patch(ws, { joined: true, pending: false, joinedAt: aj.joinedAt || Date.now() });
+          // ★ AN INVITE ADMITS FOR GOOD, NOT ONCE (operator, 2026-11-11: session sync audit). The
+          // Worker consumes the push-invite grant on first use, so `invited` is true on exactly one
+          // connect; every reconnect after it came back as a knock. Admission is recorded the same
+          // way the host's own approve records it, and cleared the same way (deny/kick/ban).
+          if (aj.invited && !aj.host && !this.approved.has(self)) {
+            this.approved.add(self);
+            await this.saveApproved();
+          }
+          // Tell the socket its join has landed — it holds its intents until it hears this.
+          this.ack(ws);
           // ★ HAND THE JOINER THE BOARD, exactly as "approve" does one case below. Only two paths
           // used to: a PUBLIC listener at connect, and a guest at the moment the host approves it.
           // Everyone arriving through THIS door — an already-approved guest returning after a
@@ -544,7 +710,10 @@ export class DjRoom {
         // can't turn it on (host grants); anyone may turn it off.
         const a = ws.deserializeAttachment() as Attachment | null;
         if (!a || !a.joined) break;
-        if (msg.on && !a.host) {
+        // ★ A PERSISTED GRANT IS AN ANSWER, NOT A REFUSAL (operator, 2026-11-11: session sync audit).
+        // A granted guest's client re-asserts control(true) on every welcome; the grant had already
+        // survived the reconnect, yet each one drew "Only the host can hand you the decks".
+        if (msg.on && !a.host && !this.grants.has(self)) {
           // A guest can't self-grant — tell them so instead of silently dropping it (bug #10).
           ws.send(JSON.stringify({ t: "error", message: "Only the host can hand you the decks." } satisfies ServerMsg));
           break;
@@ -566,13 +735,17 @@ export class DjRoom {
         // Only the HOST grants/revokes another participant's control (audio untouched).
         if (!this.isHostDevice(self)) break;
         const target = (msg.to || "").slice(0, 64);
-        if (!target || !this.isLive(target) || !this.isJoined(target)) break;
+        if (!target) break;
         // A host grant = FULL control (both decks), same as a host's own drive.
-        for (const t of this.state.getWebSockets(target)) this.patch(t, { decks: msg.on ? "AB" : "" });
+        for (const t of this.sockets(target)) this.patch(t, { decks: msg.on ? "AB" : "" });
         if (msg.on) this.grants.add(target);
         else this.grants.delete(target);
         await this.saveGrants();
-        await this.settle(target);
+        // ★ A GRANT AIMED AT A DEVICE MID-RECONNECT IS KEPT (operator, 2026-11-11: session sync
+        // audit). It was dropped in silence when the target was not live + joined at that instant;
+        // it is now stored, and fetch() applies it ("granted") when that device's socket arrives.
+        if (this.isLive(target) && this.isJoined(target)) await this.settle(target);
+        else this.broadcastPresence();
         break;
       }
       case "approve": {
@@ -584,8 +757,9 @@ export class DjRoom {
         if (!target || !this.isLive(target) || this.isHostDevice(target)) break;
         this.approved.add(target);
         await this.saveApproved();
-        for (const t of this.state.getWebSockets(target)) {
+        for (const t of this.sockets(target)) {
           this.patch(t, { joined: true, pending: false, listening: true, joinedAt: Date.now() });
+          this.ack(t); // the knock has become a join — release whatever the guest queued
           // Hand the freshly-approved guest the current board immediately — the snapshot
           // (decks/stems/controls) + the host's stem envelopes — so its display + mixer
           // fill in without waiting on a client-side request round-trip.
@@ -659,7 +833,7 @@ export class DjRoom {
         if (!this.isHostDevice(self)) break;
         const target = (msg.to || "").slice(0, 64);
         if (!target || target === self || this.isHostDevice(target)) break;
-        for (const t of this.state.getWebSockets(target)) this.refuseStage(t, "The host didn't bring you up.");
+        for (const t of this.sockets(target)) this.refuseStage(t, "The host didn't bring you up.");
         this.returnToFloor(target);
         break;
       }
@@ -749,7 +923,7 @@ export class DjRoom {
         if (msg.on) this.muted.add(to);
         else this.muted.delete(to);
         await this.saveMuted();
-        for (const w of this.state.getWebSockets(to)) {
+        for (const w of this.sockets(to)) {
           try {
             w.send(JSON.stringify({ t: "muted", on: !!msg.on } satisfies ServerMsg));
           } catch {
@@ -796,14 +970,22 @@ export class DjRoom {
         // else (a deck-less move — crossfader, automix, queue — needs full control). The
         // sender already applied it locally; an out-of-lane intent is silently dropped here
         // so the authoritative board never moves under an unauthorised hand.
-        if (!this.canDrive(self, msg.intent)) break;
+        // ★ A REFUSAL IS ANSWERED (operator, 2026-11-11: session sync audit): the sender already
+        // applied the move locally, so a silent drop left its board quietly different from the room.
+        if (!this.canDrive(self, msg.intent)) {
+          this.refuse(ws, msg.intent, this.refusalReason(self, msg.intent));
+          break;
+        }
         // ★ AND AUTOMIX IS HOST ONLY ON TOP OF THAT (ruling 34075fae). canDriveIntent refuses this
         // intent today only because it carries no `deck` and a deck-less move needs BOTH — which is
         // the right answer for the wrong reason, and it ADMITS a granted guest holding "AB". The
         // host bit is not expressible in canDriveIntent, whose whole input is a decks string, so the
         // extra condition lives here beside the attachment that owns it rather than corrupting the
         // shared pure rule with a field it cannot see.
-        if (msg.intent.kind === "automix" && !this.isHostDevice(self)) break;
+        if (msg.intent.kind === "automix" && !this.isHostDevice(self)) {
+          this.refuse(ws, msg.intent, "Only the host drives the auto-DJ.");
+          break;
+        }
         const out = { t: "intent", from: self, seq: ++this.seq, intent: msg.intent } satisfies ServerMsg;
         // WRITERS + invited guests get EVERY intent immediately (instant mixing feel; they
         // may be driving / mirroring the platter). skipListeners=true → non-pub only.
@@ -817,7 +999,14 @@ export class DjRoom {
         const kind = msg.intent.kind;
         if (DjRoom.LISTENER_DROP_KINDS.has(kind)) break;
         if (DjRoom.COALESCE_KINDS.has(kind)) this.queueDigest(msg.intent, out);
-        else this.relayToListeners(out);
+        else {
+          // ★ FLUSH THE HELD SWEEPS FIRST (operator, 2026-11-11: session sync audit). A sweep waits
+          // up to DIGEST_FLUSH_MS while a discrete intent went out at once, so a listener could get
+          // fxRack's reorder BEFORE the fxParam that preceded it (landing on the wrong slot), or a
+          // load before the crossfade that came first. Order is kept by sending what is held now.
+          this.flushDigest();
+          this.relayToListeners(out);
+        }
         break;
       }
       case "ping": {
@@ -878,32 +1067,12 @@ export class DjRoom {
           // Persist THROTTLED + best-effort — the in-memory copy above already serves live relay
           // and catch-up; disk is just the cold-restart fallback, so one write per PERSIST_MIN_MS
           // is plenty (was: a write on EVERY control change, which blew the free-tier write cap).
-          const now = Date.now();
-          if (now - this.snapAt >= DjRoom.PERSIST_MIN_MS) {
-            this.snapAt = now;
-            try {
-              await this.state.storage.put("snapshot", msg.snapshot);
-              this.snapTooBigAt = 0;
-            } catch (e) {
-              // ★ SAY SO. The catch is right — a persist must never cost a socket — but it was
-              // SILENT, and the failure it swallows is invisible from the outside: the board keeps
-              // relaying perfectly from memory while disk holds an older one, so the room looks
-              // healthy right up until a cold restart serves the stale board. Measured (ddf28822):
-              // a two-deck board is ~2.6 KB plus ~1.7 KB per stem chain per deck, so reaching the
-              // 128 KiB value cap takes about 39 chains on a deck — not normal use, and NOTHING in
-              // the client bounds chain count. Throttled to once a minute per room: the publish
-              // that fails will fail again in ten seconds and a log nobody can read is as useless
-              // as no log.
-              const bytes = JSON.stringify(msg.snapshot ?? null).length;
-              if (now - this.snapTooBigAt >= 60_000) {
-                this.snapTooBigAt = now;
-                console.warn(
-                  `[htl-room] snapshot NOT persisted (${bytes} bytes, cap ${DO_VALUE_CAP}): the live board is served from memory and a cold restart will serve an OLDER one —`,
-                  e,
-                );
-              }
-            }
-          }
+          // ★ THROTTLED, BUT WITH A TRAILING WRITE (operator, 2026-11-11: session sync audit). The
+          // throttle used to DROP every publish inside the window, so the board on disk was whatever
+          // came first in it and a wake from hibernation served that older board. The last publish
+          // in a window now lands at the window's end — still at most one write per PERSIST_MIN_MS,
+          // which keeps the anchor's republish heartbeat inside the storage write budget.
+          await this.throttledPersist("snapshot", () => this.writeSnapshot());
         }
         break;
       }
@@ -950,11 +1119,18 @@ export class DjRoom {
               );
             }
           }
-          if (size <= MAX_STEMVIEW_BYTES && !tooSoon) {
-            this.stemViewRate[rk] = now;
-            this.lastStemView[msg.deck] = msg.view;
-            this.relay(self, { t: "stemview", deck: msg.deck, view: msg.view });
-            void this.persistStemViews(msg.deck);
+          // ★ A NEW TRACK IS NEVER "TOO SOON", AND A THROTTLED FRAME IS DEFERRED, NOT DROPPED
+          // (operator, 2026-11-11: session sync audit). A deck loaded within 2 s of its previous
+          // envelope had the NEW track's envelope thrown away and the OLD one kept in the cache, so
+          // every remote and every later arrival drew the wrong song's lanes. A frame for a different
+          // track is admitted at once; a same-track repeat inside the window is held and the latest
+          // one lands when the window ends (trailing-latest), so the cache always ends on the newest.
+          const newTrack = DjRoom.stemViewVid(msg.view) !== DjRoom.stemViewVid(this.lastStemView[msg.deck]);
+          if (size <= MAX_STEMVIEW_BYTES && (!tooSoon || newTrack)) {
+            this.clearStemViewPending(msg.deck);
+            this.admitStemView(self, msg.deck, msg.view, rk, now);
+          } else if (size <= MAX_STEMVIEW_BYTES) {
+            this.deferStemView(self, msg.deck, msg.view, rk, now);
           }
         }
         break;
@@ -997,6 +1173,9 @@ export class DjRoom {
         if (this.isHostDevice(self)) {
           this.lastAutomix = msg.state;
           this.relay(self, { t: "automix", state: msg.state });
+          // ★ Persisted under the snapshot's rule (operator, 2026-11-11: session sync audit): it was
+          // memory-only, so a wake from hibernation handed joiners no queue at all.
+          await this.throttledPersist("automix", () => this.writeAutomix());
         }
         break;
       }
@@ -1041,39 +1220,61 @@ export class DjRoom {
 
   async webSocketClose(ws: Ws): Promise<void> {
     await this.load();
+    await this.socketGone(ws);
+  }
+
+  // ★ ONE PATH FOR "THIS SOCKET IS GONE" (operator, 2026-11-11: session sync audit): a real close, an
+  // error, and a silent anchor the room gave up on all land here. The closing socket is marked dead
+  // FIRST, so every lookup below (hasOtherSocket, nextAnchor, presence) excludes it explicitly — the
+  // runtime may still list a closing socket, and presence used to carry the device that just left.
+  private async socketGone(ws: Ws): Promise<void> {
+    this.dead.add(ws);
+    this.lastSeen.delete(ws);
     const dev = this.deviceOf(ws);
+    const closing = ws.deserializeAttachment() as Attachment | null;
     // A reconnect REPLACES the old socket: if the device still has another live socket,
     // this close is just the stale one — ignore it (don't churn presence / the anchor).
+    // Compared by SOCKET: a replaced half-open socket is dead already and never counts as "other".
     if (dev && this.hasOtherSocket(dev, ws)) return;
     // Social presence: if this was the LAST socket of a signed-in account here, that account may
     // have just gone offline. Don't decide now (a refresh would flap) — arm the alarm; it bridges
     // "offline" to the Worker only if they're still gone after the grace.
-    const closing = ws.deserializeAttachment() as Attachment | null;
     if (closing?.acct && !this.acctHasLiveSocket(closing.acct, ws)) {
       await this.schedulePresenceOffline(closing.acct);
     }
-    if (dev && dev === this.anchorId) {
-      const next = this.nextAnchor(dev, ws);
-      if (next) {
-        await this.setAnchor(next, ws); // another participant can hold the clock → hand over now
-      } else {
-        // No other eligible anchor (e.g. a public room whose ONLY controller is the host).
-        // Don't yank the clock on a momentary blip — that freezes the room AND flaps the
-        // anchor on every reconnect. Hold the anchor for a grace window; if the host comes
-        // back (same device id), it resumes ticking seamlessly. Only clear if it stays gone.
-        this.scheduleAnchorGrace(dev);
-      }
-    } else {
-      this.broadcastPresence(ws);
-    }
+    if (dev && dev === this.anchorId) await this.anchorLost(dev, !!closing?.host);
+    else this.broadcastPresence();
   }
 
-  private scheduleAnchorGrace(droppedAnchor: string): void {
-    if (this.anchorGraceTimer) return;
+  // The anchor device has no live socket (or went silent). Who holds the clock now?
+  //  • a GUEST anchor with someone else eligible → hand over at once (a guest is only a stand-in);
+  //  • a HOST anchor with someone else eligible → hold the slot HOST_HANDOVER_GRACE_MS first, so a
+  //    blip does not hand the board to a guest the host then has to adopt;
+  //  • nobody else eligible → hold ANCHOR_GRACE_MS (the original blip grace), then release.
+  // Presence goes out in every branch: the roster has lost a device either way.
+  private async anchorLost(dev: string, wasHost: boolean): Promise<void> {
+    const next = this.nextAnchor(dev);
+    if (next && !wasHost) {
+      await this.setAnchor(next); // another participant can hold the clock → hand over now
+      return;
+    }
+    // Don't yank the clock on a momentary blip — that freezes the room AND flaps the anchor on
+    // every reconnect. If the device comes back (same device id), it resumes ticking seamlessly.
+    this.scheduleAnchorGrace(dev, next ? DjRoom.HOST_HANDOVER_GRACE_MS : DjRoom.ANCHOR_GRACE_MS, wasHost);
+    this.broadcastPresence();
+  }
+
+  private scheduleAnchorGrace(droppedAnchor: string, ms: number = DjRoom.ANCHOR_GRACE_MS, host = false): void {
+    if (this.anchorGraceTimer) {
+      if (this.graceFor?.device === droppedAnchor) return; // already holding the slot for it
+      clearTimeout(this.anchorGraceTimer);
+    }
+    this.graceFor = { device: droppedAnchor, host };
     this.anchorGraceTimer = setTimeout(async () => {
       this.anchorGraceTimer = null;
+      this.graceFor = null;
       await this.load();
-      // Host back + live + joined → its reconnect already re-anchored; leave it.
+      // Back + live + joined → its reconnect already re-anchored; leave it.
       if (this.anchorId === droppedAnchor && !(this.isLive(droppedAnchor) && this.isJoined(droppedAnchor))) {
         const next = this.nextAnchor(droppedAnchor);
         if (!next && this.isPublic) {
@@ -1086,13 +1287,59 @@ export class DjRoom {
           await this.setAnchor(next); // private room (or a handoff target) → release/hand the clock
         }
       }
-    }, DjRoom.ANCHOR_GRACE_MS);
+    }, ms);
+  }
+
+  // Re-arm the silence check from the anchor's own traffic (4 ticks/s). One timer, reset per tick:
+  // it only fires once the anchor has been quiet for the whole window.
+  private armSilenceCheck(): void {
+    if (this.silenceTimer) clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => {
+      this.silenceTimer = null;
+      void this.auditAnchor(Date.now());
+    }, DjRoom.ANCHOR_SILENT_MS + 250);
+  }
+
+  // Is the anchor still there? Two failures are caught here:
+  //  • its device has NO live socket and nothing is holding the slot for it (a grace timer lost to a
+  //    hibernation wake, say) → handle it as the close the room never saw;
+  //  • its socket is open but SILENT past ANCHOR_SILENT_MS while others are connected → a half-open
+  //    link or a suspended phone. Give up on that socket (close it so a live client reconnects) and
+  //    handle it exactly like a close: grace for a host, then hand over.
+  private async auditAnchor(now: number): Promise<void> {
+    const dev = this.anchorId;
+    if (!dev || this.anchorGraceTimer) return;
+    const mine = this.sockets(dev);
+    const others = this.sockets().some((w) => this.deviceOf(w) !== dev);
+    if (!others) return;
+    if (mine.length === 0) {
+      await this.anchorLost(dev, this.graceFor?.host ?? false);
+      return;
+    }
+    let newest = 0;
+    for (const w of mine) {
+      let seen = this.lastSeen.get(w);
+      if (seen === undefined) this.lastSeen.set(w, (seen = now)); // no memory of it (a wake) → start the clock now
+      newest = Math.max(newest, seen);
+    }
+    if (now - newest <= DjRoom.ANCHOR_SILENT_MS) return;
+    const host = this.isHostDevice(dev);
+    console.warn(`[htl-room] anchor ${dev} silent for ${now - newest} ms — treating it as gone`);
+    for (const w of mine) {
+      this.dead.add(w);
+      try {
+        w.close(1001, "silent"); // NOT terminal: a client that is alive after all reconnects + rejoins
+      } catch {
+        /* already gone */
+      }
+    }
+    await this.anchorLost(dev, host);
   }
 
   // Is `acct` still attached here (any socket other than `except`)? An account may hold several
   // devices; presence is per-account, so the offline check is per-account, not per-device.
   private acctHasLiveSocket(acct: string, except?: Ws): boolean {
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       if (except && ws === except) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.acct === acct) return true;
@@ -1141,7 +1388,7 @@ export class DjRoom {
   private async endBroadcast(reason: string): Promise<void> {
     this.isPublic = false;
     await this.state.storage.put("public", false);
-    for (const w of this.state.getWebSockets()) {
+    for (const w of this.sockets()) {
       const a = w.deserializeAttachment() as Attachment | null;
       if (!a?.pub && !a?.stage) continue;
       try {
@@ -1159,17 +1406,61 @@ export class DjRoom {
   }
 
   // --- helpers ---
+  /** The room's sockets (optionally one device's), minus the ones it has already given up on. Every
+   *  lookup goes through here so a closing / replaced / silent-evicted socket is excluded everywhere. */
+  private sockets(tag?: string): Ws[] {
+    const all = tag === undefined ? this.state.getWebSockets() : this.state.getWebSockets(tag);
+    return all.filter((w) => !this.dead.has(w));
+  }
+
+  /** Ack a processed join to that socket (it releases the intents it queued while re-joining). */
+  private ack(ws: Ws): void {
+    try {
+      ws.send(JSON.stringify({ t: "joined" } satisfies ServerMsg));
+    } catch {
+      /* socket gone */
+    }
+  }
+
+  /** Answer a refused intent, to the sender only, at most once a second per kind per socket. */
+  private refuse(ws: Ws, intent: Intent, reason: string): void {
+    const key = `${this.deviceOf(ws) ?? "?"}:${intent.kind}`;
+    const now = Date.now();
+    if (now - (this.refusedAt.get(key) ?? 0) < 1000) return;
+    this.refusedAt.set(key, now);
+    if (this.refusedAt.size > 256) this.refusedAt.clear(); // bounded; a lost throttle entry costs one extra frame
+    try {
+      ws.send(JSON.stringify({ t: "refused", kind: intent.kind, reason } satisfies ServerMsg));
+    } catch {
+      /* socket gone */
+    }
+  }
+
+  /** Why canDrive said no, in words the sender can act on. */
+  private refusalReason(device: string, intent: Intent): string {
+    if (!this.isJoined(device)) return "You're not in the session yet — that move wasn't shared.";
+    let decks = "";
+    for (const w of this.sockets(device)) {
+      const a = w.deserializeAttachment() as Attachment | null;
+      if (a?.joined && a.decks.length > decks.length) decks = a.decks;
+    }
+    if (!decks) return "You don't have the decks — that move wasn't shared.";
+    const deck = (intent as { deck?: unknown }).deck;
+    if (deck === "A" || deck === "B") return `You only drive deck ${decks} — that move wasn't shared.`;
+    return "That needs both decks — it wasn't shared.";
+  }
+
   private deviceOf(ws: Ws): string | null {
     const a = ws.deserializeAttachment() as Attachment | null;
     return a?.device ?? null;
   }
 
   private isLive(device: string | null): boolean {
-    return !!device && this.state.getWebSockets(device).length > 0;
+    return !!device && this.sockets(device).length > 0;
   }
 
   private isJoined(device: string): boolean {
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.joined) return true;
     }
@@ -1180,7 +1471,7 @@ export class DjRoom {
   // Used to authorize a session guest fetching the host's global sample (#48). "" acct → never.
   private isAccountMember(acct: string): boolean {
     if (!acct) return false;
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.joined && a.acct === acct) return true;
     }
@@ -1188,7 +1479,7 @@ export class DjRoom {
   }
 
   private isHostDevice(device: string): boolean {
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.host) return true;
     }
@@ -1200,7 +1491,7 @@ export class DjRoom {
   // version is live. Clients compare it to their local ENGINE_VERSION to spot an unfaithful mix.
   private engineVersion(): number {
     if (!this.anchorId) return 0;
-    for (const ws of this.state.getWebSockets(this.anchorId)) {
+    for (const ws of this.sockets(this.anchorId)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a) return a.ev || 0;
     }
@@ -1211,12 +1502,12 @@ export class DjRoom {
   // Rides every welcome/presence so even a crowd LISTENER (no roster) inherits it.
   private hostColor(): string {
     if (this.anchorId) {
-      for (const ws of this.state.getWebSockets(this.anchorId)) {
+      for (const ws of this.sockets(this.anchorId)) {
         const a = ws.deserializeAttachment() as Attachment | null;
         if (a?.color) return a.color;
       }
     }
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.host && a.color) return a.color;
     }
@@ -1226,7 +1517,7 @@ export class DjRoom {
   // A phone/tablet (by its reported device kind). Used only to bias the clock toward a desktop.
   private isMobile(device: string | null): boolean {
     if (!device) return false;
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a && isMobileKind(a.kind)) return true;
     }
@@ -1234,7 +1525,7 @@ export class DjRoom {
   }
 
   private hasOtherSocket(device: string, except: Ws): boolean {
-    for (const ws of this.state.getWebSockets(device)) if (ws !== except) return true;
+    for (const ws of this.sockets(device)) if (ws !== except) return true;
     return false;
   }
 
@@ -1249,15 +1540,36 @@ export class DjRoom {
       this.broadcastPresence();
       return;
     }
+    // The held anchor came back and joined → the slot is its again; stop the grace timer.
+    if (this.graceFor?.device === self && self === this.anchorId && this.isJoined(self) && this.anchorGraceTimer) {
+      clearTimeout(this.anchorGraceTimer);
+      this.anchorGraceTimer = null;
+      this.graceFor = null;
+    }
     const anchorActive = !!this.anchorId && this.isLive(this.anchorId) && this.isJoined(this.anchorId);
     const anchorControls = !!this.anchorId && this.isControlling(this.anchorId);
     const anchorIsHost = !!this.anchorId && this.isHostDevice(this.anchorId);
-    if (this.isJoined(self) && !anchorActive) {
+    // ★ A HELD SLOT IS NOT A VACANT ONE (operator, 2026-11-11: session sync audit). While a grace
+    // timer holds the anchor for a device that dropped or is mid-rejoin, its absence used to read as
+    // "no anchor" and the next joiner's settle took the slot. Only a HOST device may claim a held
+    // slot (it is the owner); a guest may claim one held for another guest only after the grace.
+    const held = !!this.graceFor && this.graceFor.device === this.anchorId && self !== this.anchorId;
+    const heldAgainstSelf = held && !this.isHostDevice(self) && (this.graceFor!.host || this.isLive(this.anchorId));
+    if (this.isJoined(self) && !anchorActive && !heldAgainstSelf) {
       await this.setAnchor(self);
-    } else if (anchorActive && !anchorControls && this.isControlling(self) && self !== this.anchorId) {
-      await this.setAnchor(self); // a driver took over → make it the board's source of truth
-    } else if (anchorActive && !anchorControls && !anchorIsHost && this.isHostDevice(self) && this.isJoined(self) && self !== this.anchorId) {
-      await this.setAnchor(self); // owner joined → reclaim authority from a lone guest anchor (#7)
+    } else if (
+      anchorActive && !anchorIsHost && this.isHostDevice(self) && this.isJoined(self) && self !== this.anchorId &&
+      !this.isStage(this.anchorId)
+    ) {
+      // ★ THE OWNER RECLAIMS FROM ANY GUEST ANCHOR (operator, 2026-11-11: session sync audit). This
+      // used to need the guest anchor to be idle (`!anchorControls`), so a host that blipped while a
+      // granted guest drove came back to find the guest holding the clock and adopted the GUEST's
+      // board. A guest anchor is only ever a stand-in for the host.
+      await this.setAnchor(self);
+    } else if (anchorActive && !anchorControls && !anchorIsHost && this.isControlling(self) && self !== this.anchorId) {
+      // A driver took over from an idle GUEST anchor → make it the board's source of truth. Never
+      // from a host device: the host's board is the room's, driven or not.
+      await this.setAnchor(self);
     } else if (
       anchorActive &&
       this.isHostDevice(self) && this.isJoined(self) && self !== this.anchorId &&
@@ -1277,7 +1589,7 @@ export class DjRoom {
   }
 
   private isControlling(device: string): boolean {
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.joined && drivesAnything(a)) return true;
     }
@@ -1290,7 +1602,7 @@ export class DjRoom {
   // any-controller check on the hot intent path so a single-deck guest can't move the rest.
   private canDrive(device: string, intent: Intent): boolean {
     let decks = "";
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.joined && drivesAnything(a) && a.decks.length > decks.length) decks = a.decks;
     }
@@ -1302,7 +1614,7 @@ export class DjRoom {
   // exclude them so a stepped-up phone can't become the room's playhead authority.
   private isStage(device: string | null): boolean {
     if (!device) return false;
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.stage) return true;
     }
@@ -1315,10 +1627,12 @@ export class DjRoom {
   private nextAnchor(except: string, exceptWs?: Ws): string | null {
     let ctrlDesktop: string | null = null;
     let ctrlAny: string | null = null;
+    let hostCtrlDesktop: string | null = null;
+    let hostCtrlAny: string | null = null;
     let hostDesktop: string | null = null;
     let hostAny: string | null = null;
     let anyJoined: string | null = null;
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       if (ws === exceptWs) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!a || !a.joined || a.device === except || a.pub || a.stage) continue; // a public listener / stepped-up guest never anchors
@@ -1326,6 +1640,8 @@ export class DjRoom {
       if (drivesAnything(a)) {
         if (!mobile && !ctrlDesktop) ctrlDesktop = a.device;
         if (!ctrlAny) ctrlAny = a.device;
+        if (a.host && !mobile && !hostCtrlDesktop) hostCtrlDesktop = a.device;
+        if (a.host && !hostCtrlAny) hostCtrlAny = a.device;
       }
       if (a.host) {
         if (!mobile && !hostDesktop) hostDesktop = a.device;
@@ -1333,10 +1649,12 @@ export class DjRoom {
       }
       if (!anyJoined) anyJoined = a.device;
     }
-    // Preference: a controlling DESKTOP › any controller › a host DESKTOP › any host › anyone.
-    // Desktops outrank phones/tablets so the clock lands on the natural DJ machine, not a phone
-    // that only happened to be the last one standing.
-    return ctrlDesktop ?? ctrlAny ?? hostDesktop ?? hostAny ?? anyJoined;
+    // ★ HOST DEVICES FIRST (operator, 2026-11-11: session sync audit) — the same rule settle() now
+    // enforces on a host's rejoin, applied at handover so the two cannot disagree: a guest only
+    // holds the clock when no host device can. Within each side: a controlling DESKTOP › a desktop
+    // (host) › any controller › anyone. Desktops outrank phones/tablets so the clock lands on the
+    // natural DJ machine, not a phone that only happened to be the last one standing.
+    return hostCtrlDesktop ?? hostDesktop ?? hostCtrlAny ?? hostAny ?? ctrlDesktop ?? ctrlAny ?? anyJoined;
   }
 
   private patch(ws: Ws, fields: Partial<Attachment>): void {
@@ -1349,13 +1667,14 @@ export class DjRoom {
   // then close them. webSocketClose reconciles the anchor + presence as they drop; we nudge
   // once here so the roster updates promptly even if the runtime defers those callbacks.
   private evict(device: string, reason: string): void {
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       try {
         ws.send(JSON.stringify({ t: "kicked", reason } satisfies ServerMsg));
       } catch {
         /* socket already gone */
       }
       ws.close(4001, "removed");
+      this.dead.add(ws); // excluded from presence + anchor choice now, not when the runtime gets round to it
     }
     if (device === this.anchorId) void this.setAnchor(this.nextAnchor(device));
     else this.broadcastPresence();
@@ -1366,7 +1685,7 @@ export class DjRoom {
   // open-mode instant grab. The socket is kept — we just rewrite the attachment.
   private async promoteToStage(device: string, deck: "A" | "B"): Promise<void> {
     let promoted = false;
-    for (const t of this.state.getWebSockets(device)) {
+    for (const t of this.sockets(device)) {
       const a = t.deserializeAttachment() as Attachment | null;
       if (!a?.pub) continue; // only a floor listener steps up
       this.patch(t, { pub: false, joined: true, listening: true, decks: deck, stage: true, stageReq: "", joinedAt: Date.now() });
@@ -1381,7 +1700,7 @@ export class DjRoom {
   // listeners can't seize the same deck. The host's own full control ("AB") doesn't count —
   // the host can always co-drive; this only blocks a second CROWD member on the same deck.
   private deckHeldByStage(deck: string): boolean {
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.stage && a.decks === deck) return true;
     }
@@ -1404,7 +1723,7 @@ export class DjRoom {
   // its deck permission and stage flag cleared. Used for cancel / step-down / host send-down.
   // The socket is never closed; the listener keeps hearing the mix, just no longer drives.
   private returnToFloor(device: string): void {
-    for (const ws of this.state.getWebSockets(device)) {
+    for (const ws of this.sockets(device)) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!a) continue;
       this.patch(ws, { pub: true, joined: true, listening: true, decks: "", stage: false, stageReq: "" });
@@ -1476,7 +1795,7 @@ export class DjRoom {
       return total;
     }
     const seen = new Set<string>();
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.pub) seen.add(a.device);
     }
@@ -1488,7 +1807,7 @@ export class DjRoom {
   private stageReqs(): StageReq[] {
     const out: StageReq[] = [];
     const seen = new Set<string>();
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a?.pub && (a.stageReq === "A" || a.stageReq === "B") && !seen.has(a.device)) {
         seen.add(a.device);
@@ -1500,7 +1819,7 @@ export class DjRoom {
 
   private peers(except?: Ws): Peer[] {
     const out: Peer[] = [];
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       if (ws === except) continue;
       const a = ws.deserializeAttachment() as Attachment | null;
       if (a && !a.pub) out.push(peerOf(a, this.anchorId)); // public listeners are a count, not a roster row
@@ -1544,8 +1863,13 @@ export class DjRoom {
     // nothing has ever asked for it again — the room then serves that staleness to every later
     // joiner. Measured window: a host's first ~4 s (thread d4a56d30). Idempotent and cheap: the
     // client answers with the snapshot it already holds, or stays quiet if it has never published.
-    if (device) for (const t of this.state.getWebSockets(device)) t.send(JSON.stringify({ t: "republish" } satisfies ServerMsg));
+    if (device) for (const t of this.sockets(device)) t.send(JSON.stringify({ t: "republish" } satisfies ServerMsg));
     this.broadcast({ t: "role", anchorId: device }, except);
+    // ★ THE SHARDED CROWD HEARS IT TOO (operator, 2026-11-11: session sync audit). `role` was a
+    // local broadcast only, so a listener on a relay shard kept the old anchor id forever (its
+    // follower logic keys on it). `republish` stays local: it is addressed to the new anchor, which
+    // is never a relay listener.
+    this.pushToRelays({ t: "role", anchorId: device });
     this.broadcastPresence(except);
   }
 
@@ -1555,7 +1879,7 @@ export class DjRoom {
   // is just a named predicate over this, so "who receives what" reads in one line each.
   private sendTo(pred: (a: Attachment | null, ws: Ws) => boolean, msg: ServerMsg): void {
     const json = JSON.stringify(msg);
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       if (!pred(a, ws)) continue;
       try {
@@ -1597,13 +1921,41 @@ export class DjRoom {
   // D2: push ONE crowd frame to every relay shard (O(R)); each shard fans out to its slice
   // (O(N/R)). Fire-and-forget — a slow/dead relay never stalls the master's tick loop. No-op
   // when the relay tier is off (the local sendTo paths handle the crowd then).
+  // ★ IN ORDER, PER SHARD (operator, 2026-11-11: session sync audit). Each frame used to be its own
+  // fire-and-forget fetch, and independent fetches carry no ordering guarantee — but a relay
+  // listener APPLIES what it is pushed (load, transport, loop, fxRack…: order-sensitive), so a
+  // crossfade could land before the load it followed. Now each shard has one fetch in flight at a
+  // time and everything queued behind it rides the next one as a single ordered batch. Bounded: a
+  // stalled shard sheds its OLDEST frames past RELAY_QUEUE_MAX rather than growing without limit.
+  private static RELAY_QUEUE_MAX = 500;
+  private relayQueue = new Map<number, { frame: ServerMsg; cache: CacheKind; cacheOnly: boolean }[]>();
+  private relayBusy = new Set<number>();
   private pushToRelays(msg: ServerMsg, cacheOnly = false): void {
     if (!this.relayOn || !this.roomHostId) return;
-    const body = JSON.stringify({ frame: msg, cache: cacheKindOf(msg), cacheOnly, hostId: this.roomHostId });
+    const item = { frame: msg, cache: cacheKindOf(msg), cacheOnly };
     for (let i = 0; i < this.relayShards; i++) {
-      const stub = this.relayNs!.get(this.relayNs!.idFromName(`relay:${this.roomHostId}:${i}`));
-      void stub.fetch("https://relay/push", { method: "POST", body }).catch(() => {});
+      const q = this.relayQueue.get(i) ?? [];
+      q.push(item);
+      if (q.length > DjRoom.RELAY_QUEUE_MAX) q.splice(0, q.length - DjRoom.RELAY_QUEUE_MAX);
+      this.relayQueue.set(i, q);
+      this.pumpRelay(i);
     }
+  }
+  private pumpRelay(i: number): void {
+    if (this.relayBusy.has(i)) return;
+    const q = this.relayQueue.get(i);
+    if (!q || q.length === 0) return;
+    this.relayQueue.set(i, []);
+    this.relayBusy.add(i);
+    const body = JSON.stringify({ frames: q, hostId: this.roomHostId });
+    const stub = this.relayNs!.get(this.relayNs!.idFromName(`relay:${this.roomHostId}:${i}`));
+    void stub
+      .fetch("https://relay/push", { method: "POST", body })
+      .catch(() => {})
+      .finally(() => {
+        this.relayBusy.delete(i);
+        this.pumpRelay(i);
+      });
   }
   private relayToListeners(msg: ServerMsg): void {
     this.pushToRelays(msg); // D2: crowd is sharded → relays (no-op when off)
@@ -1634,14 +1986,25 @@ export class DjRoom {
   // control, and flush the batch at ~DIGEST_FLUSH_MS. During an active sweep the DO is awake
   // (it's processing the intents), so the timer fires; an idle room never queues anything.
   private queueDigest(intent: Intent, msg: ServerMsg): void {
-    this.digest.set(digestKey(intent), msg);
+    // Delete-then-set moves the key to the END of the Map's order, so the held batch goes out in the
+    // order each control's LATEST value arrived, not the order each control first moved.
+    const k = digestKey(intent);
+    this.digest.delete(k);
+    this.digest.set(k, msg);
     if (this.digestTimer) return;
-    this.digestTimer = setTimeout(() => {
+    this.digestTimer = setTimeout(() => this.flushDigest(), DjRoom.DIGEST_FLUSH_MS);
+  }
+
+  /** Send the held sweeps now (the timer, or a discrete intent that must not overtake them). */
+  private flushDigest(): void {
+    if (this.digestTimer) {
+      clearTimeout(this.digestTimer);
       this.digestTimer = null;
-      const batch = [...this.digest.values()];
-      this.digest.clear();
-      for (const m of batch) this.relayToListeners(m);
-    }, DjRoom.DIGEST_FLUSH_MS);
+    }
+    if (this.digest.size === 0) return;
+    const batch = [...this.digest.values()];
+    this.digest.clear();
+    for (const m of batch) this.relayToListeners(m);
   }
 
   // Push the current (re-ranked) song-request list to EVERYONE — participants act on it, and
@@ -1693,7 +2056,7 @@ export class DjRoom {
     const { full, lite } = presenceFor(view);
     const fullJson = JSON.stringify(full);
     const liteJson = JSON.stringify(lite);
-    for (const ws of this.state.getWebSockets()) {
+    for (const ws of this.sockets()) {
       const a = ws.deserializeAttachment() as Attachment | null;
       try {
         ws.send(a?.pub ? liteJson : fullJson);

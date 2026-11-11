@@ -29,10 +29,16 @@ interface RelayEnv {
 
 // What the master pushes us: a crowd frame + an optional cache key so a late joiner catches up
 // without round-tripping the master.
-interface PushBody {
+interface PushFrame {
   frame: ServerMsg;
   cache?: CacheKind;
   cacheOnly?: boolean; // true = update the catch-up cache but DON'T re-fan to current listeners
+}
+interface PushBody extends Partial<PushFrame> {
+  // ★ An ORDERED batch (operator, 2026-11-11: session sync audit): the master keeps one push in
+  // flight per shard and sends what queued behind it together, so frames apply in the order the
+  // room produced them. The single-frame shape is still accepted (a master mid-deploy).
+  frames?: PushFrame[];
   hostId?: string;
   idx?: number;
 }
@@ -63,14 +69,8 @@ export class RelayRoom {
       const body = (await req.json()) as PushBody;
       if (body.hostId) this.hostId = body.hostId;
       if (body.idx != null) this.idx = body.idx;
-      const json = JSON.stringify(body.frame);
-      const f = body.frame as { t: string; deck?: string };
-      if (body.cache === "welcome") this.welcome = json;
-      else if (body.cache === "state") this.snapshot = json;
-      else if (body.cache === "automix") this.automix = json;
-      else if (body.cache === "stemview" && f.deck) this.stems.set(f.deck, json);
-      else if (body.cache === "lyrics" && f.deck) this.lyrics.set(f.deck, json);
-      if (!body.cacheOnly) this.fanout(json); // welcome refreshes are cache-only (no re-broadcast)
+      const frames = body.frames ?? (body.frame ? [body as PushFrame] : []);
+      for (const p of frames) this.apply(p);
       return new Response(null, { status: 204 });
     }
 
@@ -114,6 +114,18 @@ export class RelayRoom {
     } catch {
       /* not JSON — ignore */
     }
+  }
+
+  // Cache the catch-up kinds, then fan out to our shard.
+  private apply(body: PushFrame): void {
+    const json = JSON.stringify(body.frame);
+    const f = body.frame as { t: string; deck?: string };
+    if (body.cache === "welcome") this.welcome = json;
+    else if (body.cache === "state") this.snapshot = json;
+    else if (body.cache === "automix") this.automix = json;
+    else if (body.cache === "stemview" && f.deck) this.stems.set(f.deck, json);
+    else if (body.cache === "lyrics" && f.deck) this.lyrics.set(f.deck, json);
+    if (!body.cacheOnly) this.fanout(json); // welcome refreshes are cache-only (no re-broadcast)
   }
 
   private fanout(json: string): void {

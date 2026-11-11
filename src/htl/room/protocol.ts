@@ -409,6 +409,13 @@ export type ServerMsg =
   | { t: "lyrics"; deck: DeckId; videoId: string; lines: unknown; source: string } // host's word-timed lyrics, relayed to remotes
   | { t: "settings"; settings: unknown; updatedAt: number } // a same-account device's colour/theme settings, relayed to the owner's OTHER devices
   | { t: "kicked"; reason?: string } // you were denied entry or removed — drop sync + show why
+  // ★ The server has PROCESSED this socket's join (operator, 2026-11-11: session sync audit). A
+  // reconnected socket starts un-joined and the room drops intents from it until the join lands,
+  // so the client holds its outbound intents until this arrives. Older clients ignore it.
+  | { t: "joined" }
+  // ★ An intent this socket sent was REFUSED (not in the session, no deck permission, host-only),
+  // to that socket only. It used to be dropped in silence. Older clients ignore it.
+  | { t: "refused"; kind: string; reason: string }
   | { t: "error"; message: string };
 
 // May a device holding `decks` (its drive permission, "" | "A" | "B" | "AB") drive this

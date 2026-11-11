@@ -3652,3 +3652,185 @@ button.peer-pill:hover {
   flex-direction: column;
   gap: 12px;
 }
+
+/* ── v6 (operator, 2026-11-11) ─────────────────────────────────────────────────────────────── */
+/* The gear sits in the middle of the title row, between "Session" and the status label. */
+.session-top > .settings-head .session-gear {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.session-top > .settings-head .session-gear:hover,
+.session-top > .settings-head .session-gear.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Relationship colour: the tag by the name and a tinted disc behind the device icon. */
+.social-card {
+  --rel: #8fb8ff;
+}
+.social-card.rel-you {
+  --rel: #5fd4ff;
+}
+.social-card.rel-host {
+  --rel: #6bdc9e;
+}
+.social-card.rel-friend {
+  --rel: #ff7ab6;
+}
+.social-card.rel-crowd {
+  --rel: #ffae5c;
+}
+.social-card .social-card-ico {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 19px;
+  background: color-mix(in srgb, var(--rel) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rel) 45%, transparent);
+}
+.rel-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--rel);
+  background: color-mix(in srgb, var(--rel) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rel) 40%, transparent);
+}
+/* Remove sits in its own slim column at the row's edge: never a third stacked pill. */
+.social-card.has-kick {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+.social-card-kick {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, #e0617a 75%, var(--muted));
+  font-size: 11px;
+  cursor: pointer;
+  align-self: center;
+}
+.social-card-kick:hover {
+  color: #fff;
+  border-color: #e0617a;
+  background: color-mix(in srgb, #e0617a 30%, transparent);
+}
+
+/* Empty chat: a centred, friendly prompt. */
+.chat-panel.fill .chat-log:has(.chat-empty) {
+  justify-content: center;
+}
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  padding: 24px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.chat-empty b {
+  color: var(--text);
+  font-size: 14px;
+}
+.chat-empty-bubble {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 48px;
+  margin-bottom: 6px;
+  border-radius: 18px 18px 18px 6px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  font-size: 22px;
+}
+
+/* Invite: a bottom sheet over the panel. Slides up, drag the handle down (or tap the scrim). */
+.session-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
+  background: rgba(0, 0, 0, 0.45);
+  animation: sheet-fade 0.18s ease-out;
+}
+.session-invite-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  z-index: 20;
+  gap: 14px;
+  padding: 4px 22px 24px;
+  border-radius: 18px 18px 0 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-bottom: none;
+  background: var(--panel-2);
+  box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.55);
+  align-items: center;
+  animation: sheet-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 0.18s ease-out;
+}
+.session-sheet-grab {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  padding: 10px 0 6px;
+  cursor: grab;
+  touch-action: none;
+}
+.session-sheet-handle {
+  width: 42px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+.session-invite-card .room-invite-qr {
+  margin-top: 0;
+}
+.session-invite-card .session-invite-field {
+  max-width: 360px;
+}
+.session-invite-card .session-invite-url {
+  padding: 11px 12px;
+  font-size: 12.5px;
+}
+.session-invite-card .session-invite-glyph {
+  width: 44px;
+  font-size: 17px;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes sheet-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

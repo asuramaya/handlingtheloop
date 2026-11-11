@@ -49,6 +49,7 @@ export interface Peer {
   stage: boolean; // STEPPED UP from the broadcast floor (drives one deck, never anchors; reverts to a listener on step-down)
   joinedAt: number; // epoch ms this device became a participant (0 until joined) — for "joined 3m ago"
   color: string; // this device's account accent (hex) — the room's "vibe" is the host's
+  handle?: string; // the account's public @handle (absent for anon / no handle), to mark friends
 }
 
 // How a public-lobby LISTENER may get onto the decks (E6). The host picks the gate:

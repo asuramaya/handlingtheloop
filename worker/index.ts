@@ -165,6 +165,10 @@ async function handleRoom(req: Request, env: Env, ctx: ExecutionContext): Promis
   // notification back to the Worker. Anon connections carry none.
   url.searchParams.delete("acct");
   if (user) url.searchParams.set("acct", user.id);
+  // The account's PUBLIC @handle (stripped + re-set like acct): the roster carries it so a viewer
+  // can tell their friends from strangers (Session rows are colour-coded by relationship).
+  url.searchParams.delete("hdl");
+  if (user?.handle) url.searchParams.set("hdl", user.handle);
 
   // Un-forgeable auto-admit grant (push-invite): the friend the host invited skips the knock.
   // Stripped + only set when a real grant was just consumed above — a client can't fake it.

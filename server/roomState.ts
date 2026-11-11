@@ -49,6 +49,7 @@ export interface Attachment {
   ev: number; // the device's reconstruction-engine version (D5; 0 = didn't report). The anchor's is the room's.
   follows: boolean; // this device's account follows the host (resolved by the Worker on connect, un-forgeable). Gates follower-only features; NEVER exposed in the roster (privacy).
   acct: string; // this device's account id ("" if anon), set un-forgeably by the Worker. SERVER-ONLY (never in a Peer) — used solely to attribute a room event (chat @mention) when bridging a notification.
+  handle?: string; // the account's PUBLIC @handle (Worker-set; "" for anon / no handle). In the Peer, so a viewer can mark friends.
   invited: boolean; // a push-invite grant was consumed on connect (Worker-set, un-forgeable) → auto-admit on join, skipping the knock. SERVER-ONLY, never in a Peer.
 }
 
@@ -117,6 +118,7 @@ export function peerOf(a: Attachment, anchorId: string | null): Peer {
     stage: !!a.stage,
     joinedAt: a.joinedAt || 0,
     color: a.color || "",
+    ...(a.handle ? { handle: a.handle } : {}),
   };
 }
 

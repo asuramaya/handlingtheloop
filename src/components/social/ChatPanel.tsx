@@ -163,7 +163,13 @@ export function ChatPanel({ room, revealed, fill = false }: { room: RoomState; r
 
       {!fill && controls}
       <div className="chat-log">
-        {room.chatLog.length === 0 && <div className="chat-empty">No messages yet — say hi 👋</div>}
+        {room.chatLog.length === 0 && (
+          <div className="chat-empty">
+            <span className="chat-empty-bubble" aria-hidden="true">👋</span>
+            <b>No messages yet</b>
+            <span>Say hi to the room.</span>
+          </div>
+        )}
         {room.chatLog.map((m) => {
           const self = mine(m.dev, m.name);
           return (

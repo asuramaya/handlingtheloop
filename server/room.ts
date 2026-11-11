@@ -553,6 +553,7 @@ export class DjRoom {
     const follows = url.searchParams.get("fol") === "1"; // this account follows the host (Worker-resolved, un-forgeable)
     const acct = (url.searchParams.get("acct") || "").slice(0, 64); // this device's account id (server-only; mention attribution)
     const invited = url.searchParams.get("invited") === "1"; // a push-invite grant was consumed → auto-admit (Worker-set, un-forgeable)
+    const handle = (url.searchParams.get("hdl") || "").slice(0, 40); // public @handle (Worker-set)
     if (!this.origin) {
       this.origin = url.origin; // base for the notify/presence bridge (same Worker)
       void this.state.storage.put("origin", this.origin); // survive eviction (presence alarm needs it)
@@ -615,8 +616,8 @@ export class DjRoom {
     // straight into listen-only, never controlling, never anchor, not in the roster.
     const granted = this.grants.has(device);
     const att: Attachment = pub
-      ? { device, name, kind, host: false, joined: true, listening: true, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct, invited: false }
-      : { device, name, kind, host, joined: false, listening: false, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct, invited };
+      ? { device, name, kind, host: false, joined: true, listening: true, pending: false, pub: true, decks: "", stageReq: "", stage: false, joinedAt: Date.now(), color, ev, follows, acct, invited: false, handle }
+      : { device, name, kind, host, joined: false, listening: false, pending: false, pub: false, decks: granted ? "AB" : "", stageReq: "", stage: false, joinedAt: 0, color, ev, follows, acct, invited, handle };
     server.serializeAttachment(att);
     this.state.acceptWebSocket(server, [device]);
 

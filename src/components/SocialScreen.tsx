@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fetchFriendsOnline } from "@htl/account";
 import { heroState, type RoomState } from "@htl/room";
 import { maskName, setRevealed, usePrivacyRevealed } from "@htl/privacy";
 import type { PanelKey, PanelPlacement } from "@htl";
@@ -78,6 +79,23 @@ export function SocialScreen({
   // social"): names, who can chat, and whether guests may pass the invite on. The chat controls
   // under the composer and the names button in the footer both read as clutter where they were.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The invite sheet's drag-to-dismiss.
+  const [sheetDrag, setSheetDrag] = useState(0);
+  const sheetStart = useRef<number | null>(null);
+  // My friends' @handles (mutual follows), to colour their rows. Anyone in the session is online,
+  // so the online list is the whole answer. One fetch per open, refreshed when the roster grows.
+  const [friends, setFriends] = useState<ReadonlySet<string>>(new Set());
+  const rosterSize = room.peers.length;
+  useEffect(() => {
+    if (!room.signedIn) return;
+    let alive = true;
+    fetchFriendsOnline()
+      .then((f) => alive && setFriends(new Set(f.map((x) => x.handle.toLowerCase()))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [room.signedIn, rosterSize]);
   const revealed = usePrivacyRevealed();
 
   const online = room.status === "online";
@@ -224,6 +242,20 @@ export function SocialScreen({
                 title={`Open @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks.`}
               >
                 ● Go live
+              </button>
+            )}
+            {inSession && online && !room.listeningTo && (
+              <button
+                className={`session-gear ${settingsOpen ? "on" : ""}`}
+                onClick={() => {
+                  setInviteOpen(false);
+                  setSettingsOpen((o) => !o);
+                }}
+                aria-pressed={settingsOpen}
+                aria-label="Session settings"
+                title="Session settings"
+              >
+                ⚙
               </button>
             )}
             {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
@@ -421,7 +453,7 @@ export function SocialScreen({
                   {room.peers
                     .filter((p) => !p.pending)
                     .map((p) => (
-                      <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} />
+                      <SocialCard key={p.id} room={room} p={p} revealed={revealed} onActivate={onActivate} friends={friends} />
                     ))}
                   {others.length === 0 && !sessionLive && (
                     <li className="social-ghost">Open htl on another device on this account, or invite someone below.</li>
@@ -446,18 +478,44 @@ export function SocialScreen({
 
         {room.error && <p className="settings-note bad session-error">{room.error}</p>}
 
-        {/* ═════════════ FOOT — fixed: invite + leave ═════════════ */}
-        {inSession && online && !room.listeningTo && (
-          <div className="session-foot">
-            {/* ═════════════ INVITE CARD — rises from the footer ═════════════ */}
-            {inviteOpen && inSession && (
-              <div className="session-invite-card" role="dialog" aria-label="Invite to this session">
-                <button className="session-invite-x" onClick={() => setInviteOpen(false)} aria-label="Close">
-                  ✕
-                </button>
+        {/* ═════════════ INVITE SHEET — slides up from the bottom; drag it down (or tap outside) to close ═════════════ */}
+        {inviteOpen && inSession && (
+          <>
+            <div className="session-sheet-scrim" onPointerDown={() => setInviteOpen(false)} />
+            <div
+              className="session-invite-card"
+              role="dialog"
+              aria-label="Invite to this session"
+              style={sheetDrag ? { transform: `translateY(${sheetDrag}px)`, transition: "none" } : undefined}
+            >
+              <div
+                className="session-sheet-grab"
+                onPointerDown={(e) => {
+                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+                  sheetStart.current = e.clientY;
+                }}
+                onPointerMove={(e) => {
+                  if (sheetStart.current == null) return;
+                  setSheetDrag(Math.max(0, e.clientY - sheetStart.current));
+                }}
+                onPointerUp={() => {
+                  if (sheetStart.current == null) return;
+                  sheetStart.current = null;
+                  if (sheetDrag > 80) setInviteOpen(false);
+                  setSheetDrag(0);
+                }}
+                onPointerCancel={() => {
+                  sheetStart.current = null;
+                  setSheetDrag(0);
+                }}
+                aria-hidden="true"
+              >
+                <span className="session-sheet-handle" />
+              </div>
+
                 {shownInviteUrl ? (
                   <>
-                    <QRCode value={shownInviteUrl} size={164} className="room-invite-qr" />
+                    <QRCode value={shownInviteUrl} size={208} className="room-invite-qr" />
                     {/* The link IS the copy control: the whole field copies, the glyph says so. */}
                     <div className="session-invite-field">
                       <button type="button" className="session-invite-url" onClick={() => copyLink(shownInviteUrl)} title="Copy link">
@@ -486,26 +544,18 @@ export function SocialScreen({
                     </button>
                   </div>
                 )}
-              </div>
-            )}
+            </div>
+          </>
+        )}
+        {/* ═════════════ FOOT — fixed: invite + leave ═════════════ */}
+        {inSession && online && !room.listeningTo && (
+          <div className="session-foot">
             <span className="session-foot-left">
               {canInvite && (
                 <button className={`hw-btn small ${inviteOpen ? "on" : ""}`} onClick={openInvite} aria-expanded={inviteOpen}>
                   ＋ Invite
                 </button>
               )}
-              <button
-                className={`hw-btn small session-gear ${settingsOpen ? "on" : ""}`}
-                onClick={() => {
-                  setInviteOpen(false);
-                  setSettingsOpen((o) => !o);
-                }}
-                aria-pressed={settingsOpen}
-                aria-label="Session settings"
-                title="Session settings"
-              >
-                ⚙
-              </button>
             </span>
             {room.joined ? (
               <button className="hw-btn small danger" onClick={room.leave}>Leave session</button>

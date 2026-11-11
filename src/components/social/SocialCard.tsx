@@ -2,8 +2,18 @@ import type { RoomState } from "@htl/room";
 import { maskName } from "@htl/privacy";
 import { ago, deviceIcon } from "./util";
 
-// One roster row: who the device is, what it's doing (driving / hearing / on stage / clock),
-// and the self-switches + host moderation that apply to it.
+// One roster row: who the device is, and the two facts that matter about it (does it drive the
+// decks, does it play sound), with the controls that apply to it.
+//
+// ★ THE STATE IS THE CONTROL (operator, 2026-11-11: "these rows need a redesign so the narrow
+// version is not so crammed and the wide version is not so barren"). A row used to show a chip
+// row ("Decks · Muted") AND, on your own row, two icon buttons for the very same two facts, so
+// the narrow panel carried four things for two states and the wide one left a gulf between them.
+// Now each fact is ONE pill with an icon and a word: a button where you may change it (your own
+// row; a guest's decks for the host), a plain pill where you may not. Wide, the pills sit on the
+// right of the row; narrow, they drop under the name (a container query on the roster), so
+// neither width crams or strands them. Timekeeper and "on stage" are badges beside the name, and
+// the device kind and time in the session share one quiet meta line.
 export function SocialCard({
   room,
   p,
@@ -19,40 +29,41 @@ export function SocialCard({
   const isGuest = !p.host;
   const label = isSelf ? "You" : isGuest || revealed ? p.name : maskName(p.name);
 
-  // Role line: what this device is doing right now. A stepped-up listener shows the deck
-  // they hold (🎛️ Deck B) so a b2b is legible at a glance.
-  // ★ CHIPS, NOT A SENTENCE OF EMOJI (operator, 2026-11-11: "an eye sore… hard to understand at
-  // first glance"). "🎛️ driving · 🔇 muted · clock" asked the reader to decode three glyphs and a
-  // word that meant nothing to them; each fact is now a small labelled chip, and "clock" (the
-  // device whose playhead everyone follows) says what it is.
-  const chips: { k: string; label: string; on: boolean; title: string }[] = !p.joined
-    ? [{ k: "seen", label: "Not joined", on: false, title: "Signed in on this account but not in the session" }]
-    : [
-        ...(p.stage ? [{ k: "stage", label: "On stage", on: true, title: "Stepped up from the crowd" }] : []),
-        p.controlling
-          ? { k: "drive", label: p.stage && (p.decks === "A" || p.decks === "B") ? `Deck ${p.decks}` : "Decks", on: true, title: "Can drive the decks" }
-          : { k: "drive", label: "Watching", on: false, title: "Follows the decks, cannot drive them" },
-        p.listening
-          ? { k: "sound", label: "Sound on", on: true, title: "Plays the mix out loud" }
-          : { k: "sound", label: "Muted", on: false, title: "Follows silently" },
-        ...(p.anchor ? [{ k: "clock", label: "Timekeeper", on: true, title: "Everyone's playhead follows this device" }] : []),
-      ];
+  // Who may change what on this row.
+  const canSelfDrive = isSelf && (room.host || p.controlling);
+  const canModerate = room.host && !isSelf && isGuest; // host over OTHER guests
+  const deckBtn = p.joined && (canSelfDrive || (canModerate && !p.stage));
+  const soundBtn = p.joined && isSelf;
 
-  // Self switches (own drive — host/granted only; own sound — always self).
-  const toggleSelfSound = () => {
+  const deckLabel = p.stage && (p.decks === "A" || p.decks === "B") ? `Deck ${p.decks}` : "Decks";
+  const onDecks = () => {
+    if (isSelf) room.setControl(!p.controlling);
+    else room.grantControl(p.id, !p.controlling);
+  };
+  const onSound = () => {
     if (!p.listening) onActivate?.();
     room.setListening(!p.listening);
   };
-  const canSelfDrive = isSelf && (room.host || p.controlling);
-  const toggleSelfDrive = () => room.setControl(!p.controlling);
 
-  // Host moderation over OTHER guests: grant/revoke control, and kick.
-  const canModerate = room.host && !isSelf && isGuest;
+  const meta = [p.kind || null, p.joined ? (p.joinedAt > 0 ? ago(p.joinedAt) : null) : "not in the session"].filter(Boolean).join(" · ");
+
+  const deckTitle = isSelf
+    ? canSelfDrive
+      ? p.controlling
+        ? "Stop driving the decks from this device"
+        : "Drive the decks from this device"
+      : "The host hands you the decks"
+    : canModerate
+      ? p.controlling
+        ? "Take the decks back"
+        : "Hand them the decks"
+      : p.controlling
+        ? "Drives the decks"
+        : "Follows the decks, cannot drive them";
+  const soundTitle = isSelf ? (p.listening ? "Mute the mix on this device" : "Hear the mix on this device") : p.listening ? "Plays the mix out loud" : "Follows silently";
 
   return (
-    <li
-      className={`social-card ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${isGuest ? "guest" : "host"}`}
-    >
+    <li className={`social-card ${p.joined ? "in" : ""} ${isSelf ? "self" : ""} ${isGuest ? "guest" : "host"}`}>
       <span className="social-card-ico" aria-hidden="true" style={p.color ? { color: p.color } : undefined}>
         {deviceIcon(p.kind)}
       </span>
@@ -60,61 +71,51 @@ export function SocialCard({
         <div className="social-card-top">
           <span className="social-card-name">{label}</span>
           {p.host ? <span className="room-host-tag">host</span> : <span className="room-guest-tag">guest</span>}
-          {p.joined && p.joinedAt > 0 && <span className="social-card-since">{ago(p.joinedAt)}</span>}
-        </div>
-        <div className="social-card-role">
-          {chips.map((c) => (
-            <span key={c.k} className={`room-chip ${c.k} ${c.on ? "on" : ""}`} title={c.title}>
-              {c.label}
+          {p.stage && <span className="room-badge stage">on stage</span>}
+          {p.anchor && (
+            <span className="room-badge clock" title="Everyone's playback follows this device">
+              timekeeper
             </span>
-          ))}
+          )}
         </div>
+        {meta && <div className="social-card-meta">{meta}</div>}
       </div>
-      <div className="social-card-acts">
-        {isSelf && p.joined && (
-          <>
-            <button
-              className={`room-tog ${p.controlling ? "on" : ""} ${canSelfDrive ? "" : "locked"}`}
-              onClick={canSelfDrive ? toggleSelfDrive : undefined}
-              disabled={!canSelfDrive}
-              title={canSelfDrive ? (p.controlling ? "Stop driving" : "Drive the decks") : "The host hands you the decks"}
-            >
-              🎛️
+      {p.joined && (
+        <div className="social-card-pills">
+          {deckBtn ? (
+            <button className={`peer-pill ${p.controlling ? "on" : ""}`} onClick={onDecks} aria-pressed={p.controlling} title={deckTitle}>
+              <span aria-hidden="true">🎛️</span>
+              {deckLabel}
             </button>
-            <button
-              className={`room-tog ${p.listening ? "on" : ""}`}
-              onClick={toggleSelfSound}
-              aria-label={p.listening ? "Mute this device" : "Hear the mix"}
-            >
-              {p.listening ? "🔊" : "🔇"}
+          ) : (
+            <span className={`peer-pill static ${p.controlling ? "on" : ""}`} title={deckTitle}>
+              <span aria-hidden="true">🎛️</span>
+              {deckLabel}
+            </span>
+          )}
+          {soundBtn ? (
+            <button className={`peer-pill ${p.listening ? "on" : ""}`} onClick={onSound} aria-pressed={p.listening} title={soundTitle}>
+              <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
+              {p.listening ? "Sound" : "Muted"}
             </button>
-          </>
-        )}
-        {canModerate && (
-          <>
-            {/* A stepped-up listener gets a gentle "send to the floor" (keeps them listening);
-                an invited guest gets the usual grant + kick. */}
-            {p.stage ? (
-              <button className="social-floor" onClick={() => room.denyStage(p.id)}>
-                ⬇ floor
-              </button>
-            ) : (
-              p.joined && (
-                <button
-                  className={`room-tog ${p.controlling ? "on" : ""}`}
-                  onClick={() => room.grantControl(p.id, !p.controlling)}
-                  title={p.controlling ? "Revoke control" : "Give control"}
-                >
-                  🎛️
-                </button>
-              )
-            )}
-            <button className="social-kick" onClick={() => room.kick(p.id)}>
-              ⛔
+          ) : (
+            <span className={`peer-pill static ${p.listening ? "on" : ""}`} title={soundTitle}>
+              <span aria-hidden="true">{p.listening ? "🔊" : "🔇"}</span>
+              {p.listening ? "Sound" : "Muted"}
+            </span>
+          )}
+          {canModerate && p.stage && (
+            <button className="peer-pill" onClick={() => room.denyStage(p.id)} title="Send them back to the crowd (they keep listening)">
+              ⬇ Floor
             </button>
-          </>
-        )}
-      </div>
+          )}
+          {canModerate && (
+            <button className="peer-pill kick" onClick={() => room.kick(p.id)} title="Remove from the session" aria-label="Remove from the session">
+              ✕
+            </button>
+          )}
+        </div>
+      )}
     </li>
   );
 }

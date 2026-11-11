@@ -373,33 +373,35 @@ export function SocialScreen({
             {/* ═════════════ INVITE CARD — rises from the footer ═════════════ */}
             {inviteOpen && inSession && (
               <div className="session-invite-card" role="dialog" aria-label="Invite to this session">
-                <div className="session-invite-head">
-                  <span className="settings-label">Invite to this session</span>
-                  <button className="session-invite-x" onClick={() => setInviteOpen(false)} aria-label="Close">
-                    ✕
-                  </button>
-                </div>
+                <button className="session-invite-x" onClick={() => setInviteOpen(false)} aria-label="Close">
+                  ✕
+                </button>
                 {inviteUrl ? (
-                  <div className="session-invite-body">
-                    <QRCode value={inviteUrl} size={148} className="room-invite-qr" />
-                    <div className="session-invite-side">
-                      <button type="button" className="room-invite-link" onClick={() => copyLink(inviteUrl)} title="Copy link">
+                  <>
+                    <QRCode value={inviteUrl} size={164} className="room-invite-qr" />
+                    {/* The link IS the copy control: the whole field copies, the glyph says so. */}
+                    <div className="session-invite-field">
+                      <button type="button" className="session-invite-url" onClick={() => copyLink(inviteUrl)} title="Copy link">
                         {inviteUrl.replace(/^https?:\/\//, "")}
                       </button>
-                      <div className="session-invite-acts">
-                        <button className="hw-btn small primary" onClick={() => copyLink(inviteUrl)}>
-                          {copied ? "Copied ✓" : "Copy link"}
+                      <button
+                        type="button"
+                        className={`session-invite-glyph ${copied ? "done" : ""}`}
+                        onClick={() => copyLink(inviteUrl)}
+                        aria-label={copied ? "Copied" : "Copy link"}
+                        title={copied ? "Copied" : "Copy link"}
+                      >
+                        {copied ? "✓" : "⧉"}
+                      </button>
+                      {canShare && (
+                        <button type="button" className="session-invite-glyph" onClick={() => shareLink(inviteUrl)} aria-label="Share" title="Share">
+                          ⇪
                         </button>
-                        {canShare && (
-                          <button className="hw-btn small" onClick={() => shareLink(inviteUrl)}>
-                            Share…
-                          </button>
-                        )}
-                      </div>
+                      )}
                     </div>
-                  </div>
+                  </>
                 ) : (
-                  <div className="session-invite-body making">
+                  <div className="session-invite-making">
                     <button className="hw-btn small primary" onClick={makeInvite} disabled={inviting}>
                       {inviting ? "Making a link…" : "Create link"}
                     </button>

@@ -3395,3 +3395,198 @@ span.profile-handle:hover {
   text-transform: uppercase;
   color: var(--muted);
 }
+
+/* Invite card v3 (operator, 2026-11-11: "a bit of an eyesore… the wide version looks atrocious"):
+   a compact card anchored over the Invite button at every width, QR on top, and the link field
+   carrying its own copy (and, on phones, share) glyph. No title, no separate Copy button. */
+.session-invite-card {
+  left: 12px;
+  right: auto;
+  width: min(252px, calc(100% - 24px));
+  align-items: center;
+  gap: 12px;
+  padding: 16px 14px 14px;
+}
+.session-invite-card .session-invite-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+}
+.session-invite-card .room-invite-qr {
+  margin-top: 6px;
+}
+.session-invite-field {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.session-invite-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: 11.5px/1.2 ui-monospace, monospace;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.session-invite-url:hover {
+  color: var(--text);
+}
+.session-invite-glyph {
+  flex: none;
+  width: 34px;
+  border: none;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.session-invite-glyph:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.session-invite-glyph.done {
+  color: #6bdc9e;
+}
+.session-invite-making {
+  padding: 22px 0 8px;
+}
+
+/* Device rows v3: one pill per fact (decks, sound), a button where you may change it. Wide, the
+   pills sit at the right; narrow, they drop under the name. */
+.social-roster {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.social-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+}
+.social-card-ico {
+  font-size: 22px;
+  align-self: center;
+}
+.social-card-top {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.social-card-name {
+  font-size: 14px;
+}
+.social-card-meta {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.room-badge {
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.room-badge.clock {
+  color: #ffd27a;
+  background: color-mix(in srgb, #ffc04d 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ffc04d 38%, transparent);
+}
+.room-badge.stage {
+  color: #ffb3c1;
+  background: color-mix(in srgb, #c8506a 18%, transparent);
+  border: 1px solid #c8506a;
+}
+.social-card-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.peer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.peer-pill > span[aria-hidden] {
+  filter: grayscale(1) opacity(0.55);
+  font-size: 13px;
+}
+.peer-pill.on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.peer-pill.on > span[aria-hidden] {
+  filter: none;
+}
+button.peer-pill {
+  cursor: pointer;
+}
+button.peer-pill:hover {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  color: var(--text);
+}
+/* A plain pill (a fact you cannot change from here): no frame, so it never reads as a button. */
+.peer-pill.static {
+  border-color: transparent;
+  background: transparent;
+  padding: 0 4px;
+}
+.peer-pill.static.on {
+  background: transparent;
+  border-color: transparent;
+}
+.peer-pill.kick {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+  color: #e0617a;
+}
+.peer-pill.kick:hover {
+  border-color: #e0617a;
+  color: #fff;
+  background: color-mix(in srgb, #e0617a 30%, transparent);
+}
+@container (max-width: 460px) {
+  .social-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .social-card-pills {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

@@ -1857,6 +1857,13 @@ export class DjRoom {
     // are the same silence on the client side. This line is the other half of that question.
     console.warn(`[htl-room] anchor: ${this.anchorId ?? "none"} -> ${device ?? "none"}`);
     this.anchorId = device;
+    // A new anchor gets a full silence window from NOW: as a follower it only pinged every 5 s, so
+    // its last message can already be older than ANCHOR_SILENT_MS at the moment it takes the slot.
+    if (device) {
+      const now = Date.now();
+      for (const w of this.sockets(device)) this.lastSeen.set(w, now);
+      this.armSilenceCheck();
+    }
     await this.state.storage.put("anchor", device);
     // ★ ASK THE NEW ANCHOR WHAT IS ON ITS BOARD. `state` is accepted only from the anchor, so a
     // publish this device made a moment before the slot arrived was DROPPED here in silence, and

@@ -1588,6 +1588,16 @@ describe("DjRoom anchor handover (session sync audit)", () => {
     expect(anchorOf()).toBe("g1");
   });
 
+  it("a device that just TOOK the slot gets a fresh silence window (its last ping may be old)", async () => {
+    const { host, guest } = await hostAndDrivingGuest();
+    await tickFor(host, 4_800); // the guest says nothing for 4.8 s — longer than the silence limit
+    await h.send(host, { t: "leave" }); // the slot moves to the quiet guest
+    expect(anchorOf()).toBe("g1");
+    const host2 = (await h.connect({ device: "host2", host: true })).ws!;
+    await h.send(host2, { t: "ping", c: 1 }); // someone else's message runs the audit
+    expect(guest.closed, "not evicted for silence it had as a follower").toBe(false);
+  });
+
   it("control: a TICKING anchor is never evicted", async () => {
     const { host, guest } = await hostAndDrivingGuest();
     for (let t = 0; t < 40; t++) {

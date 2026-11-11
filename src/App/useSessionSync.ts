@@ -38,6 +38,7 @@ import {
 import { checkScrub, scrubBegin, scrubEnd, scrubMove, scrubTailDone, SCRUB_TAIL_MS, type ScrubFlag } from "@htl/room/scrubGuard";
 import { sinceLocalLoopMs, sinceLocalTransportMs, withRemoteLoopApply } from "@htl/room/localGestures";
 import { applyIntent as applyIntentTo, type IntentEngine } from "@htl/room/applyIntent";
+import { PendingDeckState, deckStateKey, pendingTarget } from "@htl/room/pendingDeckState";
 import type { Settings } from "@htl/state";
 import { applyDeckFxSnapshot } from "./deckFxSnapshot";
 import { STEM_KEYS } from "./useStemPipeline";
@@ -420,6 +421,20 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
 
   // The videoId the anchor last stamped on each deck's tick (null: none yet / an older anchor).
   const tickVid = useRef<Record<DeckId, string | null>>({ A: null, B: null });
+  // Loop / cue / hot-cue results held for a track still loading (pendingDeckState.ts).
+  const pendingDeckState = useRef(new PendingDeckState());
+  // ...and applied once that track is on the deck, after the post-decode snapshot reconcile above
+  // (effects run in order), so the newer intents win over the older snapshot.
+  useEffect(() => {
+    let any = false;
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      for (const i of pendingDeckState.current.take(id, loaded[id])) {
+        applyIntent(i);
+        any = true;
+      }
+    });
+    if (any) refresh();
+  }, [loaded, applyIntent, refresh]);
   // Inbound control intent from a co-DJ → apply locally + repaint. Never re-emit.
   const onRoomIntent = useCallback(
     (intent: Intent) => {
@@ -435,6 +450,17 @@ export function useSessionSync(deps: SessionSyncDeps): SessionSync {
       if (intent.kind === "stemsAck") {
         stemAckRef?.current(intent.deck, intent.state, intent.reason, intent.pct);
         return;
+      }
+      // ★ Loop / cue / hot-cue RESULTS for a track this deck does not hold yet are kept for that track
+      // and applied when it lands (pendingDeckState.ts); applied now they would land on the old buffer
+      // and be wiped by the new one's reset (operator, 2026-11-11: session sync audit).
+      if ("deck" in intent && deckStateKey(intent)) {
+        const d = intent.deck;
+        const target = pendingTarget({ loadedId: latest.current.loaded[d], tickVid: tickVid.current[d], roomLoadTarget: roomLoadTarget.current[d] });
+        if (target && pendingDeckState.current.stash(target, intent)) {
+          event("room.intent", { deck: d, kind: intent.kind, applied: false, pendingFor: target });
+          return;
+        }
       }
       if ("deck" in intent && isAudibleDeckIntent(intent.kind, "action" in intent ? String(intent.action) : undefined)) {
         const d = intent.deck;

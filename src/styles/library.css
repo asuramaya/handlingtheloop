@@ -926,16 +926,27 @@ th.col-thumb {
 @container (max-width: 440px) {
   .track-table .col-num,
   .track-table .col-thumb,
-  .track-table .col-bpm,
-  .track-table .col-key,
   /* The Queue's fixed-px "Mix" badge column is ADDED on top of the %-based columns, so on
      a phone it pushes the table ~94px past the edge (the right-side cutoff). Drop it in the
      cramped view — the queue order + titles still read; the transition badge is desktop-only. */
   .track-table .col-extra {
     display: none;
   }
+  /* ★ BPM AND KEY STAY (operator, 2026-11-11: "in the limited view I am missing tempo, key"). They
+     take what their text needs (em, so they follow the row-size stepper) and Title keeps the rest. */
   .track-table .col-title {
-    width: 58%;
+    width: auto;
+  }
+  .track-table col.col-bpm {
+    width: 3.2em !important;
+  }
+  .track-table col.col-key {
+    width: 2.7em !important;
+  }
+  .track-table :is(th, td):is(.col-bpm, .col-key) {
+    padding-left: 2px;
+    padding-right: 3px;
+    text-overflow: clip;
   }
   .track-table td.col-title .tt-deck-inline {
     display: inline-grid;
@@ -948,8 +959,8 @@ th.col-thumb {
     padding-right: 8px;
     text-overflow: clip;
   }
-  .track-table .col-artist {
-    width: 30%;
+  .track-table:not(.user-cols) col.col-artist {
+    width: 26% !important;
   }
   /* No column-resize handles in the cramped view: the columns are auto-proportioned
      here and a thin drag target only fights tap-to-sort on touch. */
@@ -1178,7 +1189,7 @@ td.col-num {
 
 /* ★ THE TOOLBAR IN THE TITLE ROW (lib/toolbarHost.ts): the filter / search field and its chips sit
    between the library's title and Rows −/＋, so there is no separate toolbar row of dead space. */
-.settings-head.lib-head-row { container-type: inline-size; flex-wrap: wrap; row-gap: 8px; } /* wraps only on a phone, where the field takes its own rows */
+.settings-head.lib-head-row { container-type: inline-size; flex-wrap: wrap; row-gap: 8px; position: relative; } /* wraps only on a phone; relative so the phone field's icon + count can anchor to it */ /* wraps only on a phone, where the field takes its own rows */
 .lib-head-tools {
   flex: 1 1 auto;
   display: flex;
@@ -1510,53 +1521,42 @@ td.col-num {
     bottom: 10px;
   }
 }
-/* ★ ONE LINE ON A PHONE (operator, 2026-11-10: "make this be on the same line"): the menu and
-   where you are, then the count, Cached / Stemmed and −/＋ on the SAME row; the search field is
-   the row under it. The name gives way first and scrolls (Ticker) when it does not fit; the filter
-   strip never wraps, it shrinks and swipes sideways. The field's own box dissolves (display:
-   contents) so its pieces can sit on two rows of the title bar; the icon and ✕ ride over the
-   input with negative margins rather than absolute positions, which have no box to anchor to. */
+/* ★ ONE LINE ON A PHONE (operator, 2026-11-10/11): the menu and where you are, then Cached /
+   Stemmed and −/＋ on the SAME row, nothing moving ("the buttons become a moving target"); the
+   search field is the row under it with the result count INSIDE it at the right end. The field's
+   box and its trail dissolve (display: contents) so their pieces can sit on two rows of the bar;
+   the icon, ✕ and count ride over the input with negative margins (no box to anchor to). */
 @container (max-width: 639px) {
   .settings-head.lib-head-row .lib-head-toggle,
   .settings-head.lib-head-row.nav-open .lib-head-toggle {
     flex: 0 1 auto;
-    max-width: 48%;
+    min-width: 0;
+    margin-right: auto;
   }
   .settings-head.lib-head-row .lib-head-tools,
-  .lib-head-tools .tt-filter {
+  .lib-head-tools .tt-filter,
+  .lib-head-tools .tt-filter-trail {
     display: contents;
   }
-  .lib-head-tools .tt-filter-trail {
+  .lib-head-tools .tt-cache-chips,
+  .lib-head-tools .tt-rows-in {
     order: 0;
-    flex: 1 1 0;
-    min-width: 0;
-    margin-left: 6px;
-    flex-wrap: nowrap;
-    justify-content: flex-start; /* overflow runs off the END, where the glide (useStripGlide) can reach it */
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .lib-head-tools .tt-filter-trail::-webkit-scrollbar {
-    display: none;
-  }
-  .lib-head-tools .tt-filter-trail > * {
     flex: none;
   }
-  .lib-head-tools .tt-filter-trail .tt-filter-count {
-    margin-right: auto;
-    margin-left: 0;
-  }
+  /* The icon and the count are anchored to the bar's bottom edge, which is the field's row: as
+     zero-width flex items they slipped into whichever line had room (the icon ended up on the
+     title row). */
   .lib-head-tools .tt-filter-ico {
-    order: 3;
-    position: relative;
-    left: auto;
-    bottom: auto;
+    position: absolute;
+    left: 22px;
+    bottom: 21px; /* the bar's 9 px padding + (38 px field − 13 px icon) / 2 */
     z-index: 1;
-    margin: 0 -25px 0 12px; /* 13 px wide: takes no room on the line, sits inside the field */
+    margin: 0;
   }
   .lib-head-tools .tt-filter-input {
     order: 3;
     flex: 1 0 100%;
+    padding-right: 7.5em; /* room for the count + ✕ */
   }
   .lib-head-tools .tt-filter-clear {
     order: 3;
@@ -1566,6 +1566,14 @@ td.col-num {
     z-index: 1;
     margin: 0 0 0 -30px;
   }
+  .lib-head-tools .tt-filter-count {
+    position: absolute;
+    right: 46px; /* left of the ✕ */
+    bottom: 19px; /* centred on the 38 px field, 9 px above the bar's bottom */
+    z-index: 1;
+    margin: 0;
+    pointer-events: none;
+  }
 }
 /* ★ MENU OPEN: ONE LAYER (operator, 2026-11-10: "when the hamburger expands it should not show the
    search bar because that's a second layer element"). With the sections covering the library, the
@@ -1574,9 +1582,6 @@ td.col-num {
   .settings-head.lib-head-row.nav-open .lib-head-tools,
   .settings-head.lib-head-row.nav-open .lib-head-rows {
     display: none;
-  }
-  .settings-head.lib-head-row.nav-open .lib-head-toggle {
-    max-width: none;
   }
 }
 /* The ticker box (lib/Ticker.tsx): clips, ellipsis while it fits, glides when it does not. */

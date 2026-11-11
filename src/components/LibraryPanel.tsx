@@ -1,6 +1,4 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
-import { useStripGlide } from "./lib/useStripGlide";
-import { Ticker } from "./lib/Ticker";
 import { RowsStepper } from "./lib/RowsStepper";
 import { ToolbarHostContext } from "./lib/toolbarHost";
 import { canonicalVideoId, trackKey, type Library, type Playlist, type TrackMeta } from "@htl/library";
@@ -113,8 +111,6 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
   const activeTableRef = useRef<TrackTableHandle>(null);
   // The slot in the title row that the visible table's toolbar portals into (lib/toolbarHost.ts).
   const [toolsHost, setToolsHost] = useState<HTMLElement | null>(null);
-  // The title bar's filter strip (count, Cached / Stemmed, −/＋) glides when it overflows (phone).
-  useStripGlide(toolsHost, ".tt-filter-trail");
   // Browse cursor target: the track list, or the source list (Collection / Community /
   // playlists) in the sidebar. The encoder PRESS flips between them (rekordbox tree/list).
   const [sourceNav, setSourceNav] = useState(false);
@@ -717,9 +713,9 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
                     a drawer over the list rather than a column beside it. */}
                 <span className="lib-head-burger" aria-hidden="true">☰</span>
                 <span className="lib-head-caret" aria-hidden="true">{navOpen ? "▾" : "▸"}</span>
-                <Ticker className="lib-head-name" title={headInfo.name}>
+                <span className="lib-head-name" title={headInfo.name}>
                   {headInfo.name}
-                </Ticker>
+                </span>
               </button>
               {/* The visible table's filter / search field and chips land here (ToolbarHostContext). */}
               <div className="lib-head-tools" ref={setToolsHost} />
@@ -1046,6 +1042,7 @@ export const LibraryPanel = forwardRef<LibraryHandle, LibraryPanelProps>(functio
             inCollection={inCollection}
             cacheFilter
             searchPlaceholder="Filter community…"
+            hideVersionsChip
             onSearchEverywhere={searchEverywhere}
             stateKey="community"
             // The shared pool is where one song piles up as a Topic, a video and three lyric uploads.

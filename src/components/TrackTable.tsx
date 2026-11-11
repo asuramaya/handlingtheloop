@@ -58,6 +58,8 @@ interface TrackTableProps {
   /** ★ A FILTER THAT FINDS NOTHING OFFERS THE REAL SEARCH (operator, 2026-11-10: a first-time user
    *  typed into Collection's filter, got nothing, and never learned that Search is elsewhere). */
   onSearchEverywhere?: (query: string) => void;
+  /** Fold duplicate uploads without offering the "+N uploads" toggle (Community, operator 2026-11-11). */
+  hideVersionsChip?: boolean;
   /** A button under the empty hint (an empty list's way forward, e.g. "Search for tracks"). */
   emptyAction?: { label: string; onClick: () => void };
   initialQuery?: string;
@@ -115,6 +117,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
   searchPlaceholder,
   onSearchEverywhere,
   emptyAction,
+  hideVersionsChip,
   initialQuery,
   extraCol,
   topSlot,
@@ -653,7 +656,7 @@ export const TrackTable = forwardRef<TrackTableHandle, TrackTableProps>(function
                   </button>
                 </span>
               )}
-              {grouped && grouped.hidden > 0 && (
+              {grouped && grouped.hidden > 0 && !hideVersionsChip && (
                 <button
                   className={`tt-chip tt-chip-versions ${allVersions ? "on" : ""}`}
                   aria-pressed={allVersions}

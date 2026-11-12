@@ -648,7 +648,18 @@ function AppBody() {
       const root = document.documentElement;
       root.classList.add("panel-swap");
       window.clearTimeout(swapTimer.current);
-      swapTimer.current = window.setTimeout(() => root.classList.remove("panel-swap"), 400);
+      // ★ PIN IT BEFORE LIFTING IT (operator, 2026-11-12: "shows the panel then it disappears then
+      // the animation plays"). Removing the class turned `animation: none` back into the open
+      // animation on a panel already on screen, and the browser runs a newly-applied animation
+      // from its first frame, so the panel blinked out and slid in again 400 ms late. The panels
+      // that opened during the swap keep `animation: none` inline for the rest of their life
+      // (each open mounts fresh elements, so it never leaks into the next open).
+      swapTimer.current = window.setTimeout(() => {
+        document.querySelectorAll<HTMLElement>(".modal-backdrop, .modal-backdrop > .panel").forEach((el) => {
+          el.style.animation = "none";
+        });
+        root.classList.remove("panel-swap");
+      }, 400);
     }
     closing.forEach((k) => PANEL_CLOSERS[k]());
   };

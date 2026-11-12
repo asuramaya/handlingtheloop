@@ -4781,6 +4781,9 @@ function AppBody() {
               room.setListening(true);
             }
             room.goPublic(true);
+            // …and take you to the session you just opened (operator, 2026-11-12). Opened, never
+            // toggled: a toggle would close it if it were already showing.
+            if (!socialOpen) toggleSocial();
           }}
         />
       )}

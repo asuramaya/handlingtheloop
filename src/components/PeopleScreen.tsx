@@ -107,6 +107,20 @@ export function PeopleScreen({
   const [editRequested, setEditRequested] = useState(false);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
   const signedIn = !!user;
+  // ★ ONE ANSWER TO "AM I LIVE" (operator, 2026-11-12: "the go live bug when im already live. and
+  // when i do go live it does not update instantly or redirect me to the session"). The footer
+  // read only the room's public flag, which this device may not have (another device of yours
+  // went live) or may not have yet (the room opens a beat after the press), while the list above
+  // already showed your room on air. Live now means any of: the room says so, the directory lists
+  // you, or you just pressed Go live (held a few seconds until one of the others agrees).
+  const [listed, setListed] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  useEffect(() => {
+    if (!pressed) return;
+    const t = window.setTimeout(() => setPressed(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [pressed]);
+  const isLive = !!live || listed || pressed;
 
   const goPane = (p: PeoplePane) => {
     setShareOpen(false);
@@ -202,7 +216,7 @@ export function PeopleScreen({
     // needed and opens it to the public; once live the button says so and opens Session. Without
     // a @handle there is no public room to open, so it goes to claiming one.
     if (pane === "live" && signedIn)
-      footRight = live ? (
+      footRight = isLive ? (
         <button className="hw-btn small live" onClick={onGoToSession} title="Open the Session panel">
           ● Live{listeners ? ` · ${listeners} listening` : ""}
         </button>
@@ -210,8 +224,10 @@ export function PeopleScreen({
         <button
           className="hw-btn small primary"
           onClick={() => {
-            if (self && onGoLive) onGoLive();
-            else {
+            if (self && onGoLive) {
+              onGoLive();
+              setPressed(true); // the footer turns to Live now, not when the room catches up
+            } else {
               setEditRequested(true);
               goPane("settings");
             }
@@ -304,7 +320,8 @@ export function PeopleScreen({
               {pane === "live" && (
                 <DiscoverScreen
                   self={self}
-                  live={!!live}
+                  live={isLive}
+                  onSelfListed={setListed}
                   tunedTo={tunedTo}
                   friends={friends}
                   onListen={onListen}

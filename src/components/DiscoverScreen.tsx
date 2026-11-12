@@ -48,6 +48,7 @@ const ROOM_CAP = 12;
 export function DiscoverScreen({
   self,
   live: selfLive = false,
+  onSelfListed,
   tunedTo,
   friends,
   onListen,
@@ -60,6 +61,9 @@ export function DiscoverScreen({
   self: string | null;
   /** Am I live? Going live (or off) re-reads the directory so my own room shows (or leaves). */
   live?: boolean;
+  /** Reports whether the directory lists MY room: the board's own flag can lag or be absent on
+   *  this device, and the list on screen is the thing the footer must agree with. */
+  onSelfListed?: (listed: boolean) => void;
   tunedTo: string | null;
   friends: FriendPresence[]; // mutual-follows online now (polled by App for the chin dot, passed in)
   onListen: (handle: string) => void;
@@ -165,6 +169,10 @@ export function DiscoverScreen({
 
   const openPerson = onOpenPerson ?? goToHandle;
   const live = useMemo(() => [...(rooms ?? []), ...more], [rooms, more]);
+  const listed = !!self && live.some((r) => r.handle === self);
+  useEffect(() => {
+    onSelfListed?.(listed);
+  }, [listed, onSelfListed]);
 
   // ONE ranked list, re-derived only when the poll lands or the query changes. `now` is folded
   // in at rank time so "just started" ages correctly across a 30 s refresh.

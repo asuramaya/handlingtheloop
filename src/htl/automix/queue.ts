@@ -52,6 +52,10 @@ export interface MixQueue {
   /** Returns true when `t` was waiting in the list (it is taken out of it) — the caller then knows
    *  the set moved ALONG the suggestions rather than away from them, and keeps the rest. */
   setCurrent: (t: TrackMeta | null) => boolean | void;
+  /** Fill the CURRENT track's blank title / artist / cover / duration (same song only). The live
+   *  track is copied off the deck once, when it changes; a deck that learns its name later must
+   *  not leave the NOW card showing the bare id. */
+  fillCurrent?: (t: TrackMeta) => void;
   getCurrent: () => TrackMeta | null;
   advance: () => QueueItem | null;
   peekNext: () => QueueItem | null;
@@ -291,6 +295,19 @@ export function useMixQueue(): MixQueue {
     return queued;
   }, []);
 
+  const fillCurrent = useCallback((t: TrackMeta) => {
+    setCurrentState((c) => {
+      if (!c || c.videoId !== t.videoId) return c;
+      const next = {
+        ...c,
+        title: c.title?.trim() ? c.title : t.title,
+        artist: c.artist?.trim() ? c.artist : t.artist,
+        thumbnail: c.thumbnail || t.thumbnail || null,
+        duration: c.duration || t.duration,
+      };
+      return next.title === c.title && next.artist === c.artist && next.thumbnail === c.thumbnail && next.duration === c.duration ? c : next;
+    });
+  }, []);
   const getCurrent = useCallback((): TrackMeta | null => currentRef.current, []);
   const isFilling = useCallback((): boolean => filling.current, []);
 
@@ -681,6 +698,7 @@ export function useMixQueue(): MixQueue {
     setAugment,
     loadTracks,
     setCurrent,
+    fillCurrent,
     getCurrent,
     advance,
     peekNext,

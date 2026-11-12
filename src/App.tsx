@@ -19,7 +19,7 @@ import { fxPadArg, fxPadIsOn, fxPadPress, fxPadRelease, padsForDeck } from "./co
 import { quantizedHotCue, quantizedJumpToCue, quantizedTogglePlay } from "./components/quantizedTransport";
 import { jogMode } from "./components/jogMode";
 import { markerStyleOf } from "./components/markerStyle";
-import { searchYouTube } from "@htl/media";
+import { fetchMeta, searchYouTube } from "@htl/media";
 import { LibraryPanel, type LibraryHandle } from "./components/LibraryPanel";
 import { autoLine } from "./components/automixStatus";
 import { pickLiveDeck } from "./App/liveDeck";
@@ -151,7 +151,7 @@ import { crashPrompts, type CrashPrompt } from "./App/crashPrompt";
 import { CrashGuardPrompt } from "./components/CrashGuardPrompt";
 import { PerfRecChip } from "./components/PerfCaptureControl";
 import { shouldReleaseClaim } from "./App/loadClaim";
-import { deckNamePatch } from "./App/deckNameBackfill";
+import { deckLookPatch, deckNamePatch, deckNeedsLook, type TrackLook } from "./App/deckNameBackfill";
 import { publishedDeckId } from "./App/publishedDeckId";
 import { useStemViewSync } from "./App/useStemViewSync";
 import { useLyricsSync } from "./App/useLyricsSync";
@@ -3321,6 +3321,40 @@ function AppBody() {
     },
     [meta, library.collection],
   );
+
+  // ★ A DECK THAT KNOWS ONLY ITS ID LOOKS ITSELF UP (operator, 2026-11-12: names not loaded or
+  // half loaded at startup, the id leaking into the NOW card). See App/deckNameBackfill.ts →
+  // deckLookPatch: the library row first, then /api/meta once per track; blanks only.
+  const lookedUp = useRef<Record<DeckId, string>>({ A: "", B: "" });
+  useEffect(() => {
+    (["A", "B"] as DeckId[]).forEach((id) => {
+      const m = meta[id];
+      const vid = m.videoId;
+      if (!vid || !deckNeedsLook(m)) return;
+      const apply = (found: TrackLook) =>
+        setMeta((cur) => {
+          const p = deckLookPatch(cur[id], found);
+          return p ? { ...cur, [id]: { ...cur[id], ...p } } : cur;
+        });
+      const lib = library.collection.find((t) => t.videoId === vid);
+      if (lib) apply(lib);
+      if (lookedUp.current[id] === vid || !/^[\w-]{11}$/.test(vid)) return;
+      lookedUp.current[id] = vid;
+      void fetchMeta(vid)
+        .then((t) => apply({ ...t, videoId: vid, thumbnail: t.thumbnail || `/api/art/${vid}` }))
+        .catch(() => apply({ videoId: vid, thumbnail: `/api/art/${vid}` }));
+    });
+  }, [meta, library.collection]);
+  // …and the NOW card, which copied the deck once when the live track changed, takes the name as
+  // soon as the deck has it.
+  const fillCurrent = mixQueue.fillCurrent;
+  useEffect(() => {
+    if (!fillCurrent) return;
+    for (const id of ["A", "B"] as DeckId[]) {
+      const t = deckTrack(id);
+      if (t) fillCurrent(t);
+    }
+  }, [deckTrack, fillCurrent]);
 
   // MOBILE: bring one deck to the desired stem mode. → Stems (want): the deck is mix-only so
   // its float32 buffer is still resident — derive in place (position + playback preserved, no

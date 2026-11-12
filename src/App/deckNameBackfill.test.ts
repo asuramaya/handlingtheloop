@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { deckNamePatch, type DeckNaming } from "./deckNameBackfill";
+import { deckLookPatch, deckNamePatch, deckNeedsLook, type DeckNaming } from "./deckNameBackfill";
 import type { DeckSnapshot } from "@htl";
 
 const VID = "QJbPvDz0NTo";
@@ -33,5 +33,25 @@ describe("deckNamePatch", () => {
   test("whitespace is not a name", () => {
     expect(deckNamePatch(deck({ name: "  " }), snap())?.name).toBe("Strobe");
     expect(deckNamePatch(deck(), snap({ name: "   " }))?.name).toBeUndefined();
+  });
+});
+
+describe("deckLookPatch (a saved nameless deck)", () => {
+  const blank = { videoId: "3nnoDCGQQEk", name: "", artist: "", bpm: 132, duration: 237, thumbnail: null };
+  test("a catalog deck missing its name, artist or cover needs a look", () => {
+    expect(deckNeedsLook(blank)).toBe(true);
+    expect(deckNeedsLook({ ...blank, name: "Song", artist: "Who", thumbnail: "t" })).toBe(false);
+    expect(deckNeedsLook({ ...blank, videoId: null })).toBe(false);
+  });
+  test("fills only the blanks", () => {
+    expect(deckLookPatch(blank, { videoId: "3nnoDCGQQEk", title: "Song", artist: "Who", thumbnail: "t", duration: 200 })).toEqual({
+      name: "Song",
+      artist: "Who",
+      thumbnail: "t",
+    });
+    expect(deckLookPatch({ ...blank, name: "Mine" }, { videoId: "3nnoDCGQQEk", title: "Theirs" })).toBeNull();
+  });
+  test("never names a different track", () => {
+    expect(deckLookPatch(blank, { videoId: "other", title: "Song" })).toBeNull();
   });
 });

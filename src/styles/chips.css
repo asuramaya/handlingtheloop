@@ -78,3 +78,40 @@ body:not(.no-glow) .mchip-key.keyed {
 .mixq-stat dd .mchip {
   font-size: 0.85em;
 }
+
+/* ★ THE CELL IS THE CHIP (operator, 2026-11-12: "the glow takes up the entire space of the row box
+   instead of a pill like look"). In the track tables the BPM / KEY / TIME chip fills its cell edge
+   to edge, so a column of keys reads as a band of Camelot colour down the table rather than a
+   stack of pills floating in dark boxes. Absolutely filled rather than sized, so the row's height
+   stays whatever its tallest cell (the cover) makes it and the colour still reaches top and
+   bottom. The other surfaces (deck header, Now/Next cards) keep the pill. */
+.track-table td:is(.col-bpm, .col-key, .col-time) {
+  position: relative;
+}
+.track-table td:is(.col-bpm, .col-key, .col-time) .mchip {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: none;
+  min-width: 0;
+  padding: 0 12px;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 0.9em;
+}
+.track-table td.col-key .mchip-key.keyed {
+  background: color-mix(in srgb, var(--mc) 16%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--mc) 70%, transparent);
+}
+.track-table td.col-bpm .mchip {
+  background: color-mix(in srgb, var(--mc) 7%, transparent);
+}
+.track-table td.col-time .mchip {
+  background: transparent;
+}
+.track-table td:is(.col-bpm, .col-key, .col-time) .mchip.empty {
+  background: transparent;
+  box-shadow: none;
+}

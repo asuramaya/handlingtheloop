@@ -91,7 +91,7 @@ export function PeopleList({
         ) : list.length === 0 ? (
           <p className="discover-empty">{emptyMsg}</p>
         ) : (
-          <ul className="person-search-results" role="list">
+          <ul className="social-roster person-list" role="list">
             {list.map((c, i) => (
               <PersonRow key={c.handle ?? `i${i}`} card={c} onJam={onJam} onListen={onListen} />
             ))}

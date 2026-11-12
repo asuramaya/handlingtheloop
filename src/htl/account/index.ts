@@ -684,14 +684,10 @@ export { groupActivity, isActionable, dayKey, dayLabel, ROLLUP_MIN, type Activit
 export { readGraph, writeGraph, clearGraphCache, type GraphPage } from "./peopleCache";
 export {
   INITIAL_PEOPLE_VIEW,
-  PANE_TAB,
+  ME_PAGE,
   paneOf,
   viewForPane,
   type PeopleView,
-  type PeopleTab,
   type PeoplePane,
-  type ExploreFace,
-  type YouFace,
-  type ListenFace,
   type GraphMode,
 } from "./peopleView";

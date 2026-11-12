@@ -1,19 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type PersonCard, fetchSuggested, searchUsers } from "@htl/account";
 import { PersonRow } from "./PersonRow";
 
 // The directory door: find ANYONE by @handle or name, even when nobody is live. Debounced global
-// search with paginated results (Load more); each row is an actionable PersonRow (Follow / Knock /
-// Invite / Listen). When the box is empty it shows "People you may know" (friends-of-friends, or
-// popular accounts cold-start) so discovery is not a blank prompt.
+// search with paginated results (Load more); each row is a PersonRow. While the box is empty it
+// shows `children` (the People tab's own sections) and then "People you may know"
+// (friends-of-friends, or popular accounts cold-start) so discovery is not a blank prompt.
 export function PersonSearch({
+  q,
+  setQ,
   onJam,
   onListen,
+  onOpen,
+  exclude,
+  children,
 }: {
+  q: string;
+  setQ: (q: string) => void;
   onJam?: (handle: string) => void;
   onListen?: (handle: string) => void;
+  onOpen?: (handle: string) => void;
+  /** Handles already shown in the sections above; "People you may know" skips them. */
+  exclude?: ReadonlySet<string>;
+  children?: ReactNode;
 }) {
-  const [q, setQ] = useState("");
   const [results, setResults] = useState<PersonCard[] | null>(null); // null = idle (no active query)
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -84,42 +94,45 @@ export function PersonSearch({
       });
   };
 
-  const idle = results === null;
-  const rows = idle ? (suggested ?? []) : results;
+  const idle = q.trim().length < 2;
+  const rows = (idle ? (suggested ?? []).filter((c) => !c.isSelf && !(c.handle && exclude?.has(c.handle))) : results) ?? [];
 
   return (
-    <div className="person-search">
-      <input
-        className="person-search-input"
-        type="search"
-        placeholder="Search people"
-        aria-label="Search people by handle or name"
-        maxLength={40}
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        autoCapitalize="none"
-        autoCorrect="off"
-        spellCheck={false}
-      />
+    <>
+      <div className="discover-filter">
+        <input
+          className="debug-filter discover-query person-search-input"
+          type="search"
+          placeholder="Search people by @handle or name"
+          aria-label="Search people by handle or name"
+          maxLength={40}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </div>
 
-      {idle && rows.length > 0 && <div className="person-search-label">People you may know</div>}
+      {idle && children}
 
       {rows.length > 0 ? (
-        <ul className="person-search-results" role="list">
-          {rows.map((c, i) => (
-            <PersonRow key={c.handle ?? `i${i}`} card={c} onJam={onJam} onListen={onListen} />
-          ))}
+        <div className="discover-section">
+          <div className="social-roster-sep">{idle ? "People you may know" : "Results"}</div>
+          <ul className="social-roster person-list" role="list">
+            {rows.map((c, i) => (
+              <PersonRow key={c.handle ?? `i${i}`} card={c} onJam={onJam} onListen={onListen} onOpen={onOpen} />
+            ))}
+          </ul>
           {!idle && more && (
-            <li className="person-more">
-              <button className="person-more-btn" onClick={loadMore} disabled={loading}>
-                {loading ? "Loading…" : "Load more"}
-              </button>
-            </li>
+            <button className="link-btn discover-more" onClick={loadMore} disabled={loading}>
+              {loading ? "Loading…" : "Load more"}
+            </button>
           )}
-        </ul>
-      ) : idle ? null : loading ? null : (
-        <p className="person-search-empty">No one matches "{q.trim()}".</p>
+        </div>
+      ) : idle || loading || results === null ? null : (
+        <p className="discover-empty">No one matches “{q.trim()}”.</p>
       )}
-    </div>
+    </>
   );
 }

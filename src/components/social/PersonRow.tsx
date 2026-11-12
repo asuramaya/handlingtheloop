@@ -1,29 +1,30 @@
-import { type MouseEvent, useState } from "react";
+import { useState } from "react";
 import { type PersonCard, follow, sendInvite, unfollow, withdrawFollowRequest } from "@htl/account";
+import { PersonCardRow, personRel } from "./PersonCardRow";
 import { goToHandle } from "./util";
 
-// One ACTIONABLE person row — shared by search results, follower/following lists, and
-// suggestions. Avatar + presence dot + name, then the one right action for the relationship:
-//   • not following → Follow / Follow back        (direct fetch, no room)
-//   • following, not mutual → Following (untoggle) (direct fetch)
-//   • mutual + live → Join  · mutual + online → Knock   (needs onJam — the room)
+// One ACTIONABLE person row — shared by search results, the People tab's sections, follower /
+// following lists and suggestions. It is a PersonCardRow: tap it and the strip offers the right
+// actions for the relationship:
+//   • mutual + live → Join · mutual + online → Knock   (needs onJam — the room)
 //   • mutual (any) → Invite                         (pull them to MY session; direct fetch)
 //   • non-mutual + live → Listen                    (needs onListen)
-// Follow + Invite work everywhere (plain fetch); Knock/Join/Listen need the room handlers and
-// degrade to a row tap-through (open the profile) when those aren't supplied (e.g. profile counts).
+//   • right side: Follow / Follow back / Following / Requested, then Profile ›
 export function PersonRow({
   card,
   onJam,
   onListen,
   onOpen,
+  meta,
 }: {
   card: PersonCard;
   onJam?: (handle: string) => void; // knock / join a friend's session (needs the room)
   onListen?: (handle: string) => void; // tune into a public live set
   // PUSH this person inside the dock instead of routing to /@handle. Falls back to the route
-  // when absent (a profile-counts list outside the dock has nowhere to push to) — but inside the
-  // People dock the route is exactly what we are avoiding: it evicts the list you were reading.
+  // when absent (a profile-counts list outside the dock has nowhere to push to).
   onOpen?: (handle: string) => void;
+  /** Override the meta line (e.g. "wants to follow you"). */
+  meta?: string;
 }) {
   const [following, setFollowing] = useState(card.following);
   const [requested, setRequested] = useState(false); // pending request to a private account
@@ -32,9 +33,7 @@ export function PersonRow({
   const h = card.handle ?? "";
   const mutual = following && card.followsYou;
 
-  const stop = (e: MouseEvent) => e.stopPropagation();
-  const toggleFollow = async (e: MouseEvent) => {
-    stop(e);
+  const toggleFollow = async () => {
     if (busy || !h) return;
     setBusy(true);
     const next = !following;
@@ -47,90 +46,68 @@ export function PersonRow({
     }
     setBusy(false);
   };
-  const invite = (e: MouseEvent) => {
-    stop(e);
+  const invite = () => {
     if (!h || invited) return;
     setInvited(true); // optimistic
     void sendInvite(h).then((ok) => {
       if (!ok) setInvited(false); // revert so a failed invite can be retried
     });
   };
-  const withdraw = (e: MouseEvent) => {
-    stop(e);
+  const withdraw = () => {
     if (!h) return;
     setRequested(false); // optimistic
     void withdrawFollowRequest(h);
   };
-  const jam = (e: MouseEvent) => {
-    stop(e);
-    if (h) onJam?.(h);
-  };
-  const listen = (e: MouseEvent) => {
-    stop(e);
-    if (h) onListen?.(h);
-  };
+
+  const rel = personRel({ isSelf: card.isSelf, following, followsYou: card.followsYou });
+  const status = card.live ? "live now" : card.online ? "online" : null;
+  const metaLine = meta ?? ([card.displayName && h ? `@${h}` : null, status].filter(Boolean).join(" · ") || null);
+
+  const actions = card.isSelf ? null : mutual ? (
+    <>
+      {card.live && onJam ? (
+        <button className="peer-pill on" onClick={() => onJam(h)}>
+          Join
+        </button>
+      ) : card.online && onJam ? (
+        <button className="peer-pill" onClick={() => onJam(h)}>
+          Knock
+        </button>
+      ) : null}
+      {invited ? (
+        <span className="peer-pill static">Invited ✓</span>
+      ) : (
+        <button className="peer-pill" onClick={invite} title="Invite them into your session">
+          Invite
+        </button>
+      )}
+    </>
+  ) : card.live && onListen ? (
+    <button className="peer-pill on" onClick={() => onListen(h)}>
+      🎧 Listen
+    </button>
+  ) : null;
+
+  const right = card.isSelf ? null : requested ? (
+    <button className="peer-pill" onClick={withdraw} title="Withdraw the request">
+      Requested ✕
+    </button>
+  ) : (
+    <button className={`peer-pill ${following ? "on" : ""}`} onClick={() => void toggleFollow()} disabled={busy} aria-pressed={following}>
+      {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
+    </button>
+  );
 
   return (
-    <li className={`person-row ${card.live ? "live" : ""}`} onClick={() => h && (onOpen ? onOpen(h) : goToHandle(h))}>
-      <span className="person-avatar-wrap">
-        {card.avatar ? (
-          <img className="live-room-avatar" src={card.avatar} alt="" loading="lazy" />
-        ) : (
-          <span className="live-room-avatar fallback" aria-hidden="true">
-            {(card.displayName || h || "?").slice(0, 1).toUpperCase()}
-          </span>
-        )}
-        {(card.live || card.online) && (
-          <span className={`presence-dot ${card.live ? "live" : "online"}`} aria-hidden="true" />
-        )}
-      </span>
-      <span className="live-room-main">
-        <span className="live-room-name">{card.displayName || `@${h}`}</span>
-        <span className="live-room-np">
-          {card.live ? "live now" : card.online ? "online" : card.followsYou && !following ? "follows you" : `@${h}`}
-        </span>
-      </span>
-      <span className="person-actions" onClick={stop}>
-        {card.isSelf ? (
-          <span className="person-you">You</span>
-        ) : mutual ? (
-          <>
-            {card.live && onJam ? (
-              <button className="friend-join" onClick={jam}>
-                Join
-              </button>
-            ) : card.online && onJam ? (
-              <button className="friend-knock" onClick={jam}>
-                Knock
-              </button>
-            ) : null}
-            {invited ? (
-              <span className="friend-invited">Invited ✓</span>
-            ) : (
-              <button className="friend-invite" onClick={invite}>
-                Invite
-              </button>
-            )}
-          </>
-        ) : (
-          <>
-            {card.live && onListen && (
-              <button className="friend-join" onClick={listen}>
-                Listen
-              </button>
-            )}
-            {requested ? (
-              <button className="follow-btn on requested" onClick={withdraw}>
-                Requested ✕
-              </button>
-            ) : (
-              <button className={`follow-btn ${following ? "on" : ""}`} onClick={toggleFollow} disabled={busy}>
-                {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
-              </button>
-            )}
-          </>
-        )}
-      </span>
-    </li>
+    <PersonCardRow
+      name={card.displayName || (h ? `@${h}` : "Someone")}
+      avatar={card.avatar}
+      rel={rel}
+      meta={metaLine}
+      presence={card.live ? "live" : card.online ? "online" : null}
+      actions={actions}
+      right={right}
+      onProfile={h ? () => (onOpen ? onOpen(h) : goToHandle(h)) : undefined}
+    />
   );
 }

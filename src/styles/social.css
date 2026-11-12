@@ -4098,3 +4098,241 @@ button.peer-pill:hover {
   letter-spacing: 0.4px;
   animation: panel-in 0.14s ease-out;
 }
+
+/* ================= PEOPLE: the Session panel's shape (operator, 2026-11-11) =====================
+   Fixed top (title, your avatar, one tab strip Live | People | Activity | ⚙), the body as the
+   only scroller, a contextual foot. Every list is the Session roster's row (PersonCardRow). */
+.panel.people-screen {
+  gap: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  position: relative;
+}
+.people-screen .session-top > .settings-head {
+  justify-content: space-between;
+  min-height: 34px;
+}
+.people-screen .hw-btn.small.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111a;
+  font-weight: 800;
+}
+.people-screen .hw-btn.small.live {
+  background: #c8506a;
+  border-color: #c8506a;
+  color: #fff;
+  font-weight: 800;
+}
+.people-me {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border: 2px solid color-mix(in srgb, #6bdc9e 55%, var(--line));
+  background: color-mix(in srgb, #6bdc9e 16%, var(--panel-2));
+  color: var(--text);
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+}
+.people-me img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.people-me.on,
+.people-me:hover {
+  border-color: #6bdc9e;
+}
+.people-body {
+  padding-top: 12px;
+  padding-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.people-body > .discover-section,
+.people-body .discover-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+.people-body .discover-filter {
+  margin: 0;
+}
+.people-body .discover-query {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+.people-body .discover-more {
+  align-self: center;
+}
+.social-roster-sep.needs {
+  color: var(--accent);
+}
+
+/* The row's avatar takes the device icon's disc. */
+.person-card .person-card-ava {
+  position: relative;
+  overflow: visible;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+.person-card .person-card-ava img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.person-card .presence-dot {
+  border-color: var(--panel-2);
+}
+.social-card.rel-following {
+  --rel: #5fd4ff;
+}
+.social-card.rel-follower {
+  --rel: #ffae5c;
+}
+.social-card.rel-other {
+  --rel: #8a93a3;
+}
+.social-roster .social-card-drop-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.social-roster .social-card-drop .peer-pill {
+  width: auto;
+  padding: 0 12px;
+}
+.person-card.unread .social-card-name::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.room-badge.why {
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.room-badge.why.fresh {
+  color: #ffd25a;
+  border-color: color-mix(in srgb, #ffd25a 40%, transparent);
+}
+
+/* Empty states: a centred glyph, a headline, a line, and at most one action. */
+.people-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.people-empty > b {
+  color: var(--text);
+  font-size: 15px;
+}
+.people-empty-glyph {
+  font-size: 34px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+.people-empty .hw-btn {
+  margin-top: 10px;
+}
+
+/* The ⚙ tab: Session settings' cards; the danger card is tinted. */
+.people-screen .session-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.people-danger {
+  border-color: color-mix(in srgb, #e0617a 40%, var(--line));
+}
+.people-screen .profile-conns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* People rows, second pass: a disc behind the avatar letter, bright actions in the open strip,
+   and the Activity roll-up as a card. */
+.person-card .person-card-ava {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--rel) 18%, var(--panel-2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rel) 45%, transparent);
+}
+.person-card .presence-dot {
+  bottom: -1px;
+  right: -1px;
+}
+.social-roster .person-card .social-card-drop .peer-pill:not(.static) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--rel) 40%, var(--line));
+  background: color-mix(in srgb, var(--rel) 10%, transparent);
+  cursor: pointer;
+}
+.social-roster .person-card .social-card-drop .peer-pill.on:not(.static) {
+  border-color: var(--rel);
+  background: color-mix(in srgb, var(--rel) 26%, transparent);
+}
+.social-roster .person-card .social-card-drop .peer-pill:not(.static):hover {
+  border-color: var(--rel);
+}
+.social-roster > .notif-rollup {
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel-2);
+  padding: 0;
+}
+.social-roster > .notif-rollup > .notif-rollup-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.social-roster > .notif-rollup > .notif-rollup-head .notif-text {
+  flex: 1 1 auto;
+}
+.social-roster > .notif-rollup > .notif-list.nested {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

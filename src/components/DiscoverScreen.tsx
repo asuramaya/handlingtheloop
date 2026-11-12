@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   type FriendPresence,
-  type ListenFace,
   type LiveRoom,
   type RoomSort,
   type SetCard,
@@ -16,8 +15,9 @@ import { LiveRoomRow } from "./social/LiveRoomRow";
 import { SetList } from "./social/SetList";
 import { goToHandle } from "./social/util";
 
-// The ON AIR and SETS faces of the People dock's Explore fold: what there is to listen to right
-// now, and what has been published. It reads the same live-rooms signal the Session entry and a
+// The LIVE tab of the People dock: what there is to listen to right now (friends online, rooms on
+// air) and, below it, what has been published (sets). One list of things to hear: On air and Sets
+// were two pills (operator, 2026-11-11: one tab strip, Live | People | Activity | ⚙). It reads the same live-rooms signal the Session entry and a
 // profile's live badge read; here it is the directory. A row taps through to /@handle (your own)
 // or tunes you in (anyone else). See docs/social-layer.md → "Surface architecture (UI)".
 //
@@ -36,7 +36,6 @@ const FRIEND_CAP = 5;
 const ROOM_CAP = 12;
 
 export function DiscoverScreen({
-  face,
   self,
   tunedTo,
   friends,
@@ -47,7 +46,6 @@ export function DiscoverScreen({
   view,
   setView,
 }: {
-  face: ListenFace;
   self: string | null;
   tunedTo: string | null;
   friends: FriendPresence[]; // mutual-follows online now (polled by App for the chin dot, passed in)
@@ -133,8 +131,7 @@ export function DiscoverScreen({
   // nothing to see and nothing to log. `/api/rooms/live` returns `rel` per room now, resolved
   // in the query that was already running. See server/db/rooms.ts.
 
-  // Tapping a room TUNES IN (read-only listen); your own room taps through to its profile.
-  const tap = (handle: string) => (handle === self ? goToHandle(handle) : onListen(handle));
+  const openPerson = onOpenPerson ?? goToHandle;
   const live = useMemo(() => [...(rooms ?? []), ...more], [rooms, more]);
 
   // ONE ranked list, re-derived only when the poll lands or the query changes. `now` is folded
@@ -143,11 +140,10 @@ export function DiscoverScreen({
   const shown = useMemo(() => filterRooms(ranked, query), [ranked, query]);
   const capped = roomsExpanded ? shown : shown.slice(0, ROOM_CAP);
 
-  if (face === "sets") {
-    return sets.length === 0 ? (
-      <p className="discover-empty">No published sets yet.</p>
-    ) : (
+  const setsSection =
+    sets.length === 0 ? null : (
       <div className="discover-section">
+        <div className="social-roster-sep">Sets</div>
         <SetList sets={sets} onPlay={onPlaySet} showHost />
         {/* ★ THE NOTE WAS A DEAD END FOR AS LONG AS THERE WAS NOWHERE TO GO. /api/sets/discover is
             capped server-side, and a list that stops at the cap without saying so reads as the
@@ -175,7 +171,6 @@ export function DiscoverScreen({
         )}
       </div>
     );
-  }
 
   return (
     <>
@@ -188,7 +183,7 @@ export function DiscoverScreen({
         <input
           className="debug-filter discover-query"
           value={query}
-          placeholder="Filter live rooms"
+          placeholder="Search live rooms"
           aria-label="Filter live rooms"
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -218,10 +213,8 @@ export function DiscoverScreen({
           few friends. A section that cannot overflow cannot bury the next one. */}
       {friends.length > 0 && (
         <div className="discover-section">
-          <div className="social-section-head friends-online-head">
-            ● Friends online <span className="friends-count">· {friends.length}</span>
-          </div>
-          <ul className="friends-online-list">
+          <div className="social-roster-sep">Friends online · {friends.length}</div>
+          <ul className="social-roster person-list">
             {(friendsExpanded ? friends : friends.slice(0, FRIEND_CAP)).map((f) => (
               <FriendRow
                 key={f.handle}
@@ -229,7 +222,7 @@ export function DiscoverScreen({
                 invited={invited.has(f.handle)}
                 onInvite={invite}
                 onJam={onJam}
-                onOpen={onOpenPerson ?? goToHandle}
+                onOpen={openPerson}
               />
             ))}
           </ul>
@@ -249,25 +242,27 @@ export function DiscoverScreen({
           the order inside either. Now every row carries the reason it ranked where it did. */}
       {rooms === null ? (
         <p className="discover-empty">Loading…</p>
+      ) : live.length === 0 ? (
+        friends.length === 0 &&
+        sets.length === 0 && (
+          <div className="people-empty">
+            <span className="people-empty-glyph" aria-hidden="true">📻</span>
+            <b>Nobody is live right now</b>
+            <span>When someone goes live, they show up here.</span>
+          </div>
+        )
       ) : (
         <div className="discover-section">
-          <div className="social-section-head live-now-head">
-            ● Live now
-            {live.length > 0 && (
-              <span className="friends-count">
-                · {query ? `${shown.length} of ${live.length}` : live.length}
-              </span>
-            )}
+          <div className="social-roster-sep">
+            On air · {query ? `${shown.length} of ${live.length}` : live.length}
           </div>
-          {live.length === 0 ? (
-            <p className="discover-empty">Nobody is live right now.</p>
-          ) : shown.length === 0 ? (
+          {shown.length === 0 ? (
             <p className="discover-empty">Nothing matches &ldquo;{query}&rdquo;.</p>
           ) : (
             <>
-              <ul className="live-now-list">
+              <ul className="social-roster person-list">
                 {capped.map(({ room, reason }) => (
-                  <LiveRoomRow key={room.handle} room={room} self={self} tunedTo={tunedTo} onTap={tap} reason={reason} />
+                  <LiveRoomRow key={room.handle} room={room} self={self} tunedTo={tunedTo} onListen={onListen} onOpen={openPerson} reason={reason} />
                 ))}
               </ul>
               {/* ★ "Show all N" WAS A CLAIM THIS SCREEN COULD NOT MAKE. /api/rooms/live is
@@ -314,6 +309,7 @@ export function DiscoverScreen({
           )}
         </div>
       )}
+      {setsSection}
     </>
   );
 }

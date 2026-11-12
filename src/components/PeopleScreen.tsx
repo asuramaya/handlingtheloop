@@ -1,60 +1,54 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  type ExploreFace,
+  type AccountUser,
   type FriendPresence,
   type PeoplePane,
-  type PeopleTab,
   type PeopleView,
-  type YouFace,
+  ME_PAGE,
+  logout as accountLogout,
   paneOf,
+  sendInvite,
+  startGoogleSignIn,
   viewForPane,
 } from "@htl/account";
+import { maskName, usePrivacyRevealed } from "@htl/privacy";
 import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import type { PanelKey, PanelPlacement } from "@htl";
 import { DiscoverScreen } from "./DiscoverScreen";
-import { ProfileScreen } from "./ProfileScreen";
+import { AccountSettings, ProfileScreen } from "./ProfileScreen";
 import { ActivityFeed } from "./social/ActivityFeed";
+import { LinkSheet } from "./social/LinkSheet";
 import { PublicProfileScreen } from "./PublicProfileScreen";
 import { PeopleGraph } from "./social/PeopleGraph";
 import type { Notifications } from "./social/useNotifications";
 
 // PEOPLE — one dock for everything that is about a person rather than about the room.
 //
-// ★ WHY THREE SURFACES BECAME ONE. The chin carried a Profile button, a Discover button and a
-// bell, and the three overlapped badly:
-//   • The bell's main section was "Live now": LiveRoomRows for people you follow who are
-//     broadcasting. Discover's main section was the same rows, from a second 30 s poll.
-//   • The bell knew it, and ended with a button reading "See all in Discover ›". A popover whose
-//     last control sends you somewhere better is a preview of a page, not a page.
-//   • Profile sat apart, but "me" and "everyone else" are the same axis viewed from two ends.
-// So: one button, and the live-rooms list belongs to Discover alone.
-//
-// ★ AND WHY FOUR TABS BECAME TWO FOLDS. Listen / People / Activity / You read as four peers and
-// were not: the first two are both "browse other people" and the last two are both "mine". Worse,
-// Listen and People each carried their own segmented control INSIDE the body (On air|Sets,
-// Following|Followers), so the strip and a segment one row below it were splitting a single
-// choice. Now the strip is the two things you actually pick between, and each fold's faces are
-// the pill row under it — the same five destinations through one control instead of three.
+// ★ THE SESSION PANEL'S SHAPE (operator, 2026-11-11: "work on people tab, similar redesign").
+// Three bands: the TOP never scrolls (title, your avatar, one tab strip), the BODY is the chosen
+// tab and the only scroller, and the FOOT carries the one action that fits the tab you are on.
+//   • One strip, Live | People | Activity | ⚙. It was Explore / You with a pill row under each,
+//     one choice split across two controls.
+//   • Your own profile is not a tab: your avatar in the title row pushes it, the same way a row
+//     pushes anyone else's. The account (handle, privacy, connections, delete) is the ⚙ tab.
+//   • Every list is the same row (PersonCardRow): tap it for what you can do, and Profile ›.
+//   • The footer is contextual: Go live on Live, Share profile on People and on your profile
+//     (Edit profile beside it there), Find people on Activity, Sign out on ⚙.
 //
 // SESSION deliberately stays its own chin button. It is not a browsing surface — it is present
 // tense and operational (who is on the decks right now, let them in, go live), and it has to be
-// one tap away mid-performance. Folding it in here would put a live control behind a tab.
+// one tap away mid-performance.
 
-const EXPLORE_FACES: { key: ExploreFace; label: string }[] = [
-  { key: "air", label: "On air" },
-  { key: "sets", label: "Sets" },
+const TABS: { key: PeoplePane; label: string }[] = [
+  { key: "live", label: "Live" },
   { key: "people", label: "People" },
-];
-const YOU_FACES: { key: YouFace; label: string }[] = [
-  { key: "profile", label: "Profile" },
   { key: "activity", label: "Activity" },
 ];
 const PANE_LABEL: Record<PeoplePane, string> = {
-  air: "On air",
-  sets: "Sets",
+  live: "Live",
   people: "People",
-  profile: "Profile",
   activity: "Activity",
+  settings: "Settings",
 };
 
 export function PeopleScreen({
@@ -62,6 +56,7 @@ export function PeopleScreen({
   setView,
   onClose,
   self,
+  user,
   tunedTo,
   friends,
   notifications,
@@ -81,6 +76,7 @@ export function PeopleScreen({
   setView: (patch: Partial<PeopleView> | ((v: PeopleView) => PeopleView)) => void;
   onClose: () => void;
   self: string | null;
+  user?: AccountUser | null;
   tunedTo: string | null;
   friends: FriendPresence[];
   notifications: Notifications;
@@ -96,30 +92,38 @@ export function PeopleScreen({
 }) {
   const [seenOnce, setSeenOnce] = useState(false);
   const { unread, markSeen } = notifications;
-  const { tab, person } = view;
+  const { person } = view;
   const pane = paneOf(view);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const revealed = usePrivacyRevealed();
+  const [shareOpen, setShareOpen] = useState(false);
+  const [editRequested, setEditRequested] = useState(false);
+  const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
+  const signedIn = !!user;
 
-  const goPane = (p: PeoplePane) => setView(viewForPane(p));
-  // Tapping a TAB opens the face you left in that fold, not its default.
-  const goTab = (t: PeopleTab) => goPane(t === "explore" ? view.explore : view.you);
+  const goPane = (p: PeoplePane) => {
+    setShareOpen(false);
+    if (p !== "settings") setEditRequested(false);
+    setView(viewForPane(p));
+  };
   // PUSH / POP. Tapping a person from a list you are already reading must not evict that list —
   // it is one level deep, because a person's page leads back to a list and never deeper.
-  const push = (handle: string) => setView({ person: handle });
-  const pop = () => setView({ person: null });
+  const push = (handle: string) => {
+    setShareOpen(false);
+    setView({ person: handle === self ? ME_PAGE : handle });
+  };
+  const pop = () => {
+    setShareOpen(false);
+    setView({ person: null });
+  };
+  const invite = (handle: string) => {
+    setInvited((s) => new Set(s).add(handle)); // optimistic
+    void sendInvite(handle);
+  };
 
-  // ★ SCROLL IS PART OF WHERE YOU ARE — and it must be held in a REF, not in view state.
-  //
-  // The first version wrote every scroll position into the store and restored from it in a layout
-  // effect keyed on that same value. That is a feedback loop: each save re-ran the restore, which
-  // re-asserted the position, and any unrelated re-render (the 30 s presence and notification
-  // polls, several times a minute) re-ran it too and slammed the list back to the last COMMITTED
-  // offset — measured as scrollTop snapping to 0 while the user was reading. It also re-rendered
-  // a 150-row list on every frame of a scroll.
-  //
-  // So the live position lives in a ref (zero renders, no loop) and is COMMITTED to the store only
-  // at the boundaries that matter: leaving a pane, and unmounting the dock. Restore reads the ref,
-  // and runs only when the pane or the pushed person changes.
+  // ★ SCROLL IS PART OF WHERE YOU ARE — held in a REF, not in view state (writing every scroll
+  // into the store and restoring from it was a feedback loop that snapped lists back to 0 on the
+  // 30 s polls). Committed to the store only when leaving a pane or closing the dock.
   const scrollMem = useRef<Record<string, number>>({ ...view.scroll });
 
   useLayoutEffect(() => {
@@ -138,13 +142,11 @@ export function PeopleScreen({
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
-      // Leaving this pane (or the dock) — persist what the ref accumulated.
       setView((v) => ({ ...v, scroll: { ...v.scroll, ...scrollMem.current } }));
     };
   }, [pane, person, setView]);
 
-  // Mark seen when Activity is actually shown — not when the panel opens. Opening onto Profile
-  // and having the badge silently clear would lose you the one list you had not read.
+  // Mark seen when Activity is actually shown — not when the panel opens.
   useEffect(() => {
     if (pane === "activity" && !person && !seenOnce) {
       setSeenOnce(true);
@@ -154,78 +156,133 @@ export function PeopleScreen({
   }, [pane, person, seenOnce, markSeen]);
 
   const badge = unread > 9 ? "9+" : String(unread);
-  const faces: { key: PeoplePane; label: string }[] = tab === "explore" ? EXPLORE_FACES : YOU_FACES;
-  // Conditionally mounted by App (only exists while open) — mount itself IS "just opened".
   const centerZ = useCenterZIndex(dockMode, true);
   const zIndex = panelZIndex(dockMode, "people", panelOrder, centerZ);
+  const onMe = person === ME_PAGE;
+  const profileUrl = self ? `${location.origin}/@${self}` : null;
+  const myName = user ? (revealed ? user.displayName || user.name || "You" : maskName(user.displayName || user.name || "")) : "";
+
+  const signOut = async () => {
+    await accountLogout();
+    location.reload(); // every surface (room, library sync, this dock) re-reads the signed-out state
+  };
+
+  // ── The footer: one action that fits where you are ─────────────────────────────────────────
+  const share = profileUrl ? (
+    <button className={`hw-btn small ${shareOpen ? "on" : ""}`} onClick={() => setShareOpen((o) => !o)} aria-expanded={shareOpen}>
+      ⇪ Share profile
+    </button>
+  ) : null;
+  let footLeft: React.ReactNode = null;
+  let footRight: React.ReactNode = null;
+  if (onMe) {
+    footLeft = share;
+    footRight = signedIn ? (
+      <button
+        className="hw-btn small"
+        onClick={() => {
+          setEditRequested(true);
+          goPane("settings");
+        }}
+      >
+        Edit profile
+      </button>
+    ) : null;
+  } else if (!person) {
+    if (pane === "live" && signedIn && onGoToSession)
+      footRight = (
+        <button className={`hw-btn small ${live ? "live" : "primary"}`} onClick={onGoToSession}>
+          {live ? `● Live${listeners ? ` · ${listeners} listening` : ""}` : "● Go live"}
+        </button>
+      );
+    if (pane === "people") footLeft = share;
+    if (pane === "activity")
+      footRight = (
+        <button className="hw-btn small" onClick={() => goPane("people")}>
+          Find people
+        </button>
+      );
+    if (pane === "settings" && signedIn)
+      footRight = (
+        <button className="hw-btn small danger" onClick={() => void signOut()}>
+          Sign out
+        </button>
+      );
+  }
 
   return (
     <div className={`modal-backdrop dock-${dockMode}`} style={{ zIndex }} onPointerDown={onClose}>
       <DockPlacementResizer mode={dockMode} />
       <div className="panel people-screen" onPointerDown={(e) => e.stopPropagation()}>
         {dockMode === "center" && <CenterResizeHandles panelKey="people" />}
-        {/* THE HEAD IS THE STACK. At the root it names the dock; pushed, it becomes a back
-            control that says what you are going back TO. "‹ People" is an instruction, "‹" on
-            its own is a guess. */}
-        <div className="settings-head">
-          {person ? (
-            <button className="people-back" onClick={pop}>
-              <span aria-hidden="true">‹</span> {PANE_LABEL[pane]}
-            </button>
-          ) : (
-            <h2>People</h2>
+
+        {/* ═════════════ TOP — fixed ═════════════ */}
+        <div className="session-top">
+          {/* THE HEAD IS THE STACK. At the root it names the dock; pushed, it is a back control
+              that says what you are going back TO. */}
+          <div className="settings-head">
+            {person ? (
+              <button className="people-back" onClick={pop}>
+                <span aria-hidden="true">‹</span> {PANE_LABEL[pane]}
+              </button>
+            ) : (
+              <h2>People</h2>
+            )}
+            {signedIn ? (
+              <button
+                className={`people-me ${onMe ? "on" : ""}`}
+                onClick={() => (onMe ? pop() : push(ME_PAGE))}
+                title="Your profile"
+                aria-label="Your profile"
+                aria-pressed={onMe}
+              >
+                {user?.avatar && revealed ? <img src={user.avatar} alt="" /> : <span>{(myName || "?").slice(0, 1).toUpperCase()}</span>}
+              </button>
+            ) : (
+              <button className="hw-btn small primary people-signin" onClick={startGoogleSignIn}>
+                Sign in
+              </button>
+            )}
+          </div>
+
+          {!person && (
+            <div className="settings-tabs session-tabs" role="tablist" aria-label="People">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  role="tab"
+                  aria-selected={pane === t.key}
+                  className={`settings-tab ${pane === t.key ? "on" : ""}`}
+                  onClick={() => goPane(t.key)}
+                >
+                  {t.label}
+                  {t.key === "activity" && unread > 0 && <span className="tab-badge">{badge}</span>}
+                </button>
+              ))}
+              <button
+                role="tab"
+                aria-selected={pane === "settings"}
+                aria-label="Account settings"
+                title="Account settings"
+                className={`settings-tab session-tab-gear ${pane === "settings" ? "on" : ""}`}
+                onClick={() => goPane("settings")}
+              >
+                ⚙
+              </button>
+            </div>
           )}
         </div>
 
-        {!person && (
-          <>
-            <div className="settings-tabs">
-              <button
-                className={`settings-tab ${tab === "explore" ? "on" : ""}`}
-                onClick={() => goTab("explore")}
-              >
-                Explore
-              </button>
-              <button className={`settings-tab ${tab === "you" ? "on" : ""}`} onClick={() => goTab("you")}>
-                You
-                {/* The badge rides the TAB while the fold is closed and the PILL once it is open,
-                    so unread is never a thing you have to open a tab to discover. */}
-                {unread > 0 && tab !== "you" && <span className="tab-badge">{badge}</span>}
-              </button>
-            </div>
-
-            <div className="people-faces" role="tablist" aria-label="Section">
-              {faces.map((f) => (
-                <button
-                  key={f.key}
-                  role="tab"
-                  aria-selected={pane === f.key}
-                  className={`face-pill ${pane === f.key ? "on" : ""}`}
-                  onClick={() => goPane(f.key)}
-                >
-                  {f.label}
-                  {f.key === "activity" && unread > 0 && <span className="tab-badge">{badge}</span>}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="settings-body people-body" ref={bodyRef}>
-          {person ? (
-            <PublicProfileScreen
-              embedded
-              handle={person}
-              onClose={pop}
-              onListen={onListen}
-              onJam={onJam}
-              onPlaySet={onPlaySet}
-            />
+        {/* ═════════════ BODY — the only scroller ═════════════ */}
+        <div className="settings-body session-body people-body" ref={bodyRef}>
+          {onMe ? (
+            <ProfileScreen embedded onClose={onClose} live={live} listeners={listeners} onGoToSession={onGoToSession} onPlaySet={onPlaySet} onTrimSet={onTrimSet} />
+          ) : person ? (
+            <PublicProfileScreen embedded handle={person} onClose={pop} onListen={onListen} onJam={onJam} onPlaySet={onPlaySet} />
           ) : (
             <>
-              {(pane === "air" || pane === "sets") && (
+              {pane === "live" && (
                 <DiscoverScreen
-                  face={pane}
                   self={self}
                   tunedTo={tunedTo}
                   friends={friends}
@@ -240,9 +297,18 @@ export function PeopleScreen({
               {pane === "people" && (
                 <PeopleGraph
                   self={self}
+                  signedIn={signedIn}
+                  friends={friends}
                   onJam={onJam}
                   onListen={onListen}
                   onOpenPerson={push}
+                  onInvite={invite}
+                  invited={invited}
+                  onClaim={() => {
+                    setEditRequested(true);
+                    goPane("settings");
+                  }}
+                  onSignIn={startGoogleSignIn}
                   view={view.people}
                   setView={(patch) => setView((v) => ({ ...v, people: { ...v.people, ...patch } }))}
                 />
@@ -257,20 +323,21 @@ export function PeopleScreen({
                   setView={(patch) => setView((v) => ({ ...v, activity: { ...v.activity, ...patch } }))}
                 />
               )}
-              {pane === "profile" && (
-                <ProfileScreen
-                  embedded
-                  onClose={onClose}
-                  live={live}
-                  listeners={listeners}
-                  onGoToSession={onGoToSession}
-                  onPlaySet={onPlaySet}
-                  onTrimSet={onTrimSet}
-                />
-              )}
+              {pane === "settings" && <AccountSettings editRequested={editRequested} />}
             </>
           )}
         </div>
+
+        {/* ═════════════ SHARE SHEET ═════════════ */}
+        {shareOpen && profileUrl && <LinkSheet url={profileUrl} label="Share your profile" shareTitle="Handling The Loop" onClose={() => setShareOpen(false)} />}
+
+        {/* ═════════════ FOOT — the action for this tab ═════════════ */}
+        {(footLeft || footRight) && (
+          <div className="session-foot">
+            <span className="session-foot-left">{footLeft}</span>
+            {footRight}
+          </div>
+        )}
       </div>
     </div>
   );

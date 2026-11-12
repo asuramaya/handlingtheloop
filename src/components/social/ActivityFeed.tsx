@@ -1,5 +1,6 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useState } from "react";
 import { follow, groupActivity, type NotifEvent, type NotificationsPayload } from "@htl/account";
+import { PersonCardRow, personRel } from "./PersonCardRow";
 
 // Activity — what happened, and what needs you.
 //
@@ -24,15 +25,12 @@ const VERB: Record<string, string> = {
   knock: "wants to join your session",
 };
 const verb = (k: string) => VERB[k] ?? k;
-
-function Avatar({ actor }: { actor: NotifEvent["actor"] }) {
-  return actor.avatar ? (
-    <img className="live-room-avatar" src={actor.avatar} alt="" loading="lazy" />
-  ) : (
-    <span className="live-room-avatar fallback" aria-hidden="true">
-      {actorName(actor).replace(/^@/, "").slice(0, 1).toUpperCase()}
-    </span>
-  );
+function ago(ms: number): string {
+  const m = Math.floor(Math.max(0, Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
 
 export function ActivityFeed({
@@ -57,49 +55,53 @@ export function ActivityFeed({
   const { events, seenAt } = data;
   const { needsYou, days } = useMemo(() => groupActivity(events, seenAt), [events, seenAt]);
 
-  const followBack = (e: MouseEvent, handle: string) => {
-    e.stopPropagation(); // don't trigger the row's go-to-profile
+  const followBack = (handle: string) => {
     setFollowedBack((s) => new Set(s).add(handle)); // optimistic — flip to ✓ Following
     void follow(handle);
   };
 
-  const row = (e: NotifEvent, unread: boolean) => (
-    <li
-      key={e.id}
-      className={`notif-item ${unread ? "unread" : ""}`}
-      onClick={() => e.actor.handle && onOpenPerson(e.actor.handle)}
-    >
-      <Avatar actor={e.actor} />
-      <span className="notif-text">
-        <b>{actorName(e.actor)}</b> {verb(e.kind)}
-      </span>
-      {e.kind === "follow" &&
-        e.actor.handle &&
-        (e.followsBack || followedBack.has(e.actor.handle) ? (
-          <span className="notif-following">✓ Following</span>
-        ) : (
-          <button className="notif-followback" onClick={(ev) => followBack(ev, e.actor.handle!)}>
-            Follow back
-          </button>
-        ))}
-      {e.kind === "invite" && e.actor.handle && (
-        <button
-          className="notif-join"
-          onClick={(ev) => {
-            ev.stopPropagation();
-            onJam(e.actor.handle!);
-          }}
-        >
-          Join
-        </button>
-      )}
-    </li>
-  );
+  // Each event is a PersonCardRow: the person, what they did and when on the meta line, and
+  // the answer (Follow back, Join) in the strip with Profile ›.
+  const row = (e: NotifEvent, unread: boolean) => {
+    const h = e.actor.handle;
+    const followsThem = e.followsBack || (!!h && followedBack.has(h));
+    return (
+      <PersonCardRow
+        key={e.id}
+        name={actorName(e.actor)}
+        avatar={e.actor.avatar}
+        rel={personRel({ following: followsThem, followsYou: e.kind === "follow" })}
+        meta={`${verb(e.kind)} · ${ago(e.createdAt)}`}
+        unread={unread}
+        actions={
+          e.kind === "invite" && h ? (
+            <button className="peer-pill on" onClick={() => onJam(h)}>
+              Join
+            </button>
+          ) : null
+        }
+        right={
+          e.kind === "follow" && h ? (
+            followsThem ? (
+              <span className="peer-pill static on">Following</span>
+            ) : (
+              <button className="peer-pill" onClick={() => followBack(h)}>
+                Follow back
+              </button>
+            )
+          ) : null
+        }
+        onProfile={h ? () => onOpenPerson(h) : undefined}
+      />
+    );
+  };
 
   if (events.length === 0) {
     return (
-      <div className="activity-empty">
-        <p className="settings-note">Nothing yet.</p>
+      <div className="people-empty">
+        <span className="people-empty-glyph" aria-hidden="true">🔔</span>
+        <b>Nothing yet</b>
+        <span>Follows, invites and requests show up here.</span>
         <button className="hw-btn small" onClick={onDiscover}>Find people</button>
       </div>
     );
@@ -110,22 +112,19 @@ export function ActivityFeed({
       {/* NEEDS YOU — pinned, ungrouped, never rolled up. Same accent frame as the Session
           screen's waiting list, because it is the same idea: somebody is blocked on you. */}
       {needsYou.length > 0 && (
-        <div className="settings-section waiting-section">
-          <div className="settings-section-head">
-            <span className="settings-label">Needs you</span>
-            <span className="settings-head-note">{needsYou.length}</span>
-          </div>
-          <ul className="notif-list">{needsYou.map((e) => row(e, e.createdAt > seenAt))}</ul>
+        <div className="discover-section">
+          <div className="social-roster-sep needs">Needs you · {needsYou.length}</div>
+          <ul className="social-roster person-list">{needsYou.map((e) => row(e, e.createdAt > seenAt))}</ul>
         </div>
       )}
 
       {days.map((d) => (
         <div key={d.day} className="discover-section">
-          <div className="social-section-head">
+          <div className="social-roster-sep">
             {d.label}
-            {d.unread > 0 && <span className="friends-count"> · {d.unread} new</span>}
+            {d.unread > 0 && ` · ${d.unread} new`}
           </div>
-          <ul className="notif-list">
+          <ul className="social-roster person-list">
             {/* ROLL-UPS FIRST: one line for a day's worth of identical news, expandable. Thirty
                 "followed you" rows are one fact with a number; keeping them separate is how a
                 feed buries the rows that are not. */}
@@ -139,7 +138,7 @@ export function ActivityFeed({
                     <span className="notif-text">people {verb(r.kind)}</span>
                     <span className="notif-rollup-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
                   </button>
-                  {open && <ul className="notif-list nested">{r.events.map((e) => row(e, e.createdAt > seenAt))}</ul>}
+                  {open && <ul className="notif-list nested social-roster">{r.events.map((e) => row(e, e.createdAt > seenAt))}</ul>}
                 </li>
               );
             })}

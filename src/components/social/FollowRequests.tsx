@@ -1,11 +1,12 @@
-import { type MouseEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { type PersonCard, fetchFollowRequests, respondFollowRequest } from "@htl/account";
+import { PersonCardRow, personRel } from "./PersonCardRow";
 import { goToHandle } from "./util";
 
 // The private-account approval inbox — pending people who asked to follow you. Approve moves them
 // into your followers; deny silently drops the request. Renders nothing when there are none, so it
-// can be mounted unconditionally on your own profile. Tapping a row opens that person's profile.
-export function FollowRequests() {
+// can be mounted unconditionally at the top of the People tab.
+export function FollowRequests({ onOpen }: { onOpen?: (handle: string) => void }) {
   const [list, setList] = useState<PersonCard[] | null>(null); // null = loading
 
   useEffect(() => {
@@ -18,8 +19,7 @@ export function FollowRequests() {
     };
   }, []);
 
-  const respond = (e: MouseEvent, handle: string | null, approve: boolean) => {
-    e.stopPropagation();
+  const respond = (handle: string | null, approve: boolean) => {
     if (!handle) return;
     setList((l) => (l ?? []).filter((c) => c.handle !== handle)); // optimistic remove
     void respondFollowRequest(handle, approve);
@@ -27,33 +27,28 @@ export function FollowRequests() {
 
   if (!list || list.length === 0) return null;
   return (
-    <div className="profile-section">
-      <div className="profile-section-head">
-        Follow requests <span className="friends-count">· {list.length}</span>
-      </div>
-      <ul className="person-search-results" role="list">
+    <div className="discover-section">
+      <div className="social-roster-sep">Requests · {list.length}</div>
+      <ul className="social-roster person-list" role="list">
         {list.map((c) => (
-          <li key={c.handle} className="person-row" onClick={() => c.handle && goToHandle(c.handle)}>
-            {c.avatar ? (
-              <img className="live-room-avatar" src={c.avatar} alt="" loading="lazy" />
-            ) : (
-              <span className="live-room-avatar fallback" aria-hidden="true">
-                {(c.displayName || c.handle || "?").slice(0, 1).toUpperCase()}
-              </span>
-            )}
-            <span className="live-room-main">
-              <span className="live-room-name">{c.displayName || `@${c.handle}`}</span>
-              <span className="live-room-np">wants to follow you</span>
-            </span>
-            <span className="person-actions" onClick={(e) => e.stopPropagation()}>
-              <button className="friend-join" onClick={(e) => respond(e, c.handle, true)}>
-                Approve
-              </button>
-              <button className="friend-knock" onClick={(e) => respond(e, c.handle, false)}>
-                Deny
-              </button>
-            </span>
-          </li>
+          <PersonCardRow
+            key={c.handle}
+            name={c.displayName || `@${c.handle}`}
+            avatar={c.avatar}
+            rel={personRel(c)}
+            meta="wants to follow you"
+            actions={
+              <>
+                <button className="peer-pill on" onClick={() => respond(c.handle, true)}>
+                  Approve
+                </button>
+                <button className="peer-pill" onClick={() => respond(c.handle, false)}>
+                  Deny
+                </button>
+              </>
+            }
+            onProfile={c.handle ? () => (onOpen ? onOpen(c.handle!) : goToHandle(c.handle!)) : undefined}
+          />
         ))}
       </ul>
     </div>

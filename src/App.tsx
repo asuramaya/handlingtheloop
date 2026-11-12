@@ -466,9 +466,9 @@ function AppBody() {
   // at 151 rows + scrollTop 1200 becoming 0/0 on a close. Held here, an excursion costs nothing.
   const [peopleView, setPeopleView] = useState<PeopleView>(() => ({
     ...INITIAL_PEOPLE_VIEW,
-    ...viewForPane(initRightDock === "discover" ? "air" : "profile"),
+    ...viewForPane(initRightDock === "discover" ? "live" : "people"),
   }));
-  const peopleTab = peopleView.tab;
+  const peopleTab = peopleView.pane;
   const patchPeopleView = useCallback(
     (patch: Partial<PeopleView> | ((v: PeopleView) => PeopleView)) =>
       setPeopleView((v) => (typeof patch === "function" ? patch(v) : { ...v, ...patch })),
@@ -479,7 +479,7 @@ function AppBody() {
   // Keyboard-help popover — a lightweight, ephemeral overlay (not one of the persisted
   // right-docks above): pops near the chin, closes on click-away or Escape.
   useEffect(() => {
-    const v = settingsOpen ? "settings" : profileOpen ? (peopleTab === "explore" ? "discover" : "profile") : socialOpen ? "social" : "";
+    const v = settingsOpen ? "settings" : profileOpen ? (peopleTab === "settings" ? "profile" : "discover") : socialOpen ? "social" : "";
     try {
       localStorage.setItem("htl:rightDock", v);
     } catch {
@@ -663,7 +663,7 @@ function AppBody() {
   // Compatibility shim for the callers that used to open/close a standalone Discover dock — a
   // deep-link handler, a room hand-off, an invite accept. Every one of them means "show Discover"
   // or "get out of the way", and both still have an exact meaning here.
-  const setDiscoverOpen = (v: boolean) => (v ? openPeople("air") : setProfileOpen(false));
+  const setDiscoverOpen = (v: boolean) => (v ? openPeople("live") : setProfileOpen(false));
   const toggleProfile = () => {
     if (profileOpen) return setProfileOpen(false);
     // ★ REOPEN WHERE YOU LEFT. This used to hardcode `openPeople("profile")`, so although the tab was
@@ -4685,6 +4685,7 @@ function AppBody() {
           dockMode={placements.people}
           panelOrder={settings.panelOrder}
           self={room.user?.handle ?? null}
+          user={room.user}
           tunedTo={room.listeningTo}
           friends={friendsOnline}
           notifications={notifications}

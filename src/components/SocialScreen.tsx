@@ -3,7 +3,7 @@ import { fetchFriendsOnline } from "@htl/account";
 import { heroState, type RoomState } from "@htl/room";
 import { maskName, setRevealed, usePrivacyRevealed } from "@htl/privacy";
 import type { PanelKey, PanelPlacement } from "@htl";
-import { QRCode } from "./QRCode";
+import { LinkSheet } from "./social/LinkSheet";
 import { CenterResizeHandles, DockPlacementResizer, panelZIndex, useCenterZIndex } from "./DockResizer";
 import { StageBar } from "./social/StageBar";
 import { SocialCard } from "./social/SocialCard";
@@ -73,16 +73,12 @@ export function SocialScreen({
     lastInviteUrl = u;
     setInviteUrlState(u);
   };
-  const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false); // the invite card, up from the footer
   // ★ SESSION SETTINGS, a view of its own (operator, 2026-11-11: "a dedicated settings panel for
   // social"): names, who can chat, and whether guests may pass the invite on. The chat controls
   // under the composer and the names button in the footer both read as clutter where they were.
 
-  // The invite sheet's drag-to-dismiss.
-  const [sheetDrag, setSheetDrag] = useState(0);
-  const sheetStart = useRef<number | null>(null);
   // My friends' @handles (mutual follows), to colour their rows. Anyone in the session is online,
   // so the online list is the whole answer. One fetch per open, refreshed when the roster grows.
   const [friends, setFriends] = useState<ReadonlySet<string>>(new Set());
@@ -108,22 +104,12 @@ export function SocialScreen({
   const stageReqs = room.host ? room.stageRequests : [];
   const waiting = knocks.length + stageReqs.length;
 
-  async function copyLink(url: string) {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1600);
-    } catch {
-      /* clipboard blocked — link + QR shown for manual copy/scan */
-    }
-  }
   async function makeInvite() {
     setInviting(true);
     const inv = await room.createInvite();
     setInviting(false);
     if (inv) setInviteUrl(inv.url);
   }
-  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
   // A guest invites with the HOST's link, when the host allows it (Session ▸ Settings).
   const guestShareUrl = room.isGuest && room.guestInvite ? `${location.origin}/?join=${room.guestInvite}` : null;
   const canInvite = (!room.isGuest && room.signedIn) || !!guestShareUrl;
@@ -134,13 +120,6 @@ export function SocialScreen({
     if (inv) {
       setInviteUrl(inv.url);
       room.setGuestInvite(inv.code);
-    }
-  };
-  const shareLink = async (url: string) => {
-    try {
-      await navigator.share({ title: "Join my session", url });
-    } catch {
-      /* dismissed / unsupported: the copy button is right beside it */
     }
   };
   // Opening the card makes the link if there is none yet: one tap to a QR, not two.
@@ -510,77 +489,21 @@ export function SocialScreen({
 
         {/* ═════════════ INVITE SHEET — slides up from the bottom; drag it down (or tap outside) to close ═════════════ */}
         {inviteOpen && inSession && canInvite && online && (
-          <>
-            <div className="session-sheet-scrim" onPointerDown={() => setInviteOpen(false)} />
-            <div
-              className="session-invite-card"
-              role="dialog"
-              aria-label="Invite to this session"
-              style={sheetDrag ? { transform: `translateY(${sheetDrag}px)`, transition: "none" } : undefined}
-            >
-              <div
-                className="session-sheet-grab"
-                onPointerDown={(e) => {
-                  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-                  sheetStart.current = e.clientY;
-                }}
-                onPointerMove={(e) => {
-                  if (sheetStart.current == null) return;
-                  setSheetDrag(Math.max(0, e.clientY - sheetStart.current));
-                }}
-                onPointerUp={() => {
-                  if (sheetStart.current == null) return;
-                  sheetStart.current = null;
-                  if (sheetDrag > 80) setInviteOpen(false);
-                  setSheetDrag(0);
-                }}
-                onPointerCancel={() => {
-                  sheetStart.current = null;
-                  setSheetDrag(0);
-                }}
-                aria-hidden="true"
-              >
-                <span className="session-sheet-handle" />
+          <LinkSheet
+            url={shownInviteUrl}
+            label="Invite to this session"
+            shareTitle="Join my session"
+            onClose={() => setInviteOpen(false)}
+            pending={
+              <div className="session-invite-making">
+                <button className="hw-btn small primary" onClick={makeInvite} disabled={inviting}>
+                  {inviting ? "Making a link…" : "Create link"}
+                </button>
               </div>
-
-                {shownInviteUrl ? (
-                  <>
-                    {/* The QR copies the link too: a tap on it is the obvious "give me this". */}
-                    <button type="button" className={`session-qr-copy ${copied ? "done" : ""}`} onClick={() => copyLink(shownInviteUrl)} title="Copy link" aria-label="Copy invite link">
-                      <QRCode value={shownInviteUrl} size={208} className="room-invite-qr" />
-                      {copied && <span className="session-qr-copied">Copied</span>}
-                    </button>
-                    {/* The link IS the copy control: the whole field copies, the glyph says so. */}
-                    <div className="session-invite-field">
-                      <button type="button" className="session-invite-url" onClick={() => copyLink(shownInviteUrl)} title="Copy link">
-                        {shownInviteUrl.replace(/^https?:\/\//, "")}
-                      </button>
-                      <button
-                        type="button"
-                        className={`session-invite-glyph ${copied ? "done" : ""}`}
-                        onClick={() => copyLink(shownInviteUrl)}
-                        aria-label={copied ? "Copied" : "Copy link"}
-                        title={copied ? "Copied" : "Copy link"}
-                      >
-                        {copied ? "✓" : "⧉"}
-                      </button>
-                      {canShare && (
-                        <button type="button" className="session-invite-glyph" onClick={() => shareLink(shownInviteUrl)} aria-label="Share" title="Share">
-                          ⇪
-                        </button>
-                      )}
-                    </div>
-                  </>
-                ) : (
-                  <div className="session-invite-making">
-                    <button className="hw-btn small primary" onClick={makeInvite} disabled={inviting}>
-                      {inviting ? "Making a link…" : "Create link"}
-                    </button>
-                  </div>
-                )}
-            </div>
-          </>
+            }
+          />
         )}
+
         {/* ═════════════ FOOT — fixed: invite + leave ═════════════ */}
         {inSession && online && !room.listeningTo && (
           <div className="session-foot">

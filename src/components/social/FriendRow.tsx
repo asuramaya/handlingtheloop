@@ -30,9 +30,6 @@ export function FriendRow({
           </button>
         ) : (
           <>
-            <button className="peer-pill" onClick={() => onJam(f.handle)} title="Ask to join their session">
-              Knock
-            </button>
             {invited ? (
               <span className="peer-pill static">Invited ✓</span>
             ) : (
@@ -40,6 +37,9 @@ export function FriendRow({
                 Invite
               </button>
             )}
+            <button className="peer-pill" onClick={() => onJam(f.handle)} title="Ask to join their session">
+              Knock
+            </button>
           </>
         )
       }

@@ -2879,3 +2879,10 @@
 .debug-stat.hot .debug-stat-v {
   color: var(--accent, #e66);
 }
+
+/* A panel REPLACING another (App evictFor marks <html> for a moment): no fade, no slide. The
+   backdrop fading in from nothing is what flashed the board between two panels. */
+.panel-swap .modal-backdrop,
+.panel-swap .modal-backdrop > .panel {
+  animation: none !important;
+}

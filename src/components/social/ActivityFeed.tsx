@@ -78,10 +78,7 @@ export function ActivityFeed({
             <button className="peer-pill on" onClick={() => onJam(h)}>
               Join
             </button>
-          ) : null
-        }
-        right={
-          e.kind === "follow" && h ? (
+          ) : e.kind === "follow" && h ? (
             followsThem ? (
               <span className="peer-pill static on">Following</span>
             ) : (

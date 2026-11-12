@@ -111,6 +111,7 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
   const emit = useEmit();
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const readingLast = useRef(false); // is the readout's middle showing (the KNOBS tag hides)
   const outRef = useRef<HTMLDivElement>(null); // the draggable output baseline (the graph's zero)
   const outLast = useRef<{ top: string; txt: string; trimmed: boolean | null }>({ top: "", txt: "", trimmed: null });
   const outPillRef = useRef<HTMLSpanElement>(null);
@@ -417,6 +418,14 @@ export function EqCurve({ deck, id, accent, otherDeck, otherAccent }: EqCurvePro
       } else if (hover.current) {
         mid = `${fmtHz(hover.current.hz)} Hz  ·  ${fmtDb(hover.current.db)} dB`;
         midHot = false;
+      }
+      // The middle of the readout row is where the hardware KNOBS tag sits (glow.css); while the
+      // readout has something to say there, the tag steps aside (operator, 2026-11-12: they
+      // overlapped). Toggled only on a change, like the OUT badge below.
+      const reading = mid !== "";
+      if (reading !== readingLast.current) {
+        readingLast.current = reading;
+        wrapRef.current?.parentElement?.classList.toggle("reading", reading);
       }
       drawReadout(ctx, w, accent, {
         left: `${n.label}  ·  ${shapeLabel}`,

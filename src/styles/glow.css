@@ -233,3 +233,7 @@ body:not(.no-glow) .eq-tool.on {
   color: var(--accent);
   pointer-events: none;
 }
+/* The readout's middle (hover / drag values) owns that spot while it shows. */
+.bank[data-knobs="eq"] .eq-pro.reading::before {
+  opacity: 0;
+}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { type FriendPresence, type GraphMode, type PersonCard, fetchFollowers, fetchFollowing, readGraph, writeGraph } from "@htl/account";
 import { FollowRequests } from "./FollowRequests";
 import { FriendRow } from "./FriendRow";
-import { PersonRow } from "./PersonRow";
+import { GRAPH_CHANGED, PersonRow } from "./PersonRow";
 import { PersonSearch } from "./PersonSearch";
 
 // PEOPLE — your graph, as one sectioned list under one search box.
@@ -34,17 +34,26 @@ function useSide(self: string | null, mode: GraphMode) {
     };
   }, []);
 
+  // A follow or unfollow anywhere (a row, a profile) bumps this and the side re-reads.
+  const [rev, setRev] = useState(0);
+  useEffect(() => {
+    const bump = () => setRev((r) => r + 1);
+    window.addEventListener(GRAPH_CHANGED, bump);
+    return () => window.removeEventListener(GRAPH_CHANGED, bump);
+  }, []);
+
   useEffect(() => {
     if (!self) {
       setSide({ list: [], more: false, loading: false });
       return;
     }
-    // ★ SERVE THE CACHE FIRST, and do not re-fetch behind it.
+    // ★ SERVE THE CACHE FIRST, THEN READ AGAIN BEHIND IT (operator, 2026-11-12: "i dont see
+    // people under people even if i follow one"). It used to serve the cache and stop, so a graph
+    // first read before you followed anyone stayed empty for the whole visit while the people you
+    // had just followed sat under "People you may know" tagged FOLLOWING. The cache still paints
+    // instantly (no flicker); page one is always re-read, and it replaces the cache when it lands.
     const hit = readGraph(self, mode);
-    if (hit) {
-      setSide({ list: hit.list, more: hit.more, loading: false });
-      return;
-    }
+    if (hit) setSide({ list: hit.list, more: hit.more, loading: false });
     let alive = true;
     const fetcher = mode === "followers" ? fetchFollowers : fetchFollowing;
     fetcher(self, 0)
@@ -53,11 +62,11 @@ function useSide(self: string | null, mode: GraphMode) {
         setSide({ list: p.list, more: p.more, loading: false });
         writeGraph(self, mode, p.list, p.more);
       })
-      .catch(() => alive && setSide({ list: [], more: false, loading: false }));
+      .catch(() => alive && !hit && setSide({ list: [], more: false, loading: false }));
     return () => {
       alive = false;
     };
-  }, [self, mode]);
+  }, [self, mode, rev]);
 
   const loadMore = () => {
     if (side.loading || !side.list || !self) return;

@@ -6,8 +6,16 @@ import { goToHandle } from "./util";
 // The private-account approval inbox — pending people who asked to follow you. Approve moves them
 // into your followers; deny silently drops the request. Renders nothing when there are none, so it
 // can be mounted unconditionally at the top of the People tab.
+let requestsMemo: PersonCard[] | null = null; // kept across mounts: no section dropping in late
+
 export function FollowRequests({ onOpen }: { onOpen?: (handle: string) => void }) {
-  const [list, setList] = useState<PersonCard[] | null>(null); // null = loading
+  const [list, setListState] = useState<PersonCard[] | null>(requestsMemo); // null = loading
+  const setList = (v: PersonCard[] | null | ((p: PersonCard[] | null) => PersonCard[] | null)) =>
+    setListState((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      requestsMemo = next;
+      return next;
+    });
 
   useEffect(() => {
     let alive = true;

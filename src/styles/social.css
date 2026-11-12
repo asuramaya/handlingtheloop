@@ -4336,3 +4336,72 @@ button.peer-pill:hover {
   flex-direction: column;
   gap: 6px;
 }
+
+/* People rows, third pass (operator, 2026-11-12): the row opens the person; its one or two quick
+   actions are small pills at the right edge instead of a folded-out strip. */
+.social-roster .social-card.person-card {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.person-card-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.person-card-acts .peer-pill {
+  width: auto;
+  height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.person-card-acts .peer-pill:not(.static) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--rel) 40%, var(--line));
+  background: color-mix(in srgb, var(--rel) 10%, transparent);
+  cursor: pointer;
+}
+.person-card-acts .peer-pill.on:not(.static) {
+  border-color: var(--rel);
+  background: color-mix(in srgb, var(--rel) 26%, transparent);
+}
+.person-card-acts .peer-pill:not(.static):hover {
+  border-color: var(--rel);
+}
+.social-roster .person-card.can-open:hover {
+  border-color: color-mix(in srgb, var(--rel) 55%, var(--line));
+}
+
+/* Busiest / Newest: a real switch. */
+.seg-group.discover-sort {
+  gap: 0;
+  align-self: stretch;
+}
+.seg-group.discover-sort > .hw-btn.small {
+  height: auto;
+  min-height: 32px;
+  padding: 0 12px;
+}
+.people-body .discover-filter {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* A profile's counts are tabs over its section (Top songs | Followers | Following). */
+.profile-count-btn.on {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 4px;
+}
+.profile-section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.profile-section-tabs .link-btn {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}

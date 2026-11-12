@@ -635,8 +635,23 @@ function AppBody() {
   /** Everything a panel's own placement says it evicts. On a phone that is every other panel —
    *  there is one slot. On a desktop it is only the other CENTER panels, and edge docks close
    *  nothing at all. See htl/state/panelPlacement.ts. */
-  const evictFor = (opening: PanelKey) =>
-    panelsToClose(opening, placements).forEach((k) => PANEL_CLOSERS[k]());
+  // ★ A SWAP IS NOT AN OPEN (operator, 2026-11-12: "flickeryness moving ... from panel to panel").
+  // Opening a panel that shares the other's place closes that one at once, and the new one then
+  // faded its dimmed backdrop in from nothing: for a few frames the board flashed through between
+  // two panels. When opening this one closes one that was open, the swap is marked on <html> for
+  // a moment and the open animations are skipped (settings.css `.panel-swap`): one panel simply
+  // replaces the other.
+  const swapTimer = useRef<number | undefined>(undefined);
+  const evictFor = (opening: PanelKey) => {
+    const closing = panelsToClose(opening, placements);
+    if (closing.some((k) => openOrder.current.includes(k))) {
+      const root = document.documentElement;
+      root.classList.add("panel-swap");
+      window.clearTimeout(swapTimer.current);
+      swapTimer.current = window.setTimeout(() => root.classList.remove("panel-swap"), 400);
+    }
+    closing.forEach((k) => PANEL_CLOSERS[k]());
+  };
   const toggleLib = () => {
     // Functional update so the keyboard (Alt) and chin button never read a stale libOpen.
     setLibOpen((v) => {
@@ -4738,6 +4753,15 @@ function AppBody() {
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
+          onGoLive={() => {
+            engine.unlock(); // a user gesture: prime audio, as Session's own Start does
+            if (!room.joined) {
+              room.join();
+              room.setControl(true);
+              room.setListening(true);
+            }
+            room.goPublic(true);
+          }}
         />
       )}
       <ReplayBar

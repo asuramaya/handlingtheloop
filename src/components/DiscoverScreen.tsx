@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type FriendPresence,
   type LiveRoom,
@@ -33,10 +33,21 @@ import { goToHandle } from "./social/util";
 // How many rows a section shows before it offers "show all". Small enough that no single section
 // can own the viewport, big enough to be worth reading without expanding.
 const FRIEND_CAP = 5;
+// ★ THE LAST ANSWER, KEPT ACROSS MOUNTS (operator, 2026-11-12: "flickeryness moving from tab to
+// tab"). This component unmounts on every tab hop, and every return started from null: a
+// "Loading…" line, then the list, then the sets dropping in under it, each one moving the page.
+// The last rooms and sets are shown at once and refreshed behind them.
+const memo: { rooms: Partial<Record<RoomSort, LiveRoom[]>>; sets: SetCard[] | null; setsCursor: string | null; setsCapped: boolean } = {
+  rooms: {},
+  sets: null,
+  setsCursor: null,
+  setsCapped: false,
+};
 const ROOM_CAP = 12;
 
 export function DiscoverScreen({
   self,
+  live: selfLive = false,
   tunedTo,
   friends,
   onListen,
@@ -47,6 +58,8 @@ export function DiscoverScreen({
   setView,
 }: {
   self: string | null;
+  /** Am I live? Going live (or off) re-reads the directory so my own room shows (or leaves). */
+  live?: boolean;
   tunedTo: string | null;
   friends: FriendPresence[]; // mutual-follows online now (polled by App for the chin dot, passed in)
   onListen: (handle: string) => void;
@@ -58,8 +71,8 @@ export function DiscoverScreen({
   view: { query: string; roomsExpanded: boolean; friendsExpanded: boolean };
   setView: (patch: Partial<{ query: string; roomsExpanded: boolean; friendsExpanded: boolean }>) => void;
 }) {
-  const [rooms, setRooms] = useState<LiveRoom[] | null>(null); // null = first load not back yet
-  const [sets, setSets] = useState<SetCard[]>([]);
+  const [rooms, setRoomsState] = useState<LiveRoom[] | null>(() => memo.rooms.busy ?? null); // null = first load not back yet
+  const [sets, setSetsState] = useState<SetCard[]>(() => memo.sets ?? []);
   // Did the SERVER cap its answer? Distinct from ROOM_CAP below, which is this screen's own
   // display cap over a set it genuinely has all of. Conflating the two is what made "Show all N"
   // a false claim past the server's limit — see the note on the expander.
@@ -71,13 +84,27 @@ export function DiscoverScreen({
   // (operator, 39dc683e): ranking is what you want first; paging is what you want when you have
   // hit the wall.
   const [sort, setSort] = useState<RoomSort>("busy");
+  const setRooms = (v: LiveRoom[] | null | ((p: LiveRoom[] | null) => LiveRoom[] | null)) =>
+    setRoomsState((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      if (next) memo.rooms[sortRef.current] = next;
+      return next;
+    });
+  const setSets = (v: SetCard[] | ((p: SetCard[]) => SetCard[])) =>
+    setSetsState((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      memo.sets = next;
+      return next;
+    });
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
   const [cursor, setCursor] = useState<string | null>(null);
   const [more, setMore] = useState<LiveRoom[]>([]); // pages 2+ under "recent", appended in order
-  const [setsCapped, setSetsCapped] = useState(false);
+  const [setsCapped, setSetsCapped] = useState(memo.setsCapped);
   // Sets page the same way the `recent` rooms do, and for the same reason: `published_at` does not
   // move once a set is published, so walking it is coherent. Unlike the rooms list there is no
   // poll behind this, so nothing ever invalidates the pages already on screen.
-  const [setsCursor, setSetsCursor] = useState<string | null>(null);
+  const [setsCursor, setSetsCursor] = useState<string | null>(memo.setsCursor);
   const [invited, setInvited] = useState<Set<string>>(new Set()); // optimistic "Invited ✓" by handle
   const { query, roomsExpanded, friendsExpanded } = view;
   const setQuery = (q: string) => setView({ query: q });
@@ -95,6 +122,8 @@ export function DiscoverScreen({
         setSets(p.items);
         setSetsCapped(p.truncated);
         setSetsCursor(p.nextCursor ?? null);
+        memo.setsCapped = p.truncated;
+        memo.setsCursor = p.nextCursor ?? null;
       })
       .catch(() => {});
     return () => {
@@ -117,12 +146,15 @@ export function DiscoverScreen({
         })
         .catch(() => alive && setRooms((prev) => prev ?? []));
     load();
+    // The directory hears about a new broadcast a beat after the room opens; ask again shortly.
+    const soon = setTimeout(load, 2500);
     const t = setInterval(load, 30_000);
     return () => {
       alive = false;
+      clearTimeout(soon);
       clearInterval(t);
     };
-  }, [sort]);
+  }, [sort, selfLive]);
 
   // ★ THE FOLLOW-GRAPH FETCH IS GONE. This used to pull the viewer's following list and
   // intersect it with the room list in the browser — and it pulled ONE PAGE, which is 50. Past
@@ -192,11 +224,12 @@ export function DiscoverScreen({
         )}
         {/* Beside the filter, not in a menu: both of these narrow the same list, and the sort is
             the one that decides whether you can reach past the cap at all. Two words, no chrome. */}
-        <div className="discover-sort" role="group" aria-label="Sort live rooms">
+        {/* A real two-way switch (operator, 2026-11-12: the underlined words were "flimsy"). */}
+        <div className="seg-group discover-sort" role="group" aria-label="Sort live rooms">
           {(["busy", "recent"] as const).map((s) => (
             <button
               key={s}
-              className={`link-btn discover-sort-opt ${sort === s ? "sel" : ""}`}
+              className={`hw-btn small ${sort === s ? "on" : ""}`}
               aria-pressed={sort === s}
               onClick={() => { if (sort !== s) { setSort(s); setView({ roomsExpanded: false }); } }}
               title={s === "busy" ? "Most listeners first" : "Most recently started first — browse them all"}

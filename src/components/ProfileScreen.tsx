@@ -23,6 +23,11 @@ import { InfoDot } from "./settings/InfoDot";
 import { ToggleRow } from "./settings/ControlsTab";
 import { RecordingsPanel } from "./social/RecordingsPanel";
 
+// The last account answers, kept across mounts: the ⚙ tab and your profile used to open on a
+// "Loading…" line and then jump to their cards every time (operator, 2026-11-12: flicker).
+let meMemo: Me | null = null;
+let profileMemo: Profile | null = null;
+
 // YOUR PROFILE — the page pushed from your avatar in the People dock's title row: your public
 // card (the shared ProfilePublicView, identical to /@handle) and your sets. Nothing to configure
 // here (operator, 2026-11-11): the account (handle, name, photo, privacy, connections, delete)
@@ -34,8 +39,10 @@ export function ProfileScreen({
   onGoToSession,
   onPlaySet,
   onTrimSet,
+  onOpenPerson,
   embedded = false,
 }: {
+  onOpenPerson?: (handle: string) => void;
   onClose: () => void;
   live?: boolean; // you're broadcasting a public lobby right now (B3 own-live badge)
   listeners?: number;
@@ -44,14 +51,16 @@ export function ProfileScreen({
   onTrimSet?: (s: { id: string; trimStart?: number | null; trimEnd?: number | null; duration: number }) => void; // trim in/out
   embedded?: boolean; // rendered inside the People dock — skip our own dock chrome
 }) {
-  const [me, setMe] = useState<Me | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [me, setMe] = useState<Me | null>(meMemo);
+  const [profile, setProfile] = useState<Profile | null>(profileMemo);
+  const [loading, setLoading] = useState(!meMemo);
   const revealed = usePrivacyRevealed();
 
   useEffect(() => {
     Promise.all([fetchMe(), fetchProfile()])
       .then(([m, p]) => {
+        meMemo = m;
+        profileMemo = p;
         setMe(m);
         setProfile(p);
       })
@@ -90,6 +99,7 @@ export function ProfileScreen({
         memberSince={profile?.user.memberSince ?? null}
         counts={profile?.counts ?? null}
         topTracks={top}
+        onOpenPerson={onOpenPerson}
         emptyTopMsg="No plays yet."
         shareTitle="Handling The Loop"
         shareText={live ? "🔴 I'm live on Handling The Loop, come listen" : "Catch my sets on Handling The Loop"}
@@ -124,8 +134,14 @@ export function ProfileScreen({
 // It was a collapsed "⚙ Account" fold at the very bottom of a long profile page, which is where
 // the handle, the privacy switches, sign out and delete all lived. Sign out is the tab's footer.
 export function AccountSettings({ editRequested = false }: { editRequested?: boolean }) {
-  const [me, setMe] = useState<Me | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [me, setMeState] = useState<Me | null>(meMemo);
+  const setMe = (v: Me | null | ((p: Me | null) => Me | null)) =>
+    setMeState((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      meMemo = next;
+      return next;
+    });
+  const [loading, setLoading] = useState(!meMemo);
   const [editing, setEditing] = useState(editRequested);
   const revealed = usePrivacyRevealed();
 

@@ -3,13 +3,13 @@ import { type PersonCard, follow, sendInvite, unfollow, withdrawFollowRequest } 
 import { PersonCardRow, personRel } from "./PersonCardRow";
 import { goToHandle } from "./util";
 
-// One ACTIONABLE person row — shared by search results, the People tab's sections, follower /
-// following lists and suggestions. It is a PersonCardRow: tap it and the strip offers the right
-// actions for the relationship:
-//   • mutual + live → Join · mutual + online → Knock   (needs onJam — the room)
-//   • mutual (any) → Invite                         (pull them to MY session; direct fetch)
-//   • non-mutual + live → Listen                    (needs onListen)
-//   • right side: Follow / Follow back / Following / Requested, then Profile ›
+// One ACTIONABLE person row — shared by search results, the People tab's sections, a profile's
+// follower / following lists and suggestions. It is a PersonCardRow: the row opens the profile,
+// and the pills at its edge are the right move for the relationship:
+//   • a friend (mutual): Join (live) · Knock (online) · else Invite
+//   • anyone else: Listen when they are live, and Follow / Follow back / Following / Requested
+// A follow or unfollow announces itself ("htl:graph") so the People tab's sections re-read.
+export const GRAPH_CHANGED = "htl:graph";
 export function PersonRow({
   card,
   onJam,
@@ -43,7 +43,7 @@ export function PersonRow({
     else if (next && res.relationship?.requested) {
       setFollowing(false); // a private account → a pending request, not an edge
       setRequested(true);
-    }
+    } else window.dispatchEvent(new Event(GRAPH_CHANGED));
     setBusy(false);
   };
   const invite = () => {
@@ -64,38 +64,38 @@ export function PersonRow({
   const metaLine = meta ?? ([card.displayName && h ? `@${h}` : null, status].filter(Boolean).join(" · ") || null);
 
   const actions = card.isSelf ? null : mutual ? (
+    card.live && onJam ? (
+      <button className="peer-pill on" onClick={() => onJam(h)}>
+        Join
+      </button>
+    ) : card.online && onJam ? (
+      <button className="peer-pill" onClick={() => onJam(h)} title="Ask to join their session">
+        Knock
+      </button>
+    ) : invited ? (
+      <span className="peer-pill static">Invited ✓</span>
+    ) : (
+      <button className="peer-pill" onClick={invite} title="Invite them into your session">
+        Invite
+      </button>
+    )
+  ) : (
     <>
-      {card.live && onJam ? (
-        <button className="peer-pill on" onClick={() => onJam(h)}>
-          Join
+      {card.live && onListen && (
+        <button className="peer-pill on" onClick={() => onListen(h)}>
+          🎧 Listen
         </button>
-      ) : card.online && onJam ? (
-        <button className="peer-pill" onClick={() => onJam(h)}>
-          Knock
+      )}
+      {requested ? (
+        <button className="peer-pill" onClick={withdraw} title="Withdraw the request">
+          Requested ✕
         </button>
-      ) : null}
-      {invited ? (
-        <span className="peer-pill static">Invited ✓</span>
       ) : (
-        <button className="peer-pill" onClick={invite} title="Invite them into your session">
-          Invite
+        <button className={`peer-pill ${following ? "on" : ""}`} onClick={() => void toggleFollow()} disabled={busy} aria-pressed={following}>
+          {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
         </button>
       )}
     </>
-  ) : card.live && onListen ? (
-    <button className="peer-pill on" onClick={() => onListen(h)}>
-      🎧 Listen
-    </button>
-  ) : null;
-
-  const right = card.isSelf ? null : requested ? (
-    <button className="peer-pill" onClick={withdraw} title="Withdraw the request">
-      Requested ✕
-    </button>
-  ) : (
-    <button className={`peer-pill ${following ? "on" : ""}`} onClick={() => void toggleFollow()} disabled={busy} aria-pressed={following}>
-      {following ? "Following" : card.followsYou ? "Follow back" : "Follow"}
-    </button>
   );
 
   return (
@@ -106,7 +106,6 @@ export function PersonRow({
       meta={metaLine}
       presence={card.live ? "live" : card.online ? "online" : null}
       actions={actions}
-      right={right}
       onProfile={h ? () => (onOpen ? onOpen(h) : goToHandle(h)) : undefined}
     />
   );

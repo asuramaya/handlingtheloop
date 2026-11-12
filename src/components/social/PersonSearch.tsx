@@ -6,6 +6,8 @@ import { PersonRow } from "./PersonRow";
 // search with paginated results (Load more); each row is a PersonRow. While the box is empty it
 // shows `children` (the People tab's own sections) and then "People you may know"
 // (friends-of-friends, or popular accounts cold-start) so discovery is not a blank prompt.
+let suggestedMemo: PersonCard[] | null = null; // kept across mounts: no list dropping in late
+
 export function PersonSearch({
   q,
   setQ,
@@ -27,7 +29,7 @@ export function PersonSearch({
   const [results, setResults] = useState<PersonCard[] | null>(null); // null = idle (no active query)
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [suggested, setSuggested] = useState<PersonCard[] | null>(null);
+  const [suggested, setSuggested] = useState<PersonCard[] | null>(suggestedMemo);
   const offset = useRef(0);
   const activeTerm = useRef(""); // the query currently OWNING the result state
   const moreCtrl = useRef<AbortController | null>(null); // in-flight Load-more (cancel on new query/unmount)
@@ -36,7 +38,10 @@ export function PersonSearch({
   useEffect(() => {
     const ctrl = new AbortController();
     fetchSuggested(ctrl.signal)
-      .then(setSuggested)
+      .then((l) => {
+        suggestedMemo = l;
+        setSuggested(l);
+      })
       .catch(() => {});
     return () => ctrl.abort();
   }, []);

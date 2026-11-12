@@ -278,3 +278,35 @@
     padding-bottom: 2px;
   }
 }
+
+/* ★ THE FX PAGE, SIDEWAYS (operator, 2026-11-12: the FX panel "dissapears or its overflown to
+   where i cannot see it"). The portrait pages (board.css, fx.css: PERFORM or FX, never both) are
+   gated on (max-width: 768px), which a phone in landscape is not, so here the panel always opened
+   UNDER the transport, pads and stems: measured at 844x390 the FX stage sat at y=381..546, below
+   the bottom of the screen, inside the deck's own scroll. A deck turned to its FX page in portrait
+   kept the ✕ when rotated, with the panel out of sight. FxStrip now turns the page on a tab tap in
+   landscape as well (useLandscapePhone), and these are the same page rules for this shape. */
+@media (max-height: 560px) and (pointer: coarse) {
+  .bank.page-fx .jog,
+  .bank.page-fx .loops,
+  .bank.page-fx .loop-sizes,
+  .bank.page-fx .pad-mode,
+  .bank.page-fx .hotcues,
+  .bank.page-fx .bank-load,
+  .bank.page-fx .pitch-row,
+  .bank.page-fx .stems-row {
+    display: none;
+  }
+  .bank.page-perform .fx-body {
+    display: none;
+  }
+  .stage .decks-row .bank.page-fx .bank-main > .eq-row,
+  .stage .decks-row .bank.page-fx .bank-main .fx-strip,
+  .bank.page-fx .fx-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .bank.page-fx .fx-strip {
+    --fx-body-h: 100%;
+  }
+}

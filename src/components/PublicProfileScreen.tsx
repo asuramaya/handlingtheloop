@@ -1,3 +1,4 @@
+import { GRAPH_CHANGED } from "./social/PersonRow";
 import { useEffect, useState } from "react";
 import { type PublicProfile, type SetCard, block, fetchHandleSets, fetchPublicProfile, follow, unblock, unfollow, withdrawFollowRequest } from "@htl/account";
 import { DockResizer } from "./DockResizer";
@@ -33,8 +34,10 @@ export function PublicProfileScreen({
   onListen,
   onJam,
   onPlaySet,
+  onOpenPerson,
   embedded = false,
 }: {
+  onOpenPerson?: (handle: string) => void;
   handle: string;
   onClose: () => void;
   onListen?: (handle: string) => void;
@@ -68,7 +71,10 @@ export function PublicProfileScreen({
   const onFollow = async () => {
     if (!profile) return;
     const r = await (rel?.following ? unfollow : follow)(profile.handle);
-    if (r) setProfile({ ...profile, relationship: r.relationship, counts: r.counts });
+    if (r) {
+      setProfile({ ...profile, relationship: r.relationship, counts: r.counts });
+      window.dispatchEvent(new Event(GRAPH_CHANGED)); // the People tab's sections re-read
+    }
   };
   const onWithdraw = async () => {
     if (!profile || !rel) return;
@@ -103,6 +109,7 @@ export function PublicProfileScreen({
               friends={rel?.mutual}
               onJam={onJam}
               onListen={onListen}
+              onOpenPerson={onOpenPerson}
               topTracks={top}
               live={
                 // The one state×relationship CTA — the whole landing in a single tap (which is

@@ -15,10 +15,16 @@ export function PeopleList({
   onClose,
   onJam,
   onListen,
+  inline = false,
+  onOpen,
 }: {
   handle: string; // whose graph we're listing
   mode: "followers" | "following";
   onClose: () => void;
+  /** Render as a section of the profile it was opened from (the People dock), not a modal. */
+  inline?: boolean;
+  /** Open a row's person (pushed inside the dock). */
+  onOpen?: (handle: string) => void;
   onJam?: (handle: string) => void;
   onListen?: (handle: string) => void;
 }) {
@@ -72,6 +78,30 @@ export function PeopleList({
   const title = mode === "followers" ? "Followers" : "Following";
   const emptyMsg =
     mode === "followers" ? `@${handle} has no followers yet.` : `@${handle} isn't following anyone yet.`;
+
+  // ★ INLINE, IN THE ROW LANGUAGE (operator, 2026-11-12: "following did not get updated into the
+  // new design language"). Opened from a profile's counts this was a modal with its own dock,
+  // header and ✕ over the People dock. Now the counts are tabs on the profile and the list is
+  // that profile's section, made of the same rows as every other list.
+  if (inline)
+    return list === null ? (
+      <p className="discover-empty">Loading…</p>
+    ) : list.length === 0 ? (
+      <p className="discover-empty">{emptyMsg}</p>
+    ) : (
+      <div className="discover-section">
+        <ul className="social-roster person-list" role="list">
+          {list.map((c, i) => (
+            <PersonRow key={c.handle ?? `i${i}`} card={c} onJam={onJam} onListen={onListen} onOpen={onOpen} />
+          ))}
+        </ul>
+        {more && (
+          <button className="link-btn discover-more" onClick={loadMore} disabled={loading}>
+            {loading ? "Loading…" : "Load more"}
+          </button>
+        )}
+      </div>
+    );
 
   return (
     <div className="modal-backdrop dock-right" onPointerDown={onClose}>

@@ -45,7 +45,9 @@ export function ProfilePublicView({
   shareNote,
   onJam,
   onListen,
+  onOpenPerson,
 }: {
+  onOpenPerson?: (handle: string) => void; // a follower row opens INSIDE the dock (inline lists)
   avatar?: string | null;
   avatarLetter: string;
   name: string;
@@ -68,7 +70,12 @@ export function ProfilePublicView({
 }) {
   // Tapping a count opens the ONE canonical people list (PeopleList) — same surface Discover's
   // "People you follow" leads to. Only when we have a handle to scope the graph to.
+  // ★ The counts are TABS over the profile's one section (Top songs | Followers | Following) when
+  // the profile lives in the People dock (onOpenPerson given): the list opens in place, in the
+  // row language. Outside the dock (a /@handle landing page) they still open the modal list.
   const [graph, setGraph] = useState<"followers" | "following" | null>(null);
+  const inline = !!onOpenPerson;
+  const pickGraph = (g: "followers" | "following") => setGraph((cur) => (inline && cur === g ? null : g));
   return (
     <>
       <div className="profile-id">
@@ -113,7 +120,7 @@ export function ProfilePublicView({
           {counts && (
             <div className="profile-counts">
               {handle ? (
-                <button type="button" className="profile-count-btn" onClick={() => setGraph("followers")}>
+                <button type="button" className={`profile-count-btn ${inline && graph === "followers" ? "on" : ""}`} aria-pressed={inline ? graph === "followers" : undefined} onClick={() => pickGraph("followers")}>
                   <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
                 </button>
               ) : (
@@ -122,7 +129,7 @@ export function ProfilePublicView({
                 </span>
               )}
               {handle ? (
-                <button type="button" className="profile-count-btn" onClick={() => setGraph("following")}>
+                <button type="button" className={`profile-count-btn ${inline && graph === "following" ? "on" : ""}`} aria-pressed={inline ? graph === "following" : undefined} onClick={() => pickGraph("following")}>
                   <b>{counts.following}</b> following
                 </button>
               ) : (
@@ -137,6 +144,17 @@ export function ProfilePublicView({
         </div>
       )}
 
+      {inline && graph && handle ? (
+        <div className="profile-section">
+          <div className="profile-section-head profile-section-tabs">
+            <button type="button" className="link-btn" onClick={() => setGraph(null)}>
+              Top songs
+            </button>
+            <span>· {graph === "followers" ? "Followers" : "Following"}</span>
+          </div>
+          <PeopleList inline handle={handle} mode={graph} onClose={() => setGraph(null)} onJam={onJam} onListen={onListen} onOpen={onOpenPerson} />
+        </div>
+      ) : (
       <div className="profile-section">
         <div className="profile-section-head">Top songs</div>
         {topTracks.length === 0 ? (
@@ -169,8 +187,9 @@ export function ProfilePublicView({
           </ol>
         )}
       </div>
+      )}
 
-      {graph && handle && (
+      {!inline && graph && handle && (
         <PeopleList handle={handle} mode={graph} onClose={() => setGraph(null)} onJam={onJam} onListen={onListen} />
       )}
     </>

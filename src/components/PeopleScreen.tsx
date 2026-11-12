@@ -67,6 +67,7 @@ export function PeopleScreen({
   live,
   listeners,
   onGoToSession,
+  onGoLive,
   dockMode = "right",
   panelOrder = ["library", "settings", "people", "session"],
 }: {
@@ -87,6 +88,8 @@ export function PeopleScreen({
   live?: boolean;
   listeners?: number;
   onGoToSession?: () => void;
+  /** Actually go live (start the session if needed, open it to the public). */
+  onGoLive?: () => void;
   dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
   panelOrder?: PanelKey[]; // stack priority when an edge/bottom dock overlaps another (Settings ▸ Controls)
 }) {
@@ -189,19 +192,32 @@ export function PeopleScreen({
       </button>
     ) : null;
   } else if (!person) {
-    if (pane === "live" && signedIn && onGoToSession)
-      footRight = (
-        <button className={`hw-btn small ${live ? "live" : "primary"}`} onClick={onGoToSession}>
-          {live ? `● Live${listeners ? ` · ${listeners} listening` : ""}` : "● Go live"}
+    // ★ GO LIVE GOES LIVE (operator, 2026-11-12: "i clicked go live, it looks like im live but
+    // ... still says go live and i do not see my room listed"). It used to only OPEN the Session
+    // panel, which read as having gone live while nothing had. Now it starts the session if
+    // needed and opens it to the public; once live the button says so and opens Session. Without
+    // a @handle there is no public room to open, so it goes to claiming one.
+    if (pane === "live" && signedIn)
+      footRight = live ? (
+        <button className="hw-btn small live" onClick={onGoToSession} title="Open the Session panel">
+          ● Live{listeners ? ` · ${listeners} listening` : ""}
+        </button>
+      ) : (
+        <button
+          className="hw-btn small primary"
+          onClick={() => {
+            if (self && onGoLive) onGoLive();
+            else {
+              setEditRequested(true);
+              goPane("settings");
+            }
+          }}
+          title={self ? `Open @${self} to anyone: they tune in to listen` : "Claim a @handle to go live"}
+        >
+          ● Go live
         </button>
       );
     if (pane === "people") footLeft = share;
-    if (pane === "activity")
-      footRight = (
-        <button className="hw-btn small" onClick={() => goPane("people")}>
-          Find people
-        </button>
-      );
     if (pane === "settings" && signedIn)
       footRight = (
         <button className="hw-btn small danger" onClick={() => void signOut()}>
@@ -276,14 +292,15 @@ export function PeopleScreen({
         {/* ═════════════ BODY — the only scroller ═════════════ */}
         <div className="settings-body session-body people-body" ref={bodyRef}>
           {onMe ? (
-            <ProfileScreen embedded onClose={onClose} live={live} listeners={listeners} onGoToSession={onGoToSession} onPlaySet={onPlaySet} onTrimSet={onTrimSet} />
+            <ProfileScreen embedded onOpenPerson={push} onClose={onClose} live={live} listeners={listeners} onGoToSession={onGoToSession} onPlaySet={onPlaySet} onTrimSet={onTrimSet} />
           ) : person ? (
-            <PublicProfileScreen embedded handle={person} onClose={pop} onListen={onListen} onJam={onJam} onPlaySet={onPlaySet} />
+            <PublicProfileScreen key={person} embedded onOpenPerson={push} handle={person} onClose={pop} onListen={onListen} onJam={onJam} onPlaySet={onPlaySet} />
           ) : (
             <>
               {pane === "live" && (
                 <DiscoverScreen
                   self={self}
+                  live={!!live}
                   tunedTo={tunedTo}
                   friends={friends}
                   onListen={onListen}

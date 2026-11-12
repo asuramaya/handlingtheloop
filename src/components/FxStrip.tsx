@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import { usePhone } from "../htl/state/usePhone";
+import { useLandscapePhone, usePhone } from "../htl/state/usePhone";
 import { useEmit, useRefresh } from "../App/spine";
 import type { Deck, FxKind } from "@htl/audio";
 import { MIC_CHAIN, chainWaitingForStems } from "@htl/audio";
@@ -122,6 +122,15 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
   // so inline it cannot fit, and floating it over the board only hides the controls underneath.
   // Picking a tab is therefore also the gesture that TURNS THE PAGE.
   const phone = usePhone();
+  // ★ A PHONE HELD SIDEWAYS PAGES TOO (operator, 2026-11-12: "the fx panel disappears or is
+  // overflown to where i cannot see it"). Landscape (844x390) is wider than the phone breakpoint,
+  // so a tab tap did not turn the page: the panel opened BELOW the transport, pads and stems, under
+  // the bottom of a 390px screen, inside the deck's own scroll. And a deck left on its FX page in
+  // portrait kept the ✕ in landscape with its panel out of sight. Now the same pages apply in both
+  // orientations (mobile.css, the landscape block): a tab shows the effect in place of the
+  // controls, ✕ brings them back.
+  const landscapePhone = useLandscapePhone();
+  const pages = phone || landscapePhone;
   const [menu, setMenu] = useState<{ slot: number; x: number; y: number } | null>(null); // preset menu (right-click summon)
   const [presetTick, setPresetTick] = useState(0); // bump to re-read presets after save/delete
   // Hardware preset browsing (FLX FX SELECT): a per-kind cursor (0 = Default, 1..N = factory bank)
@@ -1477,7 +1486,7 @@ export function FxStrip({ deck, id, accent, otherDeck, otherAccent, emitControls
                       <button
                         key={d.kind}
                         className={`fx-tab ${cur === gi(i) && !plusStop ? "sel" : ""} ${armed === gi(i) ? "remove-armed" : ""} ${d.bypassed || (d.kind === "eq" && deck.eqBypassed) ? "bypassed" : ""} ${tabDrag.at === i ? "drop-before" : ""} ${tabDrag.at === i + 1 ? "drop-after" : ""} ${tabDrag.from === i ? "is-dragging" : ""}`}
-                        onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); if (phone) onOpenFx?.(); }}
+                        onClick={() => { if (draggedRef.current) { draggedRef.current = false; return; } if (tabLong.fired.current) return; select(gi(i)); if (pages) onOpenFx?.(); }}
                         onContextMenu={(e) => { e.stopPropagation(); openPresetMenu(e, gi(i)); }}
                         {...tabLong.bind(gi(i))}
                         {...tabDrag.bind(i)}

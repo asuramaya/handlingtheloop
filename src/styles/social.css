@@ -4405,3 +4405,176 @@ button.peer-pill:hover {
   letter-spacing: inherit;
   text-transform: inherit;
 }
+
+/* ================= PROFILE: one compact hero, one tab row (operator, 2026-11-12) =================
+   The hero is a card in the relationship colour: avatar, name + tag, @handle · since, bio, and on
+   the right whatever acts on the person (Listen / Knock, Follow, Block). It wraps the right column
+   under the text when narrow. Under it, Songs | Sets | Followers | Following, each with its count. */
+.pp-hero {
+  --rel: #8a93a3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 14px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--rel) 40%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--rel) 9%, var(--panel-2));
+}
+.pp-hero.rel-you {
+  --rel: #6bdc9e;
+}
+.pp-hero.rel-friend {
+  --rel: #b48cff;
+}
+.pp-hero.rel-following {
+  --rel: #5fd4ff;
+}
+.pp-hero.rel-follower {
+  --rel: #ffae5c;
+}
+.pp-hero .pp-avatar {
+  width: 60px;
+  height: 60px;
+  border: 2px solid color-mix(in srgb, var(--rel) 60%, var(--line));
+  font-size: 22px;
+}
+.pp-hero .pp-avatar.fallback {
+  background: color-mix(in srgb, var(--rel) 20%, var(--panel-2));
+}
+.pp-id {
+  flex: 1 1 180px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pp-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+}
+.pp-name .rel-tag {
+  color: var(--rel);
+}
+.pp-sub {
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+.pp-bio {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.4;
+}
+.pp-aside {
+  flex: 0 1 auto;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.pp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.pp-aside .listen-live-btn,
+.pp-aside .jam-knock-btn,
+.pp-aside .profile-live-badge {
+  width: auto;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.pp-aside .follow-btn,
+.pp-aside .block-btn {
+  margin: 0;
+}
+.pp-tabs {
+  margin-top: 4px;
+}
+.profile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Songs: the row language, with a rank and the cover. Plays only when they differ. */
+.pp-songs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.social-roster .social-card.song-card {
+  display: grid;
+  grid-template-columns: 22px 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px 7px 8px;
+}
+.song-card .social-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.song-card .social-card-name,
+.song-card .social-card-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-card.can-open .social-card-main {
+  cursor: pointer;
+}
+.song-card.can-open:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.pp-rank {
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pp-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel);
+}
+.pp-plays {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pp-plays.top {
+  color: var(--accent);
+}
+
+/* Song rows are neutral (no relationship) and read left to right. */
+.social-roster .social-card.song-card {
+  --rel: #8a93a3;
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+.song-card .social-card-main {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.song-card .social-card-name,
+.song-card .social-card-meta {
+  display: block;
+  max-width: 100%;
+}

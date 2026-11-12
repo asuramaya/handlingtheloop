@@ -4,6 +4,8 @@ import { type PublicProfile, type SetCard, block, fetchHandleSets, fetchPublicPr
 import { DockResizer } from "./DockResizer";
 import { ProfilePublicView } from "./ProfilePublicView";
 import { SetList } from "./social/SetList";
+import { personRel } from "./social/PersonCardRow";
+import type { SongActions } from "./social/SongMenu";
 
 // The PUBLIC profile at /@handle — anyone can view it (no email/connections, no
 // edit controls). Renders the SAME ProfilePublicView as the own-Profile hero (so the
@@ -35,9 +37,11 @@ export function PublicProfileScreen({
   onJam,
   onPlaySet,
   onOpenPerson,
+  songActions,
   embedded = false,
 }: {
   onOpenPerson?: (handle: string) => void;
+  songActions?: SongActions;
   handle: string;
   onClose: () => void;
   onListen?: (handle: string) => void;
@@ -110,6 +114,12 @@ export function PublicProfileScreen({
               onJam={onJam}
               onListen={onListen}
               onOpenPerson={onOpenPerson}
+              rel={personRel({ isSelf: profile.isSelf, following: rel?.following, followsYou: rel?.followedBy })}
+              songActions={songActions}
+              sets={{
+                count: sets.length,
+                node: sets.length > 0 ? <SetList sets={sets} onPlay={onPlaySet} /> : <p className="discover-empty">No published sets yet.</p>,
+              }}
               topTracks={top}
               live={
                 // The one state×relationship CTA — the whole landing in a single tap (which is
@@ -152,13 +162,6 @@ export function PublicProfileScreen({
               <p className="profile-private-note">🔒 This account is private. {rel?.requested ? "Your request is pending." : "Follow to see their sets."}</p>
             )}
 
-            {/* This DJ's published sets (G1d) — tap to replay on your decks. */}
-            {sets.length > 0 && (
-              <div className="profile-section">
-                <div className="profile-section-head">Sets</div>
-                <SetList sets={sets} onPlay={onPlaySet} />
-              </div>
-            )}
           </div>
         )}
       </>

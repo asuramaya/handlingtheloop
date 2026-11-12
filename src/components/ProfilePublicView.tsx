@@ -1,6 +1,13 @@
 import { displayTrack } from "../util/format";
 import { type ReactNode, useState } from "react";
+import type { TrackMeta } from "@htl/library";
 import { PeopleList } from "./social/PeopleList";
+import { PERSON_REL_LABEL, type PersonRel } from "./social/PersonCardRow";
+import { SongMenu, type SongActions } from "./social/SongMenu";
+
+type ProfileTab = "songs" | "sets" | "followers" | "following";
+/** Top songs shown before "Show all": a profile is a glance, not the whole play history. */
+const TOP_N = 10;
 
 // The public-facing profile card — the SINGLE render shared by the own-Profile hero
 // (ProfileScreen) and the public /@handle page (PublicProfileScreen), so the two can't
@@ -40,14 +47,21 @@ export function ProfilePublicView({
   actions,
   headerAside,
   maskedAvatar,
-  shareText,
-  shareTitle,
   shareNote,
   onJam,
   onListen,
   onOpenPerson,
+  rel,
+  sets,
+  songActions,
 }: {
-  onOpenPerson?: (handle: string) => void; // a follower row opens INSIDE the dock (inline lists)
+  onOpenPerson?: (handle: string) => void;
+  /** Who this is to the viewer: colours the hero and tags the name. */
+  rel?: PersonRel;
+  /** The Sets tab: its count (when known) and its content. */
+  sets?: { count?: number; node: ReactNode };
+  /** What tapping a song can do (load, queue, keep). Absent → songs are display-only. */
+  songActions?: SongActions; // a follower row opens INSIDE the dock (inline lists)
   avatar?: string | null;
   avatarLetter: string;
   name: string;
@@ -68,130 +82,121 @@ export function ProfilePublicView({
   onJam?: (handle: string) => void; // passed to the counts' PeopleList so its rows can knock/join
   onListen?: (handle: string) => void;
 }) {
-  // Tapping a count opens the ONE canonical people list (PeopleList) — same surface Discover's
-  // "People you follow" leads to. Only when we have a handle to scope the graph to.
-  // ★ The counts are TABS over the profile's one section (Top songs | Followers | Following) when
-  // the profile lives in the People dock (onOpenPerson given): the list opens in place, in the
-  // row language. Outside the dock (a /@handle landing page) they still open the modal list.
-  const [graph, setGraph] = useState<"followers" | "following" | null>(null);
-  const inline = !!onOpenPerson;
-  const pickGraph = (g: "followers" | "following") => setGraph((cur) => (inline && cur === g ? null : g));
+  // ★ ONE ROW OF TABS, NOT A PAGE OF SECTIONS (operator, 2026-11-12: "top song is the same kind of
+  // item as followers/following and this layout wastes too much space on the top right"). Songs,
+  // sets, followers and following are all lists of this person's things, so they are four tabs over
+  // one section, each carrying its count; the counts line and the "Top songs" heading are gone. The
+  // hero is one compact card in the relationship colour, and whatever acts on the person (Follow,
+  // Listen, Knock…) sits in its right-hand column instead of under it, so the top right is used.
+  const [tab, setTab] = useState<ProfileTab>("songs");
+  const [allSongs, setAllSongs] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; track: TrackMeta } | null>(null);
+  const maxPlays = topTracks.reduce((m, t) => Math.max(m, t.plays), 0);
+  const songs = allSongs ? topTracks : topTracks.slice(0, TOP_N);
+  const tabs: { key: ProfileTab; label: string; n?: number }[] = [
+    { key: "songs", label: "Songs", n: topTracks.length },
+    ...(sets ? [{ key: "sets" as const, label: "Sets", n: sets.count }] : []),
+    ...(counts && handle
+      ? [
+          { key: "followers" as const, label: "Followers", n: counts.followers },
+          { key: "following" as const, label: "Following", n: counts.following },
+        ]
+      : []),
+  ];
+  const aside = live || actions || headerAside;
   return (
     <>
-      <div className="profile-id">
+      <div className={`pp-hero rel-${rel ?? "other"}`}>
         {avatar ? (
-          <img className={`profile-avatar ${maskedAvatar ? "private" : ""}`} src={avatar} alt="" />
+          <img className={`profile-avatar pp-avatar ${maskedAvatar ? "private" : ""}`} src={avatar} alt="" />
         ) : (
-          <span className="profile-avatar fallback" aria-hidden="true">
+          <span className="profile-avatar pp-avatar fallback" aria-hidden="true">
             {avatarLetter.slice(0, 1).toUpperCase()}
           </span>
         )}
-        <div className="profile-id-text">
-          <div className="profile-name">{name}</div>
-          {handle && (
-            <span className="profile-handle">
-              @{handle}
-              <button
-                className="profile-share-btn"
-                onClick={() => {
-                  const url = `${location.origin}/@${handle}`;
-                  const nav = navigator as Navigator & {
-                    share?: (d: { url: string; title?: string; text?: string }) => Promise<void>;
-                  };
-                  if (nav.share) void nav.share({ url, ...(shareTitle && { title: shareTitle }), ...(shareText && { text: shareText }) }).catch(() => {});
-                  else void navigator.clipboard?.writeText(url).catch(() => {});
-                }}
-              >
-                ⤴
-              </button>
-            </span>
-          )}
-          {shareNote && <div className="profile-share-note">{shareNote}</div>}
-          {bio && <div className="profile-bio">{bio}</div>}
-          {memberSince != null && <div className="profile-since">Member since {formatDate(memberSince)}</div>}
-        </div>
-        {headerAside}
-      </div>
-
-      {live}
-
-      {(counts || actions) && (
-        <div className="profile-graph">
-          {counts && (
-            <div className="profile-counts">
-              {handle ? (
-                <button type="button" className={`profile-count-btn ${inline && graph === "followers" ? "on" : ""}`} aria-pressed={inline ? graph === "followers" : undefined} onClick={() => pickGraph("followers")}>
-                  <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
-                </button>
-              ) : (
-                <span>
-                  <b>{counts.followers}</b> follower{counts.followers === 1 ? "" : "s"}
-                </span>
-              )}
-              {handle ? (
-                <button type="button" className={`profile-count-btn ${inline && graph === "following" ? "on" : ""}`} aria-pressed={inline ? graph === "following" : undefined} onClick={() => pickGraph("following")}>
-                  <b>{counts.following}</b> following
-                </button>
-              ) : (
-                <span>
-                  <b>{counts.following}</b> following
-                </span>
-              )}
-              {friends && <span className="profile-friend">· Friends</span>}
-            </div>
-          )}
-          {actions && <div className="profile-graph-actions">{actions}</div>}
-        </div>
-      )}
-
-      {inline && graph && handle ? (
-        <div className="profile-section">
-          <div className="profile-section-head profile-section-tabs">
-            <button type="button" className="link-btn" onClick={() => setGraph(null)}>
-              Top songs
-            </button>
-            <span>· {graph === "followers" ? "Followers" : "Following"}</span>
+        <div className="pp-id">
+          <div className="pp-name">
+            <span>{name}</span>
+            {rel && PERSON_REL_LABEL[rel] && <span className={`rel-tag ${rel}`}>{PERSON_REL_LABEL[rel]}</span>}
+            {friends && rel !== "friend" && <span className="rel-tag friend">Friend</span>}
           </div>
-          <PeopleList inline handle={handle} mode={graph} onClose={() => setGraph(null)} onJam={onJam} onListen={onListen} onOpen={onOpenPerson} />
+          <div className="pp-sub">
+            {[handle && name !== `@${handle}` ? `@${handle}` : null, memberSince != null ? `since ${formatDate(memberSince)}` : null].filter(Boolean).join(" · ")}
+          </div>
+          {bio && <div className="pp-bio">{bio}</div>}
+          {shareNote && <div className="profile-share-note">{shareNote}</div>}
         </div>
-      ) : (
-      <div className="profile-section">
-        <div className="profile-section-head">Top songs</div>
-        {topTracks.length === 0 ? (
-          <p className="profile-empty">{emptyTopMsg}</p>
-        ) : (
-          <ol className="profile-top">
-            {topTracks.map((t, i) => (
-              <li key={t.videoId} className="profile-top-row">
-                <span className="profile-top-rank">{i + 1}</span>
-                <img
-                  className="profile-top-thumb"
-                  src={t.thumbnail || `/api/art/${t.videoId}`}
-                  alt=""
-                  loading="lazy"
-                />
-                <span className="profile-top-meta">
-                  {/* ★ NEVER THE VIDEO ID. This said `t.title || t.videoId`, so a track stored
-                      without metadata printed "2PpBU7EfiEY" on a PUBLIC profile — an internal id
-                      standing where a song name belongs. The server resolves the name now
-                      (track_identity → community_tracks → the uploader's own conventions, see
-                      server/trackName.ts) and can always produce something; this fallback is the
-                      belt-and-braces for an older server or a partial payload, and it says what is
-                      true — that we do not know — rather than showing the id. */}
-                  <span className="profile-top-title">{displayTrack(t.title, t.artist).title || "Unknown track"}</span>
-                  {t.artist && <span className="profile-top-artist">{displayTrack(t.title, t.artist).artist}</span>}
-                </span>
-                <span className="profile-top-plays">{t.plays}×</span>
-              </li>
-            ))}
-          </ol>
+        {aside && (
+          <div className="pp-aside">
+            {live}
+            {actions && <div className="pp-actions">{actions}</div>}
+            {headerAside}
+          </div>
         )}
       </div>
-      )}
 
-      {!inline && graph && handle && (
-        <PeopleList handle={handle} mode={graph} onClose={() => setGraph(null)} onJam={onJam} onListen={onListen} />
+      <div className="settings-tabs session-tabs pp-tabs" role="tablist" aria-label="Profile">
+        {tabs.map((t) => (
+          <button key={t.key} role="tab" aria-selected={tab === t.key} className={`settings-tab ${tab === t.key ? "on" : ""}`} onClick={() => setTab(t.key)}>
+            {t.label}
+            {t.n != null && <span className="tab-count">{t.n}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === "songs" &&
+        (topTracks.length === 0 ? (
+          <p className="discover-empty">{emptyTopMsg}</p>
+        ) : (
+          <div className="discover-section">
+            <ol className="social-roster person-list pp-songs">
+              {songs.map((t, i) => {
+                const d = displayTrack(t.title, t.artist);
+                const track: TrackMeta = { videoId: t.videoId, title: t.title || d.title, artist: t.artist || "", duration: 0, thumbnail: t.thumbnail || `/api/art/${t.videoId}`, views: null };
+                return (
+                  <li key={t.videoId} className={`social-card song-card ${songActions ? "can-open" : ""}`}>
+                    <span className="pp-rank">{i + 1}</span>
+                    <img className="pp-thumb" src={t.thumbnail || `/api/art/${t.videoId}`} alt="" loading="lazy" />
+                    <div
+                      className="social-card-main"
+                      {...(songActions
+                        ? {
+                            role: "button",
+                            tabIndex: 0,
+                            title: "Load, queue or keep this song",
+                            onClick: (e: React.MouseEvent) => setMenu({ x: e.clientX, y: e.clientY, track }),
+                            onKeyDown: (e: React.KeyboardEvent) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setMenu({ x: r.left + 24, y: r.bottom, track });
+                              }
+                            },
+                          }
+                        : {})}
+                    >
+                      {/* ★ NEVER THE VIDEO ID: "Unknown track" says what is true (see server/trackName.ts). */}
+                      <span className="social-card-name">{d.title || "Unknown track"}</span>
+                      {t.artist && <span className="social-card-meta">{d.artist}</span>}
+                    </div>
+                    {/* Plays only say something when they differ: a column of "1×" was noise. */}
+                    {maxPlays > 1 && <span className={`pp-plays ${t.plays === maxPlays ? "top" : ""}`}>{t.plays}×</span>}
+                  </li>
+                );
+              })}
+            </ol>
+            {topTracks.length > TOP_N && (
+              <button className="link-btn discover-more" onClick={() => setAllSongs((v) => !v)}>
+                {allSongs ? "Show the top 10" : `Show all ${topTracks.length}`}
+              </button>
+            )}
+          </div>
+        ))}
+      {tab === "sets" && sets?.node}
+      {(tab === "followers" || tab === "following") && handle && (
+        <PeopleList inline handle={handle} mode={tab} onClose={() => setTab("songs")} onJam={onJam} onListen={onListen} onOpen={onOpenPerson} />
       )}
+      {menu && songActions && <SongMenu x={menu.x} y={menu.y} track={menu.track} actions={songActions} onClose={() => setMenu(null)} />}
     </>
   );
 }

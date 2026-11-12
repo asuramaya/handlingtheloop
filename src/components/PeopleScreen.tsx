@@ -18,6 +18,7 @@ import { DiscoverScreen } from "./DiscoverScreen";
 import { AccountSettings, ProfileScreen } from "./ProfileScreen";
 import { ActivityFeed } from "./social/ActivityFeed";
 import { LinkSheet } from "./social/LinkSheet";
+import type { SongActions } from "./social/SongMenu";
 import { PublicProfileScreen } from "./PublicProfileScreen";
 import { PeopleGraph } from "./social/PeopleGraph";
 import type { Notifications } from "./social/useNotifications";
@@ -68,6 +69,7 @@ export function PeopleScreen({
   listeners,
   onGoToSession,
   onGoLive,
+  songActions,
   dockMode = "right",
   panelOrder = ["library", "settings", "people", "session"],
 }: {
@@ -88,6 +90,8 @@ export function PeopleScreen({
   live?: boolean;
   listeners?: number;
   onGoToSession?: () => void;
+  /** What tapping a profile's song can do (load, queue, keep). */
+  songActions?: SongActions;
   /** Actually go live (start the session if needed, open it to the public). */
   onGoLive?: () => void;
   dockMode?: PanelPlacement; // RESOLVED placement from App (never the raw setting) — "sheet" on a phone
@@ -292,9 +296,9 @@ export function PeopleScreen({
         {/* ═════════════ BODY — the only scroller ═════════════ */}
         <div className="settings-body session-body people-body" ref={bodyRef}>
           {onMe ? (
-            <ProfileScreen embedded onOpenPerson={push} onClose={onClose} live={live} listeners={listeners} onGoToSession={onGoToSession} onPlaySet={onPlaySet} onTrimSet={onTrimSet} />
+            <ProfileScreen embedded onOpenPerson={push} songActions={songActions} onClose={onClose} live={live} listeners={listeners} onGoToSession={onGoToSession} onPlaySet={onPlaySet} onTrimSet={onTrimSet} />
           ) : person ? (
-            <PublicProfileScreen key={person} embedded onOpenPerson={push} handle={person} onClose={pop} onListen={onListen} onJam={onJam} onPlaySet={onPlaySet} />
+            <PublicProfileScreen key={person} embedded onOpenPerson={push} songActions={songActions} handle={person} onClose={pop} onListen={onListen} onJam={onJam} onPlaySet={onPlaySet} />
           ) : (
             <>
               {pane === "live" && (

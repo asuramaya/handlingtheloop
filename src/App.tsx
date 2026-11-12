@@ -4764,6 +4764,15 @@ function AppBody() {
           live={room.roomPublic}
           listeners={room.listenerCount}
           onGoToSession={toggleSocial}
+          songActions={{
+            onLoad: (d, t) => loadAndShare(d, t),
+            onQueue: queueEdit.add,
+            onQueueNext: queueEdit.addNext,
+            playlists: library.playlists.map((p) => ({ id: p.id, name: p.name })),
+            onAddToPlaylist: library.addToPlaylist,
+            onAddToCollection: library.addTrack,
+            inCollection: (id) => library.collection.some((t) => t.videoId === id),
+          }}
           onGoLive={() => {
             engine.unlock(); // a user gesture: prime audio, as Session's own Start does
             if (!room.joined) {

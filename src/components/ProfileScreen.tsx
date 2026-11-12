@@ -22,6 +22,7 @@ import { ProfilePublicView } from "./ProfilePublicView";
 import { InfoDot } from "./settings/InfoDot";
 import { ToggleRow } from "./settings/ControlsTab";
 import { RecordingsPanel } from "./social/RecordingsPanel";
+import type { SongActions } from "./social/SongMenu";
 
 // The last account answers, kept across mounts: the ⚙ tab and your profile used to open on a
 // "Loading…" line and then jump to their cards every time (operator, 2026-11-12: flicker).
@@ -40,9 +41,11 @@ export function ProfileScreen({
   onPlaySet,
   onTrimSet,
   onOpenPerson,
+  songActions,
   embedded = false,
 }: {
   onOpenPerson?: (handle: string) => void;
+  songActions?: SongActions;
   onClose: () => void;
   live?: boolean; // you're broadcasting a public lobby right now (B3 own-live badge)
   listeners?: number;
@@ -100,6 +103,9 @@ export function ProfileScreen({
         counts={profile?.counts ?? null}
         topTracks={top}
         onOpenPerson={onOpenPerson}
+        rel="you"
+        songActions={songActions}
+        sets={user.handle ? { node: <RecordingsPanel heading="Your sets" defaultOpen onPlay={onPlaySet} onTrim={onTrimSet} /> } : undefined}
         emptyTopMsg="No plays yet."
         shareTitle="Handling The Loop"
         shareText={live ? "🔴 I'm live on Handling The Loop, come listen" : "Catch my sets on Handling The Loop"}
@@ -111,8 +117,6 @@ export function ProfileScreen({
           ) : null
         }
       />
-      {/* Your sets (G1b) — drafts + published. Self-hides until your first set. */}
-      {user.handle && <RecordingsPanel heading="Your sets" defaultOpen onPlay={onPlaySet} onTrim={onTrimSet} />}
     </div>
   );
 

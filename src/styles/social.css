@@ -4047,3 +4047,54 @@ button.peer-pill:hover {
   font-size: 12px;
   color: color-mix(in srgb, var(--text) 72%, transparent);
 }
+
+/* v11 (operator, 2026-11-11): you green, guest yellow, friend purple (host takes the blue so it
+   never reads as you); the timekeeper badge is green; the invite QR copies the link on click. */
+.social-card {
+  --rel: #ffd25a;
+}
+.social-card.rel-you {
+  --rel: #6bdc9e;
+}
+.social-card.rel-host {
+  --rel: #5fd4ff;
+}
+.social-card.rel-friend {
+  --rel: #b48cff;
+}
+.social-card.rel-crowd {
+  --rel: #ffae5c;
+}
+.room-badge.clock {
+  color: #6bdc9e;
+  background: color-mix(in srgb, #6bdc9e 14%, transparent);
+  border: 1px solid color-mix(in srgb, #6bdc9e 40%, transparent);
+}
+.session-qr-copy {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: copy;
+  border-radius: 9px;
+}
+.session-qr-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.session-qr-copy:active .room-invite-qr {
+  transform: scale(0.98);
+}
+.session-qr-copied {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  animation: panel-in 0.14s ease-out;
+}

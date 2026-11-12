@@ -210,7 +210,7 @@ export function SocialScreen({
   const unreadChat = tab === "chat" ? 0 : seenChatId.current && seenIdx < 0 ? room.chatLog.length : room.chatLog.length - 1 - seenIdx;
   const chatOpen = crowdLive || participants.length > 1; // somebody to talk to
 
-  // ── The one-word status, for the title row ──────────────────────────────────────────────────
+  // ── The one-word status, for the settings tab ─────────────────────────────────────────────────
   const statusChip: { label: string; tone: string } =
     state === "offline"
       ? { label: room.status === "error" ? "Offline" : "Connecting", tone: "dim" }
@@ -248,7 +248,6 @@ export function SocialScreen({
                 ● Go live
               </button>
             )}
-            {inSession && <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>}
           </div>
 
           {room.engineStale && (
@@ -379,6 +378,13 @@ export function SocialScreen({
             <p className="settings-note">Sign in under People ▸ You, or open an invite link, to join a shared session.</p>
           ) : settingsOpen ? (
             <div className="session-settings">
+              {/* The room's state (Private / Live / Listening / Knocking) lives here, not in the title row. */}
+              <div className="settings-section">
+                <div className="settings-row">
+                  <span className="settings-label">Session</span>
+                  <span className={`session-status ${statusChip.tone}`}>{statusChip.label}</span>
+                </div>
+              </div>
               <div className="settings-section">
                 <ToggleRow
                   label="Show names"
@@ -549,7 +555,11 @@ export function SocialScreen({
 
                 {shownInviteUrl ? (
                   <>
-                    <QRCode value={shownInviteUrl} size={208} className="room-invite-qr" />
+                    {/* The QR copies the link too: a tap on it is the obvious "give me this". */}
+                    <button type="button" className={`session-qr-copy ${copied ? "done" : ""}`} onClick={() => copyLink(shownInviteUrl)} title="Copy link" aria-label="Copy invite link">
+                      <QRCode value={shownInviteUrl} size={208} className="room-invite-qr" />
+                      {copied && <span className="session-qr-copied">Copied</span>}
+                    </button>
                     {/* The link IS the copy control: the whole field copies, the glyph says so. */}
                     <div className="session-invite-field">
                       <button type="button" className="session-invite-url" onClick={() => copyLink(shownInviteUrl)} title="Copy link">

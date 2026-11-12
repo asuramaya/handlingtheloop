@@ -238,16 +238,6 @@ export function SocialScreen({
         <div className="session-top">
           <div className="settings-head">
             <h2>{room.isGuest ? "Guest session" : "Session"}</h2>
-            {inSession && state === "idle" && room.user?.handle && (
-              <button
-                className="hero-golive small"
-                onClick={goLive}
-                disabled={!online}
-                title={`Open @${room.user.handle} to anyone: they tune in to listen and can ask to step up to the decks.`}
-              >
-                ● Go live
-              </button>
-            )}
           </div>
 
           {room.engineStale && (

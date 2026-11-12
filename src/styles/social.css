@@ -4578,3 +4578,22 @@ button.peer-pill:hover {
   display: block;
   max-width: 100%;
 }
+
+/* The profile's hero + tabs stick to the top of the dock's scroller; only the list scrolls. The
+   negative top cancels the body's 12px top padding so nothing peeks out above it, and the solid
+   panel background keeps the rows sliding under it from showing through. */
+.pp-head {
+  position: sticky;
+  top: -12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: -12px;
+  padding-top: 12px;
+  padding-bottom: 4px;
+  background: var(--panel);
+}
+.pp-head .pp-tabs {
+  margin-top: 0;
+}

@@ -106,6 +106,10 @@ export function ProfilePublicView({
   const aside = live || actions || headerAside;
   return (
     <>
+      {/* ★ THE HEAD STAYS (operator, 2026-11-12: "make the header fixed and the list scrollable so
+          i cannot scroll the top elements away"). The hero and the tab row stick to the top of the
+          scroller; only the chosen list moves under them. */}
+      <div className="pp-head">
       <div className={`pp-hero rel-${rel ?? "other"}`}>
         {avatar ? (
           <img className={`profile-avatar pp-avatar ${maskedAvatar ? "private" : ""}`} src={avatar} alt="" />
@@ -142,6 +146,7 @@ export function ProfilePublicView({
             {t.n != null && <span className="tab-count">{t.n}</span>}
           </button>
         ))}
+      </div>
       </div>
 
       {tab === "songs" &&

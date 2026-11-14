@@ -14,6 +14,7 @@
     "worker:lan:https": "vite build && rm -rf dist/models && node scripts/lanproxy.mjs --spawn-worker",
     "deploy": "vite build && wrangler deploy",
     "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
+    "feed:prod": "node scripts/feed-prod.mjs",
     "test": "vitest run",
     "check": "tsc -b && tsc -p tsconfig.node.json && vitest run",
     "draglab": "node scripts/draglab/draglab.mjs"

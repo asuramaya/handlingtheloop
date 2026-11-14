@@ -75,13 +75,53 @@ const takedown = new Set([...prodIds("takedowns"), ...local.prepare("SELECT vide
 const prodHas = Object.fromEntries(TABLES.map((t) => [t, prodIds(t)]));
 const localCommunity = local.prepare("SELECT video_id FROM community_tracks ORDER BY cached_at").all().map((r) => r.video_id);
 let candidates = localCommunity.filter((v) => !takedown.has(v) && !prodHas.community_tracks.has(v));
+// ★ NO SONG TWICE (operator, 2026-11-14: "make sure its not duping"). A row or a file cannot be
+// doubled (every table is keyed by video id, files by key, and everything is insert-or-ignore), but
+// the SAME SONG can sit under two YouTube uploads, and neither side stores a content hash to tell.
+// So by title + artist (case, punctuation, "- Topic" / "VEVO" folded; the bracketed version tag
+// KEPT, so a "Slowed down" or "Clean Version" is its own song): a song prod already has under
+// another id is skipped (prod's copy wins), and within this batch the first upload wins.
+// --keep-versions turns this off.
+const songKey = (t, a) =>
+  `${String(t || "").toLowerCase().replace(/[^a-z0-9()[\]]+/g, " ").trim()}|${String(a || "")
+    .toLowerCase()
+    .replace(/ - topic$/, "")
+    .replace(/vevo$/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()}`;
+const dupSkipped = [];
+const dupIds = new Set();
+if (!args.includes("--keep-versions")) {
+  const prodSongs = new Set(prodQuery("SELECT title, artist FROM community_tracks").map((r) => songKey(r.title, r.artist)));
+  const seenSongs = new Set();
+  const meta = local.prepare("SELECT title, artist FROM community_tracks WHERE video_id=?");
+  candidates = candidates.filter((v) => {
+    const r = meta.get(v);
+    const k = songKey(r?.title, r?.artist);
+    if (prodSongs.has(k) || seenSongs.has(k)) {
+      dupIds.add(v);
+      dupSkipped.push(`${v} "${r?.title}" — ${r?.artist}${prodSongs.has(k) ? " (prod has it)" : " (twice in this batch)"}`);
+      return false;
+    }
+    seenSongs.add(k);
+    return true;
+  });
+}
 if (LIMIT) candidates = candidates.slice(0, LIMIT);
 const cand = new Set(candidates);
 // Rows: every table's rows for tracks prod lacks in THAT table (analysis can exist without a
 // community row and vice versa). With --limit, only the trial's tracks.
 const rowsFor = (table) => {
   const rows = local.prepare(`SELECT * FROM ${table}`).all();
-  return rows.filter((r) => !takedown.has(r.video_id) && !prodHas[table].has(r.video_id) && (!LIMIT || cand.has(r.video_id)));
+  // A community row only for a track being copied; analysis / lyrics / captions also for a track
+  // prod already lists but lacks them for (that fills a gap, it does not duplicate anything).
+  return rows.filter(
+    (r) =>
+      !takedown.has(r.video_id) &&
+      !dupIds.has(r.video_id) &&
+      !prodHas[table].has(r.video_id) &&
+      (table === "community_tracks" || LIMIT ? cand.has(r.video_id) : true),
+  );
 };
 const plan = Object.fromEntries(TABLES.map((t) => [t, ONLY === "files" ? [] : rowsFor(t)]));
 
@@ -100,7 +140,9 @@ if (ONLY !== "db") {
   for (const o of objs) {
     const [kind, model, id, name] = o.key.split("/");
     if (kind !== "s" || !STEM_NAMES.includes(name) || takedown.has(id)) continue;
-    if (LIMIT && !cand.has(id)) continue;
+    // Stems for any local set prod's manifest lacks (a track prod already lists may still have no
+    // stems there), except a skipped duplicate's; with --limit, only the trial's tracks.
+    if (dupIds.has(id) || (LIMIT && !cand.has(id))) continue;
     const k = `${model}/${id}`;
     if (!stemSets.has(k)) stemSets.set(k, []);
     stemSets.get(k).push(o);
@@ -123,7 +165,9 @@ if (ONLY !== "db") {
 // ── report ────────────────────────────────────────────────────────────────────────────────────────
 const gb = (n) => `${(n / 1e9).toFixed(2)} GB`;
 console.log(`skipping ${takedown.size} taken-down track(s)`);
-console.log(`tracks local has that prod's community lacks: ${candidates.length}${LIMIT ? ` (limited to ${LIMIT})` : ""}`);
+console.log(`same song already on prod or twice in this batch, skipped: ${dupSkipped.length}`);
+for (const d of dupSkipped) console.log(`    ${d}`);
+console.log(`tracks to copy: ${candidates.length}${LIMIT ? ` (limited to ${LIMIT})` : ""}`);
 for (const t of TABLES) console.log(`  rows → ${t.padEnd(17)} ${plan[t].length}`);
 const byKind = (p) => fileJobs.filter((j) => j.key.startsWith(p));
 for (const [p, label] of [["a/", "audio"], ["s/", "stem files"], ["art/", "cover art"]]) {

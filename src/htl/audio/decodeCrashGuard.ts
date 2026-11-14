@@ -45,6 +45,20 @@ export function initDecodeCrashGuard(): DecodeCrashRecord | null {
   }
 }
 
+// ★ A REFRESH IS NOT A CRASH (operator, 2026-11-14). A reload mid-decode left the flag armed and
+// the next boot announced "the tab went down while decoding": measured on a plain page reload. A
+// refresh, close or navigation fires pagehide; a crash never does, so clearing the flag there
+// leaves it set only by a real death (the stem and GPU guards already work this way).
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    try {
+      localStorage.removeItem(ARM_KEY);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
 /** Bracket a decodeAudioData call. Never throws, never blocks, never refuses a load. */
 export function armDecode(bytes: number): void {
   try {

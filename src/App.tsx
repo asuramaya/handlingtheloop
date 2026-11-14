@@ -31,7 +31,8 @@ import { RoomBar } from "./components/RoomBar";
 import { PublicProfileScreen, handleFromPath } from "./components/PublicProfileScreen";
 import { initialDock } from "./App/initialDock";
 import { mayContributeAnalysis, mayReuseGrid } from "./App/gridReuse";
-import { event } from "@htl/debug/trace";
+import { event, formatEvent } from "@htl/debug/trace";
+import { EXIT_LABEL, exitHistory, lastExit } from "@htl/debug/lifecycle";
 import { setPerfAudioProbe } from "@htl/debug/perfCapture";
 import { escapeAction, trackOpenOrder } from "./App/escapeKey";
 import { libraryKeyAction } from "./App/libraryKeys";
@@ -4284,6 +4285,20 @@ function AppBody() {
               ],
         };
       }),
+      {
+        // How the previous sessions ended: a refresh, a close, a background kill, or a CRASH while
+        // on screen, with the crashed session's last events (htl/debug/lifecycle.ts).
+        title: "Lifecycle",
+        rows: (() => {
+          const v = lastExit();
+          const rows: [string, string][] = [["last session", v ? `${EXIT_LABEL[v.kind]}${v.at ? ` · ${new Date(v.at).toLocaleString()} · ran ${v.uptimeS}s` : ""}` : "—"]];
+          exitHistory().forEach((h, i) => {
+            rows.push([`exit ${i + 1}`, `${EXIT_LABEL[h.kind]}${h.at ? ` · ${new Date(h.at).toLocaleString()} · ran ${h.uptimeS}s` : ""}`]);
+            if (h.kind === "crash" && h.tail.length) rows.push([`  before crash ${i + 1}`, h.tail.map(formatEvent).join("\n")]);
+          });
+          return rows;
+        })(),
+      },
       {
         title: "Device",
         rows: [

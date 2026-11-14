@@ -1348,12 +1348,23 @@ export class AutoMixer {
     // From the loop's second half to its first: a wrap, not a hand seek within the loop.
     const L = live.loop;
     const mid = L ? (L.start + L.end) / 2 : 0;
+    // ★ THE SAME LOOP ON BOTH SAMPLES (operator, 2026-11-14: "a textbook race condition"). Closing a
+    // loop by hand (OUT) jumps the playhead back to IN, which from here looked exactly like the loop
+    // coming round at the exit: the mix started at once, seconds early, its mix point moved to
+    // wherever IN was, and the deck went on looping under a transition counting bars it would never
+    // reach. Measured in the app: OUT pressed at 252.3 s in a loop from 250.3 s, the mix started at
+    // 250.6 s against a planned exit of 254.4 s. A wrap is only a wrap when the loop that wrapped was
+    // already there, unchanged, on the previous sample.
+    const loopKey = L?.active ? `${L.start.toFixed(3)}:${L.end.toFixed(3)}` : null;
+    const prevLoop = this.lastCueLoop;
+    this.lastCueLoop = loopKey;
     // "The exit is this loop's end" — NOT "the exit differs from mixOutTime": the plan can land its
     // mix point exactly on the loop's end (a bar line), and then the loop still wraps before it.
     const loopExit = !!L?.active && Math.abs(exitAt - L.end) < 0.005;
-    const wrappedAtExit = loopExit && prev != null && prev >= mid && pos < mid;
+    const wrappedAtExit = loopExit && prev != null && prevLoop === loopKey && prev >= mid && pos < mid;
     if (pos >= exitAt - (loopExit ? 0.03 : 0.004) || wrappedAtExit) {
       this.lastCuePos = null;
+      this.lastCueLoop = null;
       if (loopExit) {
         // Leaving through the loop's end: the deck plays on out of it (a looping deck has no exit to
         // mix out of), and the mix point becomes where it left, so every bar line the transition
@@ -1399,6 +1410,7 @@ export class AutoMixer {
     return pos >= L.start - 0.05 && pos <= L.end + 0.05 ? L.end : m;
   }
   private lastCuePos: number | null = null; // the cueing tick's last playhead, to see a loop wrap
+  private lastCueLoop: string | null = null; // …and the loop it was in (a wrap needs the SAME loop)
 
   // Within one bar of the planned exit — the point where a loop-extend has to close, since a loop
   // taken later would start mid-phrase.
@@ -2286,7 +2298,22 @@ export class AutoMixer {
   private atBar(live: Deck, k: number, p: number): boolean {
     const pos = this.barPos(live, k);
     if (pos == null || !this.plan) return p >= k / Math.max(1, this.plan?.bars ?? 1);
-    return live.position() >= pos - 0.004;
+    return this.mixPlayhead(live) >= pos - 0.004;
+  }
+
+  /** Where the outgoing is in the TRANSITION, in its own track time.
+   *
+   *  ★ A LOOPING OUTGOING NEVER REACHES ITS BAR LINES (operator, 2026-11-14: "the timer reset after a
+   *  transition has begun breaks when it loops"). The bass swap, the cut, the freezes and the drop
+   *  all wait for the playhead to pass a bar line counted from the mix point; a deck looping through
+   *  the mix (the DJ's own loop, or the mashup's 4-bar hold) wraps back before them on every pass,
+   *  so they never came and the blend ran out its clock with half its moves undone. While the deck
+   *  loops, the bars are counted in its elapsed playing time since the mix began (mixElapsed is
+   *  already track time: real time × rate, only while playing), which is the same bar count the
+   *  tempo bridge has always used for its own loop. Unlooped, the playhead stays the reference. */
+  private mixPlayhead(live: Deck): number {
+    if (live.loop?.active && this.mixOutTime != null && this.phase === "mixing") return this.mixOutTime + this.mixElapsed;
+    return live.position();
   }
 
   // THE OUTGOING VOCAL MUST NOT RUN OUT UNDER THE MASHUP. From the swap on, all that is left of
@@ -2325,7 +2352,7 @@ export class AutoMixer {
       return clamp((p - swapStart) / Math.max(0.001, 1 / Math.max(1, this.plan.bars * 4)), 0, 1);
     }
     const beat = beatTimeOffset(g, start + 0.01, 1) - start;
-    return clamp((live.position() - start) / Math.max(0.05, beat), 0, 1);
+    return clamp((this.mixPlayhead(live) - start) / Math.max(0.05, beat), 0, 1);
   }
 
   /** The bar lines this transition does something exact on. */
@@ -2349,7 +2376,7 @@ export class AutoMixer {
   private updateFine(live: Deck): void {
     const rate = Math.max(0.25, live.effectiveRate || live.rate || 1);
     const g = live.beatgrid;
-    const now = live.position();
+    const now = this.mixPlayhead(live);
     let near = false;
     const looped = this.plan?.style === "tempoBridge";
     const barTrack = this.plan ? this.barsSeconds / Math.max(1, this.plan.bars) : 0;

@@ -3840,6 +3840,7 @@ function AppBody() {
         hot: x.hotCues.slice(0, 8),
         sync: engine.syncRole(id),
         tempo: x.tempo,
+        dur: x.duration,
       });
       return {
         wall: performance.timeOrigin + performance.now(),
@@ -3850,6 +3851,11 @@ function AppBody() {
         focused,
         A: d(engine.deckA, "A"),
         B: d(engine.deckB, "B"),
+        // AUTO's own view: what the Mix-in chip is drawn from (the loop-timer race, 2026-11-14).
+        auto: (() => {
+          const st = mixerRef.current?.getStatus();
+          return st ? { phase: st.phase, live: st.liveDeck, countdown: st.countdownSec, mixOut: st.mixOutTime, progress: st.mixProgress } : null;
+        })(),
       };
     };
     return () => {

@@ -648,6 +648,107 @@ describe("AutoMixer machine — full transition path", () => {
     expect(r.engine.A.loop).toBeNull(); // it left the loop to mix out
   });
 
+  // ★ operator, 2026-11-14: "the timer reset after a transition has begun breaks when it loops".
+  // Every bar of a transition (bass swap, cut, freeze, the end) waited for the outgoing PLAYHEAD to
+  // reach a bar line counted from the mix point. A deck looping during the mix (the DJ's loop, or
+  // the mashup's own 4-bar hold) wraps back before those bar lines forever, so the moments never
+  // came. They are counted in the outgoing's own elapsed track time while it loops.
+  const runMix = async (setupLoop: (r: Rig, mixOut: number) => void, loopDuringMix = false) => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 120, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 120, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.mixer.enable();
+    let mixOut: number | null = null;
+    for (let i = 0; i < 40 && mixOut == null; i++) {
+      await r.tick();
+      mixOut = r.mixer.getStatus().mixOutTime;
+    }
+    expect(mixOut).not.toBeNull();
+    r.autoAdvance = true;
+    if (!loopDuringMix) setupLoop(r, mixOut as number);
+    else r.setPos("A", (mixOut as number) - 1.5);
+    const mixCounts: number[] = [];
+    let looped = false;
+    let settled = false;
+    for (let i = 0; i < 1200 && !settled; i++) {
+      await r.tick(100);
+      if (loopDuringMix && !looped && r.phase === "mixing") {
+        setupLoop(r, mixOut as number);
+        looped = true;
+      }
+      const c = r.mixer.getStatus().countdownSec;
+      if (r.phase === "mixing" && c != null) mixCounts.push(c);
+      if (r.phaseHist.includes("mixing") && r.live === "B" && r.phase !== "mixing") settled = true;
+    }
+    return { r, mixCounts, settled };
+  };
+
+
+  // ★ operator, 2026-11-14 ("a textbook race condition"): closing a loop by hand (OUT jumps the
+  // playhead back to IN) read as the loop wrapping at the exit, and the mix started seconds early.
+  test("closing a loop by hand (OUT jumps back to IN) does not start the mix; the loop's real wrap does", async () => {
+    const r = new Rig();
+    const t2 = mkTrack("t2");
+    r.setup("t1", { duration: 120, bpm: 120, hasStems: false });
+    r.setup("t2", { duration: 120, bpm: 120, hasStems: false });
+    r.loadAndPlay("A", mkTrack("t1"));
+    r.queue.upcoming = [t2];
+    r.mixer.enable();
+    let m: number | null = null;
+    for (let i = 0; i < 40 && m == null; i++) {
+      await r.tick();
+      m = r.mixer.getStatus().mixOutTime;
+    }
+    const M = m as number;
+    r.autoAdvance = true;
+    // play toward the exit (the plan settles its exact mix point while cueing), stopping inside
+    // the last 1.5 s before it — the second half of the loop-to-be
+    r.setPos("A", M - 8);
+    let cur = M;
+    for (let i = 0; i < 80; i++) {
+      await r.tick(100);
+      cur = r.mixer.getStatus().mixOutTime ?? cur;
+      if (r.phase === "cueing" && r.engine.A.position() >= cur - 1.5) break;
+    }
+    expect(r.phaseHist).not.toContain("mixing");
+    // OUT: the loop [cur-4, cur] closes and the playhead jumps back to its IN
+    r.engine.A.loop = { active: true, start: cur - 4, end: cur };
+    r.setPos("A", cur - 4);
+    await r.tick(100);
+    await r.tick(100);
+    expect(r.phaseHist).not.toContain("mixing"); // the jump was the hand, not the exit
+    // the loop comes round for real: now it mixes
+    let mixed = false;
+    for (let i = 0; i < 80 && !mixed; i++) {
+      await r.tick(100);
+      mixed = r.phaseHist.includes("mixing");
+    }
+    expect(mixed).toBe(true);
+  });
+
+  test("a loop STRADDLING the mix point: the mix starts and runs to the end while the outgoing loops", async () => {
+    const { r, mixCounts, settled } = await runMix((r, m) => {
+      r.engine.A.loop = { active: true, start: m - 1, end: m + 1 }; // 2 s loop across the exit
+      r.setPos("A", m - 0.8);
+    });
+    expect(r.phaseHist).toContain("mixing");
+    expect(settled).toBe(true);
+    // the blend's countdown only ever goes down
+    for (let i = 1; i < mixCounts.length; i++) expect(mixCounts[i]).toBeLessThanOrEqual(mixCounts[i - 1] + 1e-6);
+  });
+
+  test("a loop taken DURING the mix does not stall the transition or rewind its countdown", async () => {
+    const { mixCounts, settled } = await runMix((r) => {
+      const p = r.engine.A.position();
+      r.engine.A.loop = { active: true, start: p, end: p + 1 }; // a 2-beat loop right now
+    }, true);
+    expect(settled).toBe(true);
+    for (let i = 1; i < mixCounts.length; i++) expect(mixCounts[i]).toBeLessThanOrEqual(mixCounts[i - 1] + 1e-6);
+  });
+
   test("the glide holds commandedRamp through the fade, then clears it (no rubato-FF fight → no mid-fade tempo jumps)", async () => {
     // The glide ramps the master's tempo OFF its grid. SYNC's phase-lock has a grid-rubato
     // feed-forward that assumes grid-natural playback; left on during a commanded ramp it fights the

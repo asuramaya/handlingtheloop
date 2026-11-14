@@ -72,6 +72,14 @@ const LAYER_MIN_WIDTH = 90;
 
 // hex → rgba() at alpha; mirrors WaveformViewport's own helper (kept local, it's one line).
 function rgba(hex: string, a: number): string {
+  // ★ MARKER COLOURS ARRIVE AS rgb()/rgba() STRINGS, and this used to hand those back untouched:
+  // the hover's "13 % snap-zone band" drew at the marker's own near-full alpha, a solid slab of
+  // colour across the rail (operator, 2026-11-14: "super ugly … so it does not look so cheap").
+  const fn = /^rgba?\(([^)]+)\)$/i.exec(hex.trim());
+  if (fn) {
+    const [r, g, b] = fn[1].split(",").map((v) => parseFloat(v));
+    return `rgba(${cl(r)}, ${cl(g)}, ${cl(b)}, ${a})`;
+  }
   let h = hex.replace("#", "").trim();
   if (h.length === 3) h = h.split("").map((c) => c + c).join("");
   const n = parseInt(h, 16);
@@ -651,36 +659,54 @@ export function SongOverview(props: SongOverviewProps) {
       const hShare = labelsShareColumn(w / dpr, ko);
       const hbox = (m.label ? LABEL_BOX_PX * ko : Math.max(2.4, m.thickness * 2) * ko) * dpr;
       const cy = insetMark(y, hbox, h) + hbox / 2;
-      const top = cy - hoverH / 2;
-      // A soft band the height of the SNAP ZONE itself — the answer to "am I in the right place
-      // to hit this?" is a picture of the zone, not a brighter line.
-      const zoneH = MARKER_SNAP_PX * ko * 2 * dpr;
-      ctx.fillStyle = rgba(m.color, 0.13);
-      ctx.fillRect(lx, Math.max(0, Math.min(h - zoneH, cy - zoneH / 2)), lw, zoneH);
-      ctx.fillStyle = m.color;
+      // ★ A TAG, NOT A SLAB (operator, 2026-11-14: the hover "comes off as super ugly and
+      // overlaps/breaks on the edges … so it does not look so cheap"). It was a 13 % band, a line
+      // twice the marker's weight and a dark plate under a bigger letter; with the marker size
+      // turned up those added up to a solid block that ran past the rail. Now: a faint snap-zone
+      // band inset inside the rail, the marker line half again as heavy (never past its lane), and
+      // the letter on a rounded tag in the marker's own colour, clamped inside the rail.
+      const inset = dpr;
+      const zoneH = Math.min(h, MARKER_SNAP_PX * ko * 2 * dpr);
+      const zy = Math.max(0, Math.min(h - zoneH, cy - zoneH / 2));
+      ctx.fillStyle = rgba(m.color, 0.09);
+      ctx.beginPath();
+      ctx.roundRect(inset, zy, Math.max(0, w - 2 * inset), zoneH, 3 * dpr);
+      ctx.fill();
+      const lineH = Math.max(2 * dpr, Math.min(hoverH, m.thickness * 1.5 * ko * dpr));
+      const lineTop = Math.max(0, Math.min(h - lineH, cy - lineH / 2));
+      ctx.fillStyle = opaque(m.color);
       if (m.label) {
-        ctx.font = `bold ${10.5 * ko * dpr}px ui-monospace, monospace`;
+        const fpx = Math.round(10 * Math.min(ko, 1.6) * dpr);
+        ctx.font = `700 ${fpx}px ui-monospace, monospace`;
         ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        const tw = ctx.measureText(m.label).width;
+        const padX = 5 * dpr;
+        const tagW = Math.min(w - 2 * inset, tw + padX * 2);
+        const tagH = Math.min(h, fpx + 6 * dpr);
         const bx = hShare ? 0 : lx;
         const bw = hShare ? w : lw;
-        const lcx = bx + bw / 2;
-        const gap = (m.label.length * 7 + 8) * ko * dpr;
-        const gx = lcx - gap / 2;
-        ctx.fillRect(lx, top, Math.max(0, Math.min(gx, lx + lw) - lx), hoverH);
-        ctx.fillRect(Math.max(gx + gap, lx), top, Math.max(0, lx + lw - Math.max(gx + gap, lx)), hoverH);
-        // the plate: covers the resting glyph so one letter shows, larger
-        ctx.fillStyle = "rgba(4,6,10,0.92)";
-        ctx.fillRect(gx + dpr, cy - hbox / 2 - dpr, gap - 2 * dpr, hbox + 2 * dpr);
-        ctx.textAlign = "center";
-        ctx.lineJoin = "round";
-        ctx.miterLimit = 2;
-        ctx.lineWidth = 3.5 * ko * dpr;
-        ctx.strokeStyle = "rgba(4,6,10,0.92)";
-        ctx.strokeText(m.label, lcx, cy);
-        ctx.fillStyle = opaque(m.color);
-        ctx.fillText(m.label, lcx, cy);
+        const tcx = Math.max(inset + tagW / 2, Math.min(w - inset - tagW / 2, bx + bw / 2));
+        const tx = tcx - tagW / 2;
+        const ty = Math.max(0, Math.min(h - tagH, cy - tagH / 2));
+        // the line runs up to the tag on each side, inside the lane
+        const l0 = Math.max(0, lx);
+        const l1 = Math.min(w, lx + lw);
+        if (tx - 2 * dpr > l0) ctx.fillRect(l0, lineTop, tx - 2 * dpr - l0, lineH);
+        if (l1 > tx + tagW + 2 * dpr) ctx.fillRect(tx + tagW + 2 * dpr, lineTop, l1 - (tx + tagW + 2 * dpr), lineH);
+        // the tag covers the resting glyph so exactly one letter shows
+        ctx.shadowColor = "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = 4 * dpr;
+        ctx.beginPath();
+        ctx.roundRect(tx, ty, tagW, tagH, Math.min(tagH / 2, 5 * dpr));
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
+        ctx.fillStyle = "rgba(6,8,12,0.95)";
+        ctx.fillText(m.label, tcx, ty + tagH / 2 + 0.5 * dpr);
       } else {
-        ctx.fillRect(lx, top, lw, hoverH);
+        const l0 = Math.max(0, lx);
+        ctx.fillRect(l0, lineTop, Math.max(0, Math.min(w, lx + lw) - l0), lineH);
       }
     }
 

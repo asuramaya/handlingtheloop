@@ -115,3 +115,40 @@ body:not(.no-glow) .mchip-key.keyed {
   background: transparent;
   box-shadow: none;
 }
+
+/* ★ CENTRED, AND CENTRED FOR REAL (operator, 2026-11-14: "the colored and accented rows and pills
+   need work so they are centered at least consistent because the kerning throws it off").
+   Right-aligned numbers of different widths ("89", "103", "12A") never line up into a column, and
+   letter-spaced uppercase labels carry their spacing AFTER the last letter too, so "BPM" sat a
+   hair left of the number under it. The BPM / KEY / TIME columns are centred, head and cells, and
+   every letter-spaced label gets the same amount back on its left so its ink is what centres. */
+.track-table :is(th, td):is(.col-bpm, .col-key, .col-time) {
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.track-table th:is(.col-bpm, .col-key, .col-time) {
+  padding-left: calc(4px + 0.08em);
+}
+.track-table td:is(.col-bpm, .col-key, .col-time) .mchip {
+  justify-content: center;
+  padding: 0 6px;
+}
+/* The key's colour edge is drawn INSIDE the cell, so it does not push the label off centre. */
+.track-table td.col-key .mchip-key.keyed {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--mc) 70%, transparent);
+}
+
+/* Now / Next cards: every number pill one width, so 89, 103 and 9A sit as equal tiles under their
+   labels, and the labels' trailing letter-space is given back on the left. */
+.mixq-stat dd .mchip {
+  min-width: 3.4em;
+  justify-content: center;
+  letter-spacing: 0;
+}
+.mixq-stat dt {
+  padding-left: 0.12em;
+}
+.mchip {
+  text-align: center;
+}
